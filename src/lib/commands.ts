@@ -25,7 +25,6 @@ export interface DiscoveredCommand {
   description: string;
   sourcePath: string;
   isShared: boolean;
-  agentSpecific?: AgentId;
   validation: ValidationResult;
 }
 
@@ -105,14 +104,13 @@ export function validateCommandMetadata(
 
 export function discoverCommands(repoPath: string): DiscoveredCommand[] {
   const commands: DiscoveredCommand[] = [];
-  const seen = new Set<string>();
 
-  const sharedDir = path.join(repoPath, 'shared', 'commands');
-  if (fs.existsSync(sharedDir)) {
-    for (const file of fs.readdirSync(sharedDir)) {
+  const commandsDir = path.join(repoPath, 'commands');
+  if (fs.existsSync(commandsDir)) {
+    for (const file of fs.readdirSync(commandsDir)) {
       if (file.endsWith('.md')) {
         const name = file.replace('.md', '');
-        const sourcePath = path.join(sharedDir, file);
+        const sourcePath = path.join(commandsDir, file);
         const metadata = parseCommandMetadata(sourcePath);
         const validation = validateCommandMetadata(metadata, name);
         commands.push({
@@ -122,34 +120,6 @@ export function discoverCommands(repoPath: string): DiscoveredCommand[] {
           isShared: true,
           validation,
         });
-        seen.add(name);
-      }
-    }
-  }
-
-  for (const agentId of Object.keys(AGENTS) as AgentId[]) {
-    const agent = AGENTS[agentId];
-    const agentDir = path.join(repoPath, agentId, agent.commandsSubdir);
-    if (fs.existsSync(agentDir)) {
-      const ext = agent.format === 'toml' ? '.toml' : '.md';
-      for (const file of fs.readdirSync(agentDir)) {
-        if (file.endsWith(ext)) {
-          const name = file.replace(ext, '');
-          if (!seen.has(name)) {
-            const sourcePath = path.join(agentDir, file);
-            const metadata = parseCommandMetadata(sourcePath);
-            const validation = validateCommandMetadata(metadata, name);
-            commands.push({
-              name,
-              description: metadata?.description || extractDescription(fs.readFileSync(sourcePath, 'utf-8')),
-              sourcePath,
-              isShared: false,
-              agentSpecific: agentId,
-              validation,
-            });
-            seen.add(name);
-          }
-        }
       }
     }
   }
@@ -170,25 +140,11 @@ function extractDescription(content: string): string {
 
 export function resolveCommandSource(
   repoPath: string,
-  commandName: string,
-  agentId: AgentId
+  commandName: string
 ): string | null {
-  const agent = AGENTS[agentId];
-  const ext = agent.format === 'toml' ? '.toml' : '.md';
-
-  const agentSpecific = path.join(
-    repoPath,
-    agentId,
-    agent.commandsSubdir,
-    `${commandName}${ext}`
-  );
-  if (fs.existsSync(agentSpecific)) {
-    return agentSpecific;
-  }
-
-  const shared = path.join(repoPath, 'shared', 'commands', `${commandName}.md`);
-  if (fs.existsSync(shared)) {
-    return shared;
+  const commandPath = path.join(repoPath, 'commands', `${commandName}.md`);
+  if (fs.existsSync(commandPath)) {
+    return commandPath;
   }
 
   return null;

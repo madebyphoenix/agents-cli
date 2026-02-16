@@ -6,8 +6,9 @@ import { promisify } from 'util';
 import chalk from 'chalk';
 import { checkbox } from '@inquirer/prompts';
 import type { AgentId } from './types.js';
-import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir } from './state.js';
+import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, clearVersionResources } from './state.js';
 import { AGENTS, getAccountEmail } from './agents.js';
+import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS } from './permissions.js';
 import { markdownToToml } from './convert.js';
 import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink } from './shims.js';
 
@@ -176,17 +177,10 @@ export async function installVersion(
             }
           }
         }
-      } catch {
-        // Keep as 'latest' if we can't determine version
+      } catch (e) {
+        // Failed to determine version - this shouldn't happen
+        throw new Error(`Failed to determine installed version: ${(e as Error).message}`);
       }
-    }
-
-    // Set as default if first install
-    const isFirstInstall = !getGlobalDefault(agent);
-    if (isFirstInstall) {
-      setGlobalDefault(agent, installedVersion);
-      // Set up config symlink (e.g., ~/.claude -> version's config)
-      switchConfigSymlink(agent, installedVersion);
     }
 
     // Create versioned alias (e.g., claude@2.0.65)
@@ -217,19 +211,19 @@ export function removeVersion(agent: AgentId, version: string): boolean {
   // Remove versioned alias (e.g., claude@2.0.65)
   removeVersionedAlias(agent, version);
 
-  // Update default if it was removed
+  // Clear resource tracking for this version
+  clearVersionResources(agent, version);
+
+  // Clear default if it was the removed version - user must explicitly pick a new one
   if (getGlobalDefault(agent) === version) {
+    const meta = readMeta();
+    if (meta.agents?.[agent]) {
+      delete meta.agents[agent];
+      writeMeta(meta);
+    }
     const remaining = listInstalledVersions(agent);
-    const newDefault = remaining.length > 0 ? remaining[remaining.length - 1] : null;
-    if (newDefault) {
-      setGlobalDefault(agent, newDefault);
-    } else {
-      // Clear the default
-      const meta = readMeta();
-      if (meta.agents?.[agent]) {
-        delete meta.agents[agent];
-        writeMeta(meta);
-      }
+    if (remaining.length > 0) {
+      console.log(chalk.yellow(`Default version removed. Run: agents use ${agent}@<version> to set a new default`));
     }
   }
 
@@ -342,6 +336,7 @@ export interface SyncResult {
   skills: boolean;
   hooks: boolean;
   memory: string[];
+  permissions: boolean;
 }
 
 /**
@@ -356,7 +351,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string): SyncRes
   const agentDir = path.join(versionHome, `.${agent}`);
   fs.mkdirSync(agentDir, { recursive: true });
 
-  const result: SyncResult = { commands: false, skills: false, hooks: false, memory: [] };
+  const result: SyncResult = { commands: false, skills: false, hooks: false, memory: [], permissions: false };
 
   // Helper: remove a path (symlink or real) if it exists
   const removePath = (p: string) => {
@@ -435,6 +430,15 @@ export function syncResourcesToVersion(agent: AgentId, version: string): SyncRes
         fs.symlinkSync(sourcePath, targetPath);
         result.memory.push(targetName);
       } catch {}
+    }
+  }
+
+  // Apply permissions (if agent supports them)
+  if (PERMISSIONS_CAPABLE_AGENTS.includes(agent)) {
+    const defaultPerms = getDefaultPermissionSet();
+    if (defaultPerms.allow.length > 0 || (defaultPerms.deny && defaultPerms.deny.length > 0)) {
+      const permResult = applyPermsToVersion(agent, defaultPerms, versionHome, true);
+      result.permissions = permResult.success;
     }
   }
 

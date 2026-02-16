@@ -665,3 +665,29 @@ export async function promoteMcpToUser(
     binary: options?.binary,
   });
 }
+
+// Agent name aliases for flexible input
+export const AGENT_NAME_ALIASES: Record<string, AgentId> = {
+  claude: 'claude',
+  'claude-code': 'claude',
+  cc: 'claude',
+  codex: 'codex',
+  'openai-codex': 'codex',
+  cx: 'codex',
+  gemini: 'gemini',
+  'gemini-cli': 'gemini',
+  gx: 'gemini',
+  cursor: 'cursor',
+  'cursor-agent': 'cursor',
+  cr: 'cursor',
+  opencode: 'opencode',
+  oc: 'opencode',
+};
+
+export function resolveAgentName(input: string): AgentId | null {
+  return AGENT_NAME_ALIASES[input.toLowerCase()] || null;
+}
+
+export function isAgentName(input: string): boolean {
+  return resolveAgentName(input) !== null;
+}

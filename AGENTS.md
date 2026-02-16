@@ -94,6 +94,12 @@ agents upgrade claude          # Upgrade specific agent
 
 ```
 
+### HARD RULE: Default Version
+
+`setGlobalDefault()` MUST only be called from `agents use`. No other code path may set or change the global default version. Not on first install. Not on sync. Not on upgrade. Not ever.
+
+When removing the current default version, clear it and print a hint telling the user to run `agents use`. Do not auto-select a replacement.
+
 ### How It Works
 
 1. **Version Storage**: Versions installed to `~/.agents/versions/{agent}/{version}/`
@@ -156,11 +162,7 @@ This provides real permission enforcement via the agent CLI's own config system,
 
 ### Command Discovery
 
-Commands are discovered from repo in this order:
-1. `shared/commands/*.md` - Shared across all agents
-2. `{agent}/{commandsSubdir}/*` - Agent-specific
-
-Agent-specific commands override shared commands with the same name.
+Commands are discovered from `commands/*.md` in the repo.
 
 ### Format Conversion
 

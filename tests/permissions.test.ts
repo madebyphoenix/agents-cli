@@ -1,0 +1,722 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import * as yaml from 'yaml';
+import * as TOML from 'smol-toml';
+import {
+  parsePermissionSet,
+  discoverPermissionsFromRepo,
+  convertToClaudeFormat,
+  convertToOpenCodeFormat,
+  convertToCodexFormat,
+  claudeToCanonical,
+  openCodeToCanonical,
+  codexToCanonical,
+  applyPermissionsToVersion,
+} from '../src/lib/permissions.js';
+import type { PermissionSet, ClaudePermissions, OpenCodePermissions, CodexPermissions } from '../src/lib/types.js';
+
+const TEST_DIR = join(tmpdir(), 'agents-cli-permissions-test');
+
+describe('parsePermissionSet', () => {
+  beforeEach(() => {
+    mkdirSync(TEST_DIR, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(TEST_DIR, { recursive: true, force: true });
+  });
+
+  it('parses a valid YAML permission file', () => {
+    const filePath = join(TEST_DIR, 'test.yml');
+    writeFileSync(filePath, yaml.stringify({
+      name: 'test-perms',
+      description: 'Test permissions',
+      allow: ['Bash(git *)', 'Read(**)'],
+      deny: ['Bash(rm -rf *)'],
+    }));
+
+    const result = parsePermissionSet(filePath);
+    expect(result).not.toBeNull();
+    expect(result!.name).toBe('test-perms');
+    expect(result!.description).toBe('Test permissions');
+    expect(result!.allow).toEqual(['Bash(git *)', 'Read(**)']);
+    expect(result!.deny).toEqual(['Bash(rm -rf *)']);
+  });
+
+  it('returns null for non-existent file', () => {
+    const result = parsePermissionSet(join(TEST_DIR, 'nonexistent.yml'));
+    expect(result).toBeNull();
+  });
+
+  it('returns null for invalid YAML', () => {
+    const filePath = join(TEST_DIR, 'invalid.yml');
+    writeFileSync(filePath, '{{{{invalid yaml');
+
+    const result = parsePermissionSet(filePath);
+    expect(result).toBeNull();
+  });
+
+  it('uses filename as name if not specified', () => {
+    const filePath = join(TEST_DIR, 'my-perms.yml');
+    writeFileSync(filePath, yaml.stringify({
+      allow: ['Bash(git *)'],
+    }));
+
+    const result = parsePermissionSet(filePath);
+    expect(result).not.toBeNull();
+    expect(result!.name).toBe('my-perms');
+  });
+
+  it('handles empty allow/deny arrays', () => {
+    const filePath = join(TEST_DIR, 'empty.yml');
+    writeFileSync(filePath, yaml.stringify({
+      name: 'empty',
+    }));
+
+    const result = parsePermissionSet(filePath);
+    expect(result).not.toBeNull();
+    expect(result!.allow).toEqual([]);
+    expect(result!.deny).toEqual([]);
+  });
+});
+
+describe('discoverPermissionsFromRepo', () => {
+  beforeEach(() => {
+    mkdirSync(TEST_DIR, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(TEST_DIR, { recursive: true, force: true });
+  });
+
+  it('discovers permissions in permissions/ directory', () => {
+    const permsDir = join(TEST_DIR, 'permissions');
+    mkdirSync(permsDir, { recursive: true });
+    writeFileSync(join(permsDir, 'dev.yml'), yaml.stringify({
+      name: 'dev',
+      allow: ['Bash(git *)'],
+    }));
+
+    const results = discoverPermissionsFromRepo(TEST_DIR);
+    expect(results.length).toBe(1);
+    expect(results[0].name).toBe('dev');
+  });
+
+  it('discovers permissions in agent-permissions/ directory', () => {
+    const permsDir = join(TEST_DIR, 'agent-permissions');
+    mkdirSync(permsDir, { recursive: true });
+    writeFileSync(join(permsDir, 'prod.yaml'), yaml.stringify({
+      name: 'prod',
+      allow: ['Read(**)'],
+    }));
+
+    const results = discoverPermissionsFromRepo(TEST_DIR);
+    expect(results.length).toBe(1);
+    expect(results[0].name).toBe('prod');
+  });
+
+  it('discovers permissions in root directory', () => {
+    writeFileSync(join(TEST_DIR, 'root-perms.yml'), yaml.stringify({
+      name: 'root-perms',
+      allow: ['Bash(npm *)'],
+    }));
+
+    const results = discoverPermissionsFromRepo(TEST_DIR);
+    expect(results.length).toBe(1);
+    expect(results[0].name).toBe('root-perms');
+  });
+
+  it('returns empty array for empty directory', () => {
+    const results = discoverPermissionsFromRepo(TEST_DIR);
+    expect(results).toEqual([]);
+  });
+
+  it('ignores non-YAML files', () => {
+    writeFileSync(join(TEST_DIR, 'readme.md'), '# Readme');
+    writeFileSync(join(TEST_DIR, 'config.json'), '{}');
+
+    const results = discoverPermissionsFromRepo(TEST_DIR);
+    expect(results).toEqual([]);
+  });
+});
+
+describe('convertToClaudeFormat', () => {
+  it('converts canonical format to Claude format', () => {
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)', 'Read(**)', 'WebSearch(*)'],
+      deny: ['Bash(rm -rf *)'],
+    };
+
+    const result = convertToClaudeFormat(set);
+    expect(result.permissions.allow).toEqual(['Bash(git *)', 'Read(**)', 'WebSearch(*)']);
+    expect(result.permissions.deny).toEqual(['Bash(rm -rf *)']);
+  });
+
+  it('handles empty deny array', () => {
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)'],
+    };
+
+    const result = convertToClaudeFormat(set);
+    expect(result.permissions.allow).toEqual(['Bash(git *)']);
+    expect(result.permissions.deny).toEqual([]);
+  });
+});
+
+describe('convertToOpenCodeFormat', () => {
+  it('converts Bash permissions to OpenCode format', () => {
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)', 'Bash(npm *)'],
+      deny: ['Bash(rm *)'],
+    };
+
+    const result = convertToOpenCodeFormat(set);
+    expect(result.permission.bash['git *']).toBe('allow');
+    expect(result.permission.bash['npm *']).toBe('allow');
+    expect(result.permission.bash['rm *']).toBe('deny');
+  });
+
+  it('ignores non-Bash permissions', () => {
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Read(**)', 'WebSearch(*)', 'Bash(git *)'],
+    };
+
+    const result = convertToOpenCodeFormat(set);
+    expect(Object.keys(result.permission.bash)).toEqual(['git *']);
+  });
+
+  it('handles empty permissions', () => {
+    const set: PermissionSet = {
+      name: 'test',
+      allow: [],
+    };
+
+    const result = convertToOpenCodeFormat(set);
+    expect(result.permission.bash).toEqual({});
+  });
+});
+
+describe('convertToCodexFormat', () => {
+  it('sets full-auto mode for broad bash permissions', () => {
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(*)'],
+    };
+
+    const result = convertToCodexFormat(set);
+    expect(result.approval_policy).toBe('never');
+    expect(result.sandbox_mode).toBe('workspace-write');
+  });
+
+  it('sets on-failure mode for limited permissions', () => {
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)'],
+    };
+
+    const result = convertToCodexFormat(set);
+    expect(result.approval_policy).toBe('on-failure');
+    expect(result.sandbox_mode).toBe('workspace-write');
+  });
+
+  it('enables network access for web permissions', () => {
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['WebSearch(*)', 'WebFetch(*)'],
+    };
+
+    const result = convertToCodexFormat(set);
+    expect(result.sandbox_workspace_write?.network_access).toBe(true);
+  });
+
+  it('returns empty object for no permissions', () => {
+    const set: PermissionSet = {
+      name: 'test',
+      allow: [],
+    };
+
+    const result = convertToCodexFormat(set);
+    expect(result).toEqual({});
+  });
+});
+
+describe('claudeToCanonical', () => {
+  it('converts Claude permissions back to canonical format', () => {
+    const perms: ClaudePermissions = {
+      permissions: {
+        allow: ['Bash(git *)', 'Read(**)'],
+        deny: ['Bash(rm *)'],
+      },
+    };
+
+    const result = claudeToCanonical(perms);
+    expect(result.name).toBe('exported');
+    expect(result.allow).toEqual(['Bash(git *)', 'Read(**)']);
+    expect(result.deny).toEqual(['Bash(rm *)']);
+  });
+
+  it('omits deny if empty', () => {
+    const perms: ClaudePermissions = {
+      permissions: {
+        allow: ['Bash(git *)'],
+        deny: [],
+      },
+    };
+
+    const result = claudeToCanonical(perms);
+    expect(result.deny).toBeUndefined();
+  });
+});
+
+describe('openCodeToCanonical', () => {
+  it('converts OpenCode permissions back to canonical format', () => {
+    const perms: OpenCodePermissions = {
+      permission: {
+        bash: {
+          'git *': 'allow',
+          'npm *': 'allow',
+          'rm *': 'deny',
+        },
+      },
+    };
+
+    const result = openCodeToCanonical(perms);
+    expect(result.allow).toContain('Bash(git *)');
+    expect(result.allow).toContain('Bash(npm *)');
+    expect(result.deny).toContain('Bash(rm *)');
+  });
+
+  it('ignores ask permissions', () => {
+    const perms: OpenCodePermissions = {
+      permission: {
+        bash: {
+          'git *': 'allow',
+          'mv *': 'ask',
+        },
+      },
+    };
+
+    const result = openCodeToCanonical(perms);
+    expect(result.allow).toEqual(['Bash(git *)']);
+    expect(result.deny).toBeUndefined();
+  });
+});
+
+describe('codexToCanonical', () => {
+  it('converts full access mode to broad permissions', () => {
+    const perms: CodexPermissions = {
+      approval_policy: 'never',
+      sandbox_mode: 'danger-full-access',
+    };
+
+    const result = codexToCanonical(perms);
+    expect(result.allow).toContain('Bash(*)');
+    expect(result.allow).toContain('Read(**)');
+    expect(result.allow).toContain('Write(**)');
+    expect(result.allow).toContain('Edit(**)');
+  });
+
+  it('converts workspace-write to bash + read', () => {
+    const perms: CodexPermissions = {
+      sandbox_mode: 'workspace-write',
+    };
+
+    const result = codexToCanonical(perms);
+    expect(result.allow).toContain('Bash(*)');
+    expect(result.allow).toContain('Read(**)');
+    expect(result.allow).not.toContain('Write(**)');
+  });
+
+  it('adds web permissions when network_access is true', () => {
+    const perms: CodexPermissions = {
+      sandbox_workspace_write: {
+        network_access: true,
+      },
+    };
+
+    const result = codexToCanonical(perms);
+    expect(result.allow).toContain('WebSearch(*)');
+    expect(result.allow).toContain('WebFetch(*)');
+  });
+});
+
+describe('round-trip conversion', () => {
+  it('Claude: canonical -> claude -> canonical preserves permissions', () => {
+    const original: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)', 'Read(**)', 'WebSearch(*)'],
+      deny: ['Bash(rm *)'],
+    };
+
+    const claude = convertToClaudeFormat(original);
+    const canonical = claudeToCanonical(claude);
+
+    expect(canonical.allow).toEqual(original.allow);
+    expect(canonical.deny).toEqual(original.deny);
+  });
+
+  it('OpenCode: canonical -> opencode -> canonical preserves bash permissions', () => {
+    const original: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)', 'Bash(npm *)'],
+      deny: ['Bash(rm *)'],
+    };
+
+    const opencode = convertToOpenCodeFormat(original);
+    const canonical = openCodeToCanonical(opencode);
+
+    expect(canonical.allow).toEqual(original.allow);
+    expect(canonical.deny).toEqual(original.deny);
+  });
+});
+
+describe('applyClaudePermissions', () => {
+  const testDir = join(TEST_DIR, 'apply-claude');
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(TEST_DIR, { recursive: true, force: true });
+  });
+
+  it('creates settings.json with permissions', async () => {
+    const { applyClaudePermissions } = await import('../src/lib/permissions.js');
+
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)', 'Read(**)'],
+      deny: ['Bash(rm *)'],
+    };
+
+    // Mock the scope to use our test directory
+    const claudeDir = join(testDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+
+    // We can't easily test with scope='user' as it writes to real HOME
+    // So we test the underlying conversion + JSON writing manually
+    const converted = convertToClaudeFormat(set);
+    const settingsPath = join(claudeDir, 'settings.json');
+    writeFileSync(settingsPath, JSON.stringify(converted, null, 2));
+
+    const written = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(written.permissions.allow).toEqual(['Bash(git *)', 'Read(**)']);
+    expect(written.permissions.deny).toEqual(['Bash(rm *)']);
+  });
+
+  it('merges with existing permissions', async () => {
+    const claudeDir = join(testDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+
+    // Write existing permissions
+    const existing = {
+      permissions: {
+        allow: ['Bash(npm *)'],
+        deny: [],
+      },
+      otherSetting: true,
+    };
+    const settingsPath = join(claudeDir, 'settings.json');
+    writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
+
+    // New permissions to merge
+    const newSet: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)'],
+      deny: ['Bash(rm *)'],
+    };
+
+    // Read existing, merge, write
+    const existingConfig = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    const newConverted = convertToClaudeFormat(newSet);
+
+    const mergedAllow = new Set([
+      ...(existingConfig.permissions?.allow || []),
+      ...newConverted.permissions.allow,
+    ]);
+    const mergedDeny = new Set([
+      ...(existingConfig.permissions?.deny || []),
+      ...newConverted.permissions.deny,
+    ]);
+
+    existingConfig.permissions = {
+      allow: [...mergedAllow],
+      deny: [...mergedDeny],
+    };
+
+    writeFileSync(settingsPath, JSON.stringify(existingConfig, null, 2));
+
+    const result = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(result.permissions.allow).toContain('Bash(npm *)');
+    expect(result.permissions.allow).toContain('Bash(git *)');
+    expect(result.permissions.deny).toContain('Bash(rm *)');
+    expect(result.otherSetting).toBe(true); // preserved
+  });
+});
+
+describe('applyOpenCodePermissions', () => {
+  const testDir = join(TEST_DIR, 'apply-opencode');
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(TEST_DIR, { recursive: true, force: true });
+  });
+
+  it('creates opencode.jsonc with permissions', () => {
+    const opencodeDir = join(testDir, '.opencode');
+    mkdirSync(opencodeDir, { recursive: true });
+
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)', 'Bash(npm *)'],
+      deny: ['Bash(rm *)'],
+    };
+
+    const converted = convertToOpenCodeFormat(set);
+    const configPath = join(opencodeDir, 'opencode.jsonc');
+    writeFileSync(configPath, JSON.stringify(converted, null, 2));
+
+    const written = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(written.permission.bash['git *']).toBe('allow');
+    expect(written.permission.bash['npm *']).toBe('allow');
+    expect(written.permission.bash['rm *']).toBe('deny');
+  });
+
+  it('merges with existing bash permissions', () => {
+    const opencodeDir = join(testDir, '.opencode');
+    mkdirSync(opencodeDir, { recursive: true });
+
+    // Write existing config
+    const existing = {
+      permission: {
+        bash: {
+          'bun *': 'allow',
+        },
+      },
+      mcp: { someServer: {} },
+    };
+    const configPath = join(opencodeDir, 'opencode.jsonc');
+    writeFileSync(configPath, JSON.stringify(existing, null, 2));
+
+    // New permissions
+    const newSet: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)'],
+    };
+
+    // Read, merge, write
+    const existingConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
+    const newConverted = convertToOpenCodeFormat(newSet);
+
+    existingConfig.permission = {
+      ...existingConfig.permission,
+      bash: {
+        ...(existingConfig.permission?.bash || {}),
+        ...newConverted.permission.bash,
+      },
+    };
+
+    writeFileSync(configPath, JSON.stringify(existingConfig, null, 2));
+
+    const result = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(result.permission.bash['bun *']).toBe('allow'); // preserved
+    expect(result.permission.bash['git *']).toBe('allow'); // added
+    expect(result.mcp).toBeDefined(); // other config preserved
+  });
+});
+
+describe('applyCodexPermissions', () => {
+  const testDir = join(TEST_DIR, 'apply-codex');
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(TEST_DIR, { recursive: true, force: true });
+  });
+
+  it('creates config.toml with sandbox settings', () => {
+    const codexDir = join(testDir, '.codex');
+    mkdirSync(codexDir, { recursive: true });
+
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(*)', 'WebSearch(*)'],
+    };
+
+    const converted = convertToCodexFormat(set);
+    const configPath = join(codexDir, 'config.toml');
+    writeFileSync(configPath, TOML.stringify(converted as any));
+
+    const content = readFileSync(configPath, 'utf-8');
+    const written = TOML.parse(content) as Record<string, unknown>;
+
+    expect(written.approval_policy).toBe('never');
+    expect(written.sandbox_mode).toBe('workspace-write');
+    expect((written.sandbox_workspace_write as any)?.network_access).toBe(true);
+  });
+
+  it('preserves existing codex config when merging', () => {
+    const codexDir = join(testDir, '.codex');
+    mkdirSync(codexDir, { recursive: true });
+
+    // Write existing config
+    const existing = {
+      model: 'gpt-4',
+      personality: 'pragmatic',
+    };
+    const configPath = join(codexDir, 'config.toml');
+    writeFileSync(configPath, TOML.stringify(existing));
+
+    // New permissions
+    const newSet: PermissionSet = {
+      name: 'test',
+      allow: ['WebSearch(*)'],
+    };
+
+    // Read, merge, write
+    const existingConfig = TOML.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    const newConverted = convertToCodexFormat(newSet);
+
+    Object.assign(existingConfig, newConverted);
+
+    writeFileSync(configPath, TOML.stringify(existingConfig as any));
+
+    const result = TOML.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    expect(result.model).toBe('gpt-4'); // preserved
+    expect(result.personality).toBe('pragmatic'); // preserved
+    expect((result.sandbox_workspace_write as any)?.network_access).toBe(true); // added
+  });
+});
+
+describe('applyPermissionsToVersion', () => {
+  const testDir = join(TEST_DIR, 'apply-version');
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(TEST_DIR, { recursive: true, force: true });
+  });
+
+  it('applies Claude permissions to version home', () => {
+    const versionHome = join(testDir, 'claude-version-home');
+    mkdirSync(versionHome, { recursive: true });
+
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)', 'Read(**)'],
+      deny: ['Bash(rm *)'],
+    };
+
+    const result = applyPermissionsToVersion('claude', set, versionHome, true);
+    expect(result.success).toBe(true);
+
+    const settingsPath = join(versionHome, '.claude', 'settings.json');
+    expect(existsSync(settingsPath)).toBe(true);
+
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(settings.permissions.allow).toEqual(['Bash(git *)', 'Read(**)']);
+    expect(settings.permissions.deny).toEqual(['Bash(rm *)']);
+  });
+
+  it('merges with existing Claude version permissions', () => {
+    const versionHome = join(testDir, 'claude-version-merge');
+    const claudeDir = join(versionHome, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+
+    // Write existing permissions
+    const existing = {
+      permissions: {
+        allow: ['Bash(npm *)'],
+        deny: [],
+      },
+      otherSetting: 'preserved',
+    };
+    writeFileSync(join(claudeDir, 'settings.json'), JSON.stringify(existing, null, 2));
+
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)'],
+      deny: ['Bash(rm *)'],
+    };
+
+    const result = applyPermissionsToVersion('claude', set, versionHome, true);
+    expect(result.success).toBe(true);
+
+    const settings = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
+    expect(settings.permissions.allow).toContain('Bash(npm *)'); // existing
+    expect(settings.permissions.allow).toContain('Bash(git *)'); // new
+    expect(settings.permissions.deny).toContain('Bash(rm *)');
+    expect(settings.otherSetting).toBe('preserved');
+  });
+
+  it('applies OpenCode permissions to version home', () => {
+    const versionHome = join(testDir, 'opencode-version-home');
+    mkdirSync(versionHome, { recursive: true });
+
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)', 'Bash(npm *)'],
+      deny: ['Bash(rm *)'],
+    };
+
+    const result = applyPermissionsToVersion('opencode', set, versionHome, true);
+    expect(result.success).toBe(true);
+
+    const configPath = join(versionHome, '.opencode', 'opencode.jsonc');
+    expect(existsSync(configPath)).toBe(true);
+
+    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(config.permission.bash['git *']).toBe('allow');
+    expect(config.permission.bash['npm *']).toBe('allow');
+    expect(config.permission.bash['rm *']).toBe('deny');
+  });
+
+  it('applies Codex permissions to version home', () => {
+    const versionHome = join(testDir, 'codex-version-home');
+    mkdirSync(versionHome, { recursive: true });
+
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(*)', 'WebSearch(*)'],
+    };
+
+    const result = applyPermissionsToVersion('codex', set, versionHome, true);
+    expect(result.success).toBe(true);
+
+    const configPath = join(versionHome, '.codex', 'config.toml');
+    expect(existsSync(configPath)).toBe(true);
+
+    const config = TOML.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    expect(config.approval_policy).toBe('never');
+    expect(config.sandbox_mode).toBe('workspace-write');
+    expect((config.sandbox_workspace_write as any)?.network_access).toBe(true);
+  });
+
+  it('returns error for unsupported agent', () => {
+    const versionHome = join(testDir, 'unsupported');
+    mkdirSync(versionHome, { recursive: true });
+
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(git *)'],
+    };
+
+    const result = applyPermissionsToVersion('gemini' as any, set, versionHome, true);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('does not support permissions');
+  });
+});

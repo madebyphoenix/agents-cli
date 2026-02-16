@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.48
+
+**Simplified repo structure**
+
+- Flattened repo structure: removed `shared/` prefix
+- Resources now live at top level: `commands/`, `skills/`, `hooks/`, `memory/`, `permissions/`
+- Removed agent-specific override directories (no more `claude/commands/`, etc.)
+- Simplified discovery functions
+
 ## 1.5.29
 
 **Version-aware resource installation**
@@ -79,7 +88,7 @@
 ## 1.2.0
 
 - Added hooks support for Claude and Gemini
-- Hook discovery from shared/ and agent-specific directories
+- Hook discovery from hooks/ directory
 - Project-scope hooks support
 
 ## 1.1.0

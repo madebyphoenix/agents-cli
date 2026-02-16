@@ -1,0 +1,10 @@
+name: test-basic
+description: Basic test permissions
+
+allow:
+  - "Bash(git *)"
+  - "Bash(npm *)"
+  - "Read(**)"
+
+deny:
+  - "Bash(rm -rf *)"

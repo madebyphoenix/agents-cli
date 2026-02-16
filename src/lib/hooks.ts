@@ -272,8 +272,8 @@ export async function installHooks(
   const scope = options.scope || 'user';
   const cwd = process.cwd();
 
-  const sharedDir = path.join(source, 'shared', 'hooks');
-  const sharedHooks = buildHookMap(listHookEntriesFromDir(sharedDir));
+  const hooksDir = path.join(source, 'hooks');
+  const hooks = listHookEntriesFromDir(hooksDir);
 
   const uniqueAgents = Array.from(new Set(agents));
   for (const agentId of uniqueAgents) {
@@ -283,17 +283,10 @@ export async function installHooks(
       continue;
     }
 
-    const agentDir = path.join(source, agentId, agent.hooksDir);
-    const agentHooks = buildHookMap(listHookEntriesFromDir(agentDir));
-    const hooks = new Map(sharedHooks);
-    for (const [name, entry] of agentHooks) {
-      hooks.set(name, entry);
-    }
-
     const targetDir =
       scope === 'project' ? getProjectHooksDir(agentId, cwd) : getHooksDir(agentId);
 
-    for (const entry of hooks.values()) {
+    for (const entry of hooks) {
       try {
         copyHook(entry, targetDir);
         installed.push(`${entry.name}:${agentId}`);
@@ -363,41 +356,21 @@ export function promoteHookToUser(
   }
 }
 
-export function discoverHooksFromRepo(
-  repoPath: string
-): { shared: string[]; agentSpecific: Record<AgentId, string[]> } {
-  const sharedDir = path.join(repoPath, 'shared', 'hooks');
-  const shared = listHookEntriesFromDir(sharedDir).map((h) => h.name);
-
-  const agentSpecific = {} as Record<AgentId, string[]>;
-  for (const agentId of ALL_AGENT_IDS) {
-    const agent = AGENTS[agentId];
-    const agentDir = path.join(repoPath, agentId, agent.hooksDir);
-    agentSpecific[agentId] = listHookEntriesFromDir(agentDir).map((h) => h.name);
-  }
-
-  return { shared, agentSpecific };
+export function discoverHooksFromRepo(repoPath: string): string[] {
+  const hooksDir = path.join(repoPath, 'hooks');
+  return listHookEntriesFromDir(hooksDir).map((h) => h.name);
 }
 
 /**
- * Get the source hook entry from repo for a given agent.
- * Checks agent-specific dir first, then shared.
+ * Get the source hook entry from repo.
  */
 export function getSourceHookEntry(
   repoPath: string,
-  agentId: AgentId,
   hookName: string
 ): HookEntry | null {
-  const agent = AGENTS[agentId];
-
-  const agentDir = path.join(repoPath, agentId, agent.hooksDir);
-  const agentEntries = listHookEntriesFromDir(agentDir);
-  const agentEntry = agentEntries.find((e) => e.name === hookName);
-  if (agentEntry) return agentEntry;
-
-  const sharedDir = path.join(repoPath, 'shared', 'hooks');
-  const sharedEntries = listHookEntriesFromDir(sharedDir);
-  return sharedEntries.find((e) => e.name === hookName) || null;
+  const hooksDir = path.join(repoPath, 'hooks');
+  const entries = listHookEntriesFromDir(hooksDir);
+  return entries.find((e) => e.name === hookName) || null;
 }
 
 /**
@@ -416,7 +389,7 @@ export async function installHooksCentrally(
   }
 
   // Collect all hooks from shared directory
-  const sharedDir = path.join(source, 'shared', 'hooks');
+  const sharedDir = path.join(source, 'hooks');
   const sharedHooks = listHookEntriesFromDir(sharedDir);
 
   for (const entry of sharedHooks) {

@@ -27,30 +27,8 @@ AGENTS_DIR="$HOME/.agents"
 AGENT="${agent}"
 CLI_COMMAND="${cliCommand}"
 
-# Resolve version from project manifest or global default
+# Resolve version from global config only
 resolve_version() {
-  local dir="$PWD"
-
-  # Walk up directory tree looking for .agents/agents.yaml
-  while [ "$dir" != "/" ]; do
-    local manifest="$dir/.agents/agents.yaml"
-    if [ -f "$manifest" ]; then
-      local version
-      version=$(awk -v agent="$AGENT" '
-        /^agents:/ { in_agents=1; next }
-        in_agents && /^[^ ]/ { in_agents=0 }
-        in_agents && $0 ~ "^  " agent ":" { gsub(/.*:[[:space:]]*["'"'"']?|["'"'"']?[[:space:]]*$/, ""); print; exit }
-      ' "$manifest")
-
-      if [ -n "$version" ]; then
-        echo "$version"
-        return
-      fi
-    fi
-    dir=$(dirname "$dir")
-  done
-
-  # Fall back to global default from ~/.agents/agents.yaml
   local global_config="$AGENTS_DIR/agents.yaml"
   if [ -f "$global_config" ]; then
     awk -v agent="$AGENT" '
@@ -380,6 +358,207 @@ export function ensureAllShims(): void {
 
       if (versions.length > 0 && !shimExists(agent)) {
         createShim(agent);
+      }
+    }
+  }
+}
+
+/**
+ * Resource diff between two versions.
+ */
+export interface ResourceDiff {
+  commands: string[];  // names in current but not in target
+  skills: string[];
+  hooks: string[];
+  memory: { file: string; currentLines: number; targetLines: number }[];
+  mcp: string[];  // server names in current but not in target
+}
+
+/**
+ * Compare resources between two versions.
+ * Returns resources that exist in currentVersion but not in targetVersion.
+ */
+export function compareVersionResources(
+  agent: AgentId,
+  currentVersion: string,
+  targetVersion: string
+): ResourceDiff {
+  const agentConfig = AGENTS[agent];
+  const currentPath = getVersionConfigPath(agent, currentVersion);
+  const targetPath = getVersionConfigPath(agent, targetVersion);
+
+  const diff: ResourceDiff = {
+    commands: [],
+    skills: [],
+    hooks: [],
+    memory: [],
+    mcp: [],
+  };
+
+  // Helper to list directory contents (names only)
+  const listDir = (dir: string): string[] => {
+    if (!fs.existsSync(dir)) return [];
+    try {
+      return fs.readdirSync(dir).filter(f => !f.startsWith('.'));
+    } catch {
+      return [];
+    }
+  };
+
+  // Helper to count lines in a file
+  const countLines = (filePath: string): number => {
+    if (!fs.existsSync(filePath)) return 0;
+    try {
+      return fs.readFileSync(filePath, 'utf-8').split('\n').length;
+    } catch {
+      return 0;
+    }
+  };
+
+  // Compare commands
+  const currentCommands = listDir(path.join(currentPath, agentConfig.commandsSubdir));
+  const targetCommands = new Set(listDir(path.join(targetPath, agentConfig.commandsSubdir)));
+  diff.commands = currentCommands.filter(c => !targetCommands.has(c)).map(c => c.replace(/\.(md|toml)$/, ''));
+
+  // Compare skills
+  const currentSkills = listDir(path.join(currentPath, 'skills'));
+  const targetSkills = new Set(listDir(path.join(targetPath, 'skills')));
+  diff.skills = currentSkills.filter(s => !targetSkills.has(s));
+
+  // Compare hooks
+  const currentHooks = listDir(path.join(currentPath, 'hooks'));
+  const targetHooks = new Set(listDir(path.join(targetPath, 'hooks')));
+  diff.hooks = currentHooks.filter(h => !targetHooks.has(h));
+
+  // Compare memory files (instructionsFile like CLAUDE.md)
+  const memoryFile = agentConfig.instructionsFile;
+  const currentMemoryPath = path.join(currentPath, memoryFile);
+  const targetMemoryPath = path.join(targetPath, memoryFile);
+  const currentLines = countLines(currentMemoryPath);
+  const targetLines = countLines(targetMemoryPath);
+  if (currentLines > 0 && currentLines !== targetLines) {
+    diff.memory.push({ file: memoryFile, currentLines, targetLines });
+  }
+
+  // Compare MCP servers (from settings.json)
+  const readMcpServers = (configPath: string): string[] => {
+    const settingsPath = path.join(configPath, 'settings.json');
+    if (!fs.existsSync(settingsPath)) return [];
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      return Object.keys(settings.mcpServers || {});
+    } catch {
+      return [];
+    }
+  };
+
+  const currentMcp = readMcpServers(currentPath);
+  const targetMcp = new Set(readMcpServers(targetPath));
+  diff.mcp = currentMcp.filter(m => !targetMcp.has(m));
+
+  return diff;
+}
+
+/**
+ * Check if a ResourceDiff has any differences.
+ */
+export function hasResourceDiff(diff: ResourceDiff): boolean {
+  return (
+    diff.commands.length > 0 ||
+    diff.skills.length > 0 ||
+    diff.hooks.length > 0 ||
+    diff.memory.length > 0 ||
+    diff.mcp.length > 0
+  );
+}
+
+/**
+ * Copy resources from one version to another.
+ * Only copies resources listed in the diff (i.e., ones missing in target).
+ */
+export function copyResourcesToVersion(
+  agent: AgentId,
+  fromVersion: string,
+  toVersion: string,
+  diff: ResourceDiff
+): void {
+  const agentConfig = AGENTS[agent];
+  const fromPath = getVersionConfigPath(agent, fromVersion);
+  const toPath = getVersionConfigPath(agent, toVersion);
+
+  // Helper to copy a file or directory
+  const copyItem = (srcDir: string, destDir: string, name: string): void => {
+    const srcPath = path.join(srcDir, name);
+    const destPath = path.join(destDir, name);
+    if (!fs.existsSync(srcPath)) return;
+
+    fs.mkdirSync(destDir, { recursive: true });
+
+    const stat = fs.statSync(srcPath);
+    if (stat.isDirectory()) {
+      copyDirContents(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  };
+
+  // Copy missing commands
+  const commandsSubdir = agentConfig.commandsSubdir;
+  const ext = agentConfig.format === 'toml' ? '.toml' : '.md';
+  for (const cmd of diff.commands) {
+    copyItem(
+      path.join(fromPath, commandsSubdir),
+      path.join(toPath, commandsSubdir),
+      `${cmd}${ext}`
+    );
+  }
+
+  // Copy missing skills
+  for (const skill of diff.skills) {
+    copyItem(path.join(fromPath, 'skills'), path.join(toPath, 'skills'), skill);
+  }
+
+  // Copy missing hooks
+  for (const hook of diff.hooks) {
+    copyItem(path.join(fromPath, 'hooks'), path.join(toPath, 'hooks'), hook);
+  }
+
+  // Copy memory file if different
+  for (const mem of diff.memory) {
+    const srcPath = path.join(fromPath, mem.file);
+    const destPath = path.join(toPath, mem.file);
+    if (fs.existsSync(srcPath)) {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+
+  // Merge MCP servers into target settings.json
+  if (diff.mcp.length > 0) {
+    const fromSettingsPath = path.join(fromPath, 'settings.json');
+    const toSettingsPath = path.join(toPath, 'settings.json');
+
+    if (fs.existsSync(fromSettingsPath)) {
+      try {
+        const fromSettings = JSON.parse(fs.readFileSync(fromSettingsPath, 'utf-8'));
+        let toSettings: Record<string, unknown> = {};
+
+        if (fs.existsSync(toSettingsPath)) {
+          toSettings = JSON.parse(fs.readFileSync(toSettingsPath, 'utf-8'));
+        }
+
+        if (!toSettings.mcpServers) {
+          toSettings.mcpServers = {};
+        }
+
+        for (const serverName of diff.mcp) {
+          if (fromSettings.mcpServers?.[serverName]) {
+            (toSettings.mcpServers as Record<string, unknown>)[serverName] = fromSettings.mcpServers[serverName];
+          }
+        }
+
+        fs.writeFileSync(toSettingsPath, JSON.stringify(toSettings, null, 2));
+      } catch {
+        // Ignore JSON parse errors
       }
     }
   }

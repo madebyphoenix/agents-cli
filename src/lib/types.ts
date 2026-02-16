@@ -224,12 +224,24 @@ export interface RepoConfig {
   readonly?: boolean;
 }
 
+// Resource tracking per agent version
+export type ResourceType = 'commands' | 'skills' | 'hooks' | 'memory' | 'mcp' | 'permissions';
+
+export interface VersionResources {
+  commands?: string[];
+  skills?: string[];
+  hooks?: string[];
+  memory?: string[];
+  mcp?: string[];
+  permissions?: string[];
+}
+
 export interface Meta {
   agents?: Partial<Record<AgentId, string>>;
   repos: Record<RepoName, RepoConfig>;
   registries?: Record<RegistryType, Record<string, RegistryConfig>>;
-  // Which agents should have central resources (commands, hooks, skills, memory) symlinked
-  sync?: AgentId[];
+  // Per-version resource tracking
+  versions?: Partial<Record<AgentId, Record<string, VersionResources>>>;
 }
 
 export interface SyncOptions {
@@ -239,4 +251,41 @@ export interface SyncOptions {
   dryRun?: boolean;
   skipClis?: boolean;
   skipMcp?: boolean;
+}
+
+// Permission types - canonical format uses Claude's syntax
+export interface PermissionSet {
+  name: string;
+  description?: string;
+  allow: string[];
+  deny?: string[];
+}
+
+export interface InstalledPermission {
+  name: string;
+  path: string;
+  set: PermissionSet;
+}
+
+// Agent-specific permission formats
+export interface ClaudePermissions {
+  permissions: {
+    allow: string[];
+    deny: string[];
+  };
+}
+
+export interface OpenCodePermissions {
+  permission: {
+    bash: Record<string, 'allow' | 'deny' | 'ask'>;
+  };
+}
+
+export interface CodexPermissions {
+  approval_policy?: 'on-request' | 'on-failure' | 'never';
+  sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  sandbox_workspace_write?: {
+    network_access?: boolean;
+    writable_roots?: string[];
+  };
 }

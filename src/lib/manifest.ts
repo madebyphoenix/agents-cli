@@ -30,11 +30,7 @@ export function writeManifest(repoPath: string, manifest: Manifest): void {
 
 export function createDefaultManifest(): Manifest {
   return {
-    agents: {
-      claude: 'latest',
-      codex: 'latest',
-      gemini: 'latest',
-    },
+    agents: {},
     dependencies: {},
     mcp: {},
     defaults: {

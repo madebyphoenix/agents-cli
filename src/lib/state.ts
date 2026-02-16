@@ -21,6 +21,7 @@ const RUNS_DIR = path.join(AGENTS_DIR, 'runs');
 const DRIVES_DIR = path.join(AGENTS_DIR, 'drives');
 const VERSIONS_DIR = path.join(AGENTS_DIR, 'versions');
 const SHIMS_DIR = path.join(AGENTS_DIR, 'shims');
+const PERMISSIONS_DIR = path.join(AGENTS_DIR, 'permissions');
 
 const META_HEADER = `# agents-cli metadata
 # Auto-generated - do not edit manually
@@ -58,6 +59,10 @@ export function getVersionsDir(): string {
 
 export function getShimsDir(): string {
   return SHIMS_DIR;
+}
+
+export function getPermissionsDir(): string {
+  return PERMISSIONS_DIR;
 }
 
 export function getCommandsDir(): string {
@@ -120,6 +125,9 @@ export function ensureAgentsDir(): void {
   }
   if (!fs.existsSync(MEMORY_DIR)) {
     fs.mkdirSync(MEMORY_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(PERMISSIONS_DIR)) {
+    fs.mkdirSync(PERMISSIONS_DIR, { recursive: true });
   }
 }
 
@@ -297,4 +305,66 @@ export function getRepoPriority(repoName: RepoName): number {
   );
   const index = customRepos.indexOf(repoName);
   return index >= 0 ? 20 + index : 25;
+}
+
+// Version resource tracking helpers
+
+import type { AgentId, ResourceType, VersionResources } from './types.js';
+
+/**
+ * Record that resources were synced to a specific version.
+ * Creates nested entries if they don't exist (handles existing installs gracefully).
+ * Merges with existing resources (uses Set for deduplication).
+ */
+export function recordVersionResources(
+  agent: AgentId,
+  version: string,
+  resourceType: ResourceType,
+  resources: string[]
+): void {
+  if (resources.length === 0) return;
+
+  const meta = readMeta();
+  if (!meta.versions) meta.versions = {};
+  if (!meta.versions[agent]) meta.versions[agent] = {};
+  if (!meta.versions[agent]![version]) meta.versions[agent]![version] = {};
+
+  const existing = meta.versions[agent]![version][resourceType] || [];
+  const merged = [...new Set([...existing, ...resources])];
+  meta.versions[agent]![version][resourceType] = merged;
+
+  writeMeta(meta);
+}
+
+/**
+ * Get tracked resources for a specific version.
+ */
+export function getVersionResources(
+  agent: AgentId,
+  version: string
+): VersionResources | null {
+  const meta = readMeta();
+  return meta.versions?.[agent]?.[version] || null;
+}
+
+/**
+ * Clear resource tracking when a version is removed.
+ */
+export function clearVersionResources(
+  agent: AgentId,
+  version: string
+): void {
+  const meta = readMeta();
+  if (meta.versions?.[agent]?.[version]) {
+    delete meta.versions[agent]![version];
+    // Clean up empty agent entry
+    if (Object.keys(meta.versions[agent]!).length === 0) {
+      delete meta.versions[agent];
+    }
+    // Clean up empty versions section
+    if (Object.keys(meta.versions).length === 0) {
+      delete meta.versions;
+    }
+    writeMeta(meta);
+  }
 }
