@@ -165,7 +165,7 @@ async function checkForUpdates(): Promise<void> {
       });
 
       if (answer === 'now') {
-        const { exec } = await import('child_process');
+        const { exec, spawnSync } = await import('child_process');
         const { promisify } = await import('util');
         const execAsync = promisify(exec);
         const spinner = ora('Upgrading...').start();
@@ -173,6 +173,13 @@ async function checkForUpdates(): Promise<void> {
           await execAsync('npm install -g @swarmify/agents-cli@latest');
           spinner.succeed(`Upgraded to ${latestVersion}`);
           await showWhatsNew(VERSION, latestVersion);
+          console.log();
+          // Re-exec with new version and exit
+          const result = spawnSync('agents', process.argv.slice(2), {
+            stdio: 'inherit',
+            shell: true,
+          });
+          process.exit(result.status ?? 0);
         } catch {
           spinner.fail('Upgrade failed');
           console.log(chalk.gray('Run manually: npm install -g @swarmify/agents-cli@latest'));
