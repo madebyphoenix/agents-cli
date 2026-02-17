@@ -1,4 +1,4 @@
-export type AgentId = 'claude' | 'codex' | 'gemini' | 'cursor' | 'opencode';
+export type AgentId = 'claude' | 'codex' | 'gemini' | 'cursor' | 'opencode' | 'openclaw';
 
 export interface AgentConfig {
   id: AgentId;

@@ -25,6 +25,7 @@ import {
   updateMeta,
 } from '../lib/state.js';
 import type { AgentId } from '../lib/types.js';
+import { DEFAULT_SYSTEM_REPO } from '../lib/types.js';
 import {
   isGitRepo,
   cloneIntoExisting,
@@ -96,10 +97,9 @@ export function registerPullCommand(program: Command): void {
               return;
             }
           } else {
-            spinner.fail('GitHub CLI not authenticated');
-            console.log(chalk.gray('\nTo pull from a repo:'));
-            console.log(chalk.cyan('  agents pull gh:username/.agents'));
-            return;
+            // Fall back to system default repo
+            targetSource = DEFAULT_SYSTEM_REPO;
+            spinner.info(`Using default: ${DEFAULT_SYSTEM_REPO}`);
           }
         }
       }
@@ -226,7 +226,7 @@ export function registerPullCommand(program: Command): void {
         let synced = 0;
 
         for (const agentId of agentsToSync) {
-          if (!cliStates[agentId]?.installed && agentId !== 'cursor') continue;
+          if (!cliStates[agentId]?.installed && listInstalledVersions(agentId).length === 0) continue;
 
           const versions = listInstalledVersions(agentId);
           const defaultVer = getGlobalDefault(agentId);

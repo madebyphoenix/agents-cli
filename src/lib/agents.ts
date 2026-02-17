@@ -100,6 +100,22 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     supportsHooks: false,
     capabilities: { hooks: false, mcp: true, allowlist: false, skills: true },
   },
+  openclaw: {
+    id: 'openclaw',
+    name: 'OpenClaw',
+    cliCommand: 'openclaw',
+    npmPackage: 'openclaw',
+    configDir: path.join(HOME, '.openclaw'),
+    commandsDir: '', // OpenClaw uses Gateway-based slash commands, not file-based
+    commandsSubdir: '',
+    skillsDir: path.join(HOME, '.openclaw', 'skills'),
+    hooksDir: 'hooks',
+    instructionsFile: 'workspace/AGENTS.md', // Primary memory file (also has SOUL.md, IDENTITY.md, etc.)
+    format: 'markdown',
+    variableSyntax: '{{ARGUMENTS}}',
+    supportsHooks: true,
+    capabilities: { hooks: true, mcp: true, allowlist: false, skills: true },
+  },
 };
 
 export const ALL_AGENT_IDS: AgentId[] = Object.keys(AGENTS) as AgentId[];
@@ -109,7 +125,7 @@ export const MCP_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
 export const SKILLS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
   (id) => AGENTS[id].capabilities.skills
 );
-export const HOOKS_CAPABLE_AGENTS = ['claude', 'gemini'] as const;
+export const HOOKS_CAPABLE_AGENTS = ['claude', 'gemini', 'openclaw'] as const;
 
 export async function isCliInstalled(agentId: AgentId): Promise<boolean> {
   const agent = AGENTS[agentId];
@@ -125,6 +141,11 @@ export async function getCliVersion(agentId: AgentId): Promise<string | null> {
   const agent = AGENTS[agentId];
   try {
     const { stdout } = await execAsync(`${agent.cliCommand} --version`);
+    // OpenClaw uses format: openclaw/2026.1.29
+    if (agentId === 'openclaw') {
+      const match = stdout.match(/openclaw\/(\d+\.\d+\.\d+)/);
+      return match ? match[1] : stdout.trim();
+    }
     const match = stdout.match(/(\d+\.\d+\.\d+)/);
     return match ? match[1] : stdout.trim();
   } catch {
@@ -528,6 +549,9 @@ function getUserMcpConfigPath(agentId: AgentId): string {
     case 'cursor':
       // Cursor uses mcp.json
       return path.join(agent.configDir, 'mcp.json');
+    case 'openclaw':
+      // OpenClaw uses openclaw.json
+      return path.join(agent.configDir, 'openclaw.json');
     default:
       // Gemini and others use settings.json
       return path.join(agent.configDir, 'settings.json');
@@ -547,6 +571,8 @@ export function getMcpConfigPathForHome(agentId: AgentId, home: string): string 
       return path.join(home, '.opencode', 'opencode.jsonc');
     case 'cursor':
       return path.join(home, '.cursor', 'mcp.json');
+    case 'openclaw':
+      return path.join(home, '.openclaw', 'openclaw.json');
     default:
       return path.join(home, `.${agentId}`, 'settings.json');
   }
@@ -566,10 +592,57 @@ function getProjectMcpConfigPath(agentId: AgentId, cwd: string = process.cwd()):
       return path.join(cwd, `.${agentId}`, 'opencode.jsonc');
     case 'cursor':
       return path.join(cwd, `.${agentId}`, 'mcp.json');
+    case 'openclaw':
+      return path.join(cwd, `.${agentId}`, 'openclaw.json');
     case 'gemini':
       return path.join(cwd, `.${agentId}`, 'settings.json');
     default:
       return path.join(cwd, `.${agentId}`, 'settings.json');
+  }
+}
+
+/**
+ * Parse MCP servers from OpenClaw's JSON config.
+ * OpenClaw stores MCPs under mcp.servers with a similar structure to other agents.
+ */
+function parseMcpFromOpenClawConfig(configPath: string): Record<string, McpConfigEntry> {
+  if (!fs.existsSync(configPath)) {
+    return {};
+  }
+
+  try {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    const config = JSON.parse(content);
+
+    // OpenClaw uses mcp.servers for MCP configuration
+    const mcpServers = config.mcp?.servers as Record<string, {
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      transport?: string;
+    }> | undefined;
+
+    if (!mcpServers) return {};
+
+    const result: Record<string, McpConfigEntry> = {};
+    for (const [name, entry] of Object.entries(mcpServers)) {
+      if (entry.command) {
+        result[name] = {
+          command: entry.command,
+          args: entry.args,
+          env: entry.env,
+        };
+      } else if (entry.url) {
+        result[name] = {
+          url: entry.url,
+          type: entry.transport || 'sse',
+        };
+      }
+    }
+    return result;
+  } catch {
+    return {};
   }
 }
 
@@ -582,6 +655,8 @@ export function parseMcpConfig(agentId: AgentId, configPath: string): Record<str
       return parseMcpFromTomlConfig(configPath);
     case 'opencode':
       return parseMcpFromOpenCodeConfig(configPath);
+    case 'openclaw':
+      return parseMcpFromOpenClawConfig(configPath);
     default:
       return parseMcpFromJsonConfig(configPath);
   }
@@ -682,6 +757,9 @@ export const AGENT_NAME_ALIASES: Record<string, AgentId> = {
   cr: 'cursor',
   opencode: 'opencode',
   oc: 'opencode',
+  openclaw: 'openclaw',
+  claw: 'openclaw',
+  ocl: 'openclaw',
 };
 
 export function resolveAgentName(input: string): AgentId | null {

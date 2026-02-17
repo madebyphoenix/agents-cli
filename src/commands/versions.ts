@@ -422,11 +422,13 @@ export function registerVersionsCommands(program: Command): void {
           gemini: 'gemini',
           cursor: 'cursor',
           opencode: 'opencode',
+          openclaw: 'openclaw',
+          claw: 'openclaw',
         };
         filterAgentId = agentMap[agentArg.toLowerCase()];
         if (!filterAgentId) {
           console.log(chalk.red(`Unknown agent: ${agentArg}`));
-          console.log(chalk.gray(`Valid agents: claude, codex, gemini, cursor, opencode`));
+          console.log(chalk.gray(`Valid agents: claude, codex, gemini, cursor, opencode, openclaw`));
           process.exit(1);
         }
       }

@@ -46,6 +46,8 @@ export function registerStatusCommand(program: Command): void {
           gemini: 'gemini',
           cursor: 'cursor',
           opencode: 'opencode',
+          openclaw: 'openclaw',
+          claw: 'openclaw',
         };
         filterAgentId = agentMap[agentFilter.toLowerCase()];
         if (!filterAgentId) {
@@ -60,6 +62,19 @@ export function registerStatusCommand(program: Command): void {
       const agentsDir = getAgentsDir();
       const cliStates = await getAllCliStates();
       const agentsToShow = filterAgentId ? [filterAgentId] : ALL_AGENT_IDS;
+
+      // If filtering by a single agent that's not installed, show simple message
+      if (filterAgentId) {
+        const cli = cliStates[filterAgentId];
+        const version = resolveVersion(filterAgentId, cwd);
+        if (!cli?.installed && !version) {
+          spinner.stop();
+          const agent = AGENTS[filterAgentId];
+          console.log(chalk.yellow(`${agent.name} not installed`));
+          console.log(chalk.gray(`\nInstall with: agents add ${filterAgentId}@latest`));
+          return;
+        }
+      }
 
       // Get git sync status if ~/.agents/ is a git repo
       const hasGitRepo = isGitRepo(agentsDir);
