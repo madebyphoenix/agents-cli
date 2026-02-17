@@ -10,7 +10,7 @@ import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getC
 import { AGENTS, getAccountEmail } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS } from './permissions.js';
 import { markdownToToml } from './convert.js';
-import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink } from './shims.js';
+import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion } from './shims.js';
 
 const execAsync = promisify(exec);
 
@@ -71,6 +71,32 @@ export function getVersionHomePath(agent: AgentId, version: string): string {
 export function isVersionInstalled(agent: AgentId, version: string): boolean {
   const binaryPath = getBinaryPath(agent, version);
   return fs.existsSync(binaryPath);
+}
+
+/**
+ * Get the latest available version from npm for an agent.
+ */
+export async function getLatestNpmVersion(agent: AgentId): Promise<string | null> {
+  const agentConfig = AGENTS[agent];
+  if (!agentConfig.npmPackage) return null;
+
+  try {
+    const { stdout } = await execAsync(`npm view ${agentConfig.npmPackage} version`);
+    return stdout.trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if 'latest' version is already installed (by resolving to actual version).
+ */
+export async function isLatestInstalled(agent: AgentId): Promise<{ installed: boolean; version: string | null }> {
+  const latestVersion = await getLatestNpmVersion(agent);
+  if (!latestVersion) {
+    return { installed: false, version: null };
+  }
+  return { installed: isVersionInstalled(agent, latestVersion), version: latestVersion };
 }
 
 /**
@@ -224,6 +250,17 @@ export function removeVersion(agent: AgentId, version: string): boolean {
     const remaining = listInstalledVersions(agent);
     if (remaining.length > 0) {
       console.log(chalk.yellow(`Default version removed. Run: agents use ${agent}@<version> to set a new default`));
+    }
+  }
+
+  // Clean up dangling config symlink if it pointed to the removed version
+  const symlinkVersion = getConfigSymlinkVersion(agent);
+  if (symlinkVersion === version) {
+    const configPath = path.join(os.homedir(), `.${agent}`);
+    try {
+      fs.unlinkSync(configPath);
+    } catch {
+      // Ignore if already gone
     }
   }
 

@@ -45,6 +45,7 @@ import {
 } from '../lib/versions.js';
 import {
   createShim,
+  shimExists,
   isShimsInPath,
   addShimsToPath,
   getPathSetupInstructions,
@@ -184,9 +185,12 @@ export function registerPullCommand(program: Command): void {
               const isNew = versions.length === 0;
               if (isNew) {
                 cliSpinner.succeed(`Installed ${agent.name}@${result.installedVersion}`);
-                createShim(agentId);
               } else {
                 cliSpinner.succeed(`${agent.name}@${result.installedVersion}`);
+              }
+              // Ensure shim exists (repair if deleted)
+              if (!shimExists(agentId)) {
+                createShim(agentId);
               }
             } else {
               cliSpinner.warn(`${agent.name}: ${result.error}`);

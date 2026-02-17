@@ -217,16 +217,33 @@ export async function switchConfigSymlink(
       const tempPath = `${configPath}.backup.${Date.now()}`;
       fs.renameSync(configPath, tempPath);
 
-      // Copy contents from backup to version config (with prompts for conflicts)
-      await copyDirContents(tempPath, versionConfigPath);
+      try {
+        // Copy contents from backup to version config (with prompts for conflicts)
+        await copyDirContents(tempPath, versionConfigPath);
 
-      // Create symlink
-      fs.symlinkSync(versionConfigPath, configPath);
+        // Create symlink
+        fs.symlinkSync(versionConfigPath, configPath);
 
-      // Remove backup
-      fs.rmSync(tempPath, { recursive: true, force: true });
+        // Remove backup only on success
+        fs.rmSync(tempPath, { recursive: true, force: true });
 
-      return { success: true, migrated: true };
+        return { success: true, migrated: true };
+      } catch (migrationErr) {
+        // Rollback: restore original directory
+        try {
+          if (fs.existsSync(configPath)) {
+            fs.unlinkSync(configPath); // Remove partial symlink if created
+          }
+          fs.renameSync(tempPath, configPath);
+        } catch {
+          // Rollback failed - backup remains at tempPath
+          return {
+            success: false,
+            error: `Migration failed and rollback failed. Original config at: ${tempPath}`,
+          };
+        }
+        return { success: false, error: `Migration failed: ${(migrationErr as Error).message}` };
+      }
     } else {
       return { success: false, error: `${configPath} exists but is not a directory or symlink` };
     }
@@ -440,9 +457,15 @@ export function addShimsToPath(): { success: boolean; alreadyPresent?: boolean; 
 
   // Write the updated content
   try {
+    // Ensure parent directories exist (especially for fish: ~/.config/fish/)
+    const rcDir = path.dirname(rcPath);
+    if (!fs.existsSync(rcDir)) {
+      fs.mkdirSync(rcDir, { recursive: true });
+    }
+
     let newContent: string;
-    if (insertIndex > 0) {
-      // Insert before nvm/node setup
+    if (insertIndex >= 0) {
+      // Insert before nvm/node setup (handles index 0 correctly)
       newContent = content.slice(0, insertIndex) + exportLine + content.slice(insertIndex);
     } else {
       // Append to end

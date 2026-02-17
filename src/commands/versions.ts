@@ -19,6 +19,7 @@ import {
   removeAllVersions,
   listInstalledVersions,
   isVersionInstalled,
+  isLatestInstalled,
   getGlobalDefault,
   setGlobalDefault,
   getVersionHomePath,
@@ -105,9 +106,21 @@ export function registerVersionsCommands(program: Command): void {
           continue;
         }
 
-        // Check if already installed
-        if (isVersionInstalled(agent, version)) {
-          console.log(chalk.gray(`${agentConfig.name}@${version} already installed`));
+        // Check if already installed (handle 'latest' specially)
+        let alreadyInstalled = false;
+        let installedAsVersion = version;
+        if (version === 'latest') {
+          const latestCheck = await isLatestInstalled(agent);
+          if (latestCheck.installed && latestCheck.version) {
+            alreadyInstalled = true;
+            installedAsVersion = latestCheck.version;
+          }
+        } else {
+          alreadyInstalled = isVersionInstalled(agent, version);
+        }
+
+        if (alreadyInstalled) {
+          console.log(chalk.gray(`${agentConfig.name}@${installedAsVersion} already installed`));
 
           // Ensure shim exists (in case it was deleted or needs updating)
           createShim(agent);
