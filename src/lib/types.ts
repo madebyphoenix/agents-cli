@@ -242,6 +242,8 @@ export interface Meta {
   registries?: Record<RegistryType, Record<string, RegistryConfig>>;
   // Per-version resource tracking
   versions?: Partial<Record<AgentId, Record<string, VersionResources>>>;
+  // Git remote source URL (when ~/.agents/ is a git repo)
+  source?: string;
 }
 
 export interface SyncOptions {

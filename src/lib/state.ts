@@ -131,6 +131,34 @@ export function ensureAgentsDir(): void {
   }
 }
 
+const GITIGNORE_CONTENT = `# Local-only directories (not synced to repo)
+versions/
+shims/
+repos/
+runs/
+jobs/
+drives/
+packages/
+swarm/
+agents/
+
+# Local state files
+*.json
+*.log
+*.pid
+meta.yaml
+`;
+
+/**
+ * Ensure .gitignore exists in ~/.agents/ with correct content.
+ */
+export function ensureGitignore(): void {
+  const gitignorePath = path.join(AGENTS_DIR, '.gitignore');
+  if (!fs.existsSync(gitignorePath)) {
+    fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT, 'utf-8');
+  }
+}
+
 export function createDefaultMeta(): Meta {
   return {
     repos: {},

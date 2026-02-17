@@ -473,10 +473,10 @@ export async function promptAgentVersionSelection(
 ): Promise<VersionSelectionResult> {
   const versionSelections = new Map<AgentId, string[]>();
 
-  // Filter to installed agents
+  // Filter to installed agents (only those with versions managed by agents CLI)
   const installedAgents = availableAgents.filter((id) => {
     const versions = listInstalledVersions(id);
-    return versions.length > 0 || id === 'cursor';
+    return versions.length > 0;
   });
 
   if (installedAgents.length === 0) {

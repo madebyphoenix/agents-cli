@@ -32,6 +32,7 @@ import {
   discoverHooksFromRepo,
   installHooks,
 } from '../lib/hooks.js';
+import { listInstalledVersions } from '../lib/versions.js';
 
 export function registerPackagesCommands(program: Command): void {
   // ==========================================================================
@@ -374,7 +375,7 @@ export function registerPackagesCommands(program: Command): void {
             let failed = 0;
             for (const command of commands) {
               for (const agentId of agents) {
-                if (!gitCliStates[agentId]?.installed && agentId !== 'cursor') continue;
+                if (!gitCliStates[agentId]?.installed && listInstalledVersions(agentId).length === 0) continue;
 
                 const sourcePath = resolveCommandSource(localPath, command.name);
                 if (sourcePath) {

@@ -1,6 +1,7 @@
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import * as path from 'path';
 
 import {
   AGENTS,
@@ -15,7 +16,18 @@ import {
   getVersionHomePath,
 } from '../lib/versions.js';
 import { getAgentResources } from '../lib/resources.js';
+import { getAgentsDir } from '../lib/state.js';
+import { isGitRepo, getGitSyncStatus } from '../lib/git.js';
 import { formatPath } from './utils.js';
+
+type SyncState = 'synced' | 'new' | 'modified' | 'deleted';
+
+interface ResourceWithSync {
+  name: string;
+  path?: string;
+  ruleCount?: number;
+  syncState?: SyncState;
+}
 
 export function registerStatusCommand(program: Command): void {
   program
@@ -45,19 +57,64 @@ export function registerStatusCommand(program: Command): void {
       }
 
       const cwd = process.cwd();
+      const agentsDir = getAgentsDir();
       const cliStates = await getAllCliStates();
       const agentsToShow = filterAgentId ? [filterAgentId] : ALL_AGENT_IDS;
+
+      // Get git sync status if ~/.agents/ is a git repo
+      const hasGitRepo = isGitRepo(agentsDir);
+      const commandsSync = hasGitRepo ? await getGitSyncStatus(agentsDir, 'commands') : null;
+      const skillsSync = hasGitRepo ? await getGitSyncStatus(agentsDir, 'skills') : null;
+      const hooksSync = hasGitRepo ? await getGitSyncStatus(agentsDir, 'hooks') : null;
+      const memorySync = hasGitRepo ? await getGitSyncStatus(agentsDir, 'memory') : null;
+
+      // Helper to determine sync state for a resource
+      // resourcePath is in version home, we need to check central storage
+      const getSyncState = (
+        resourceName: string,
+        resourceType: 'commands' | 'skills' | 'hooks' | 'memory',
+        syncStatus: Awaited<ReturnType<typeof getGitSyncStatus>>
+      ): SyncState | undefined => {
+        if (!syncStatus) return undefined;
+
+        // Build the relative path in central storage
+        let relativePath: string;
+        if (resourceType === 'commands') {
+          relativePath = `commands/${resourceName}.md`;
+        } else if (resourceType === 'skills') {
+          relativePath = `skills/${resourceName}`;
+        } else if (resourceType === 'hooks') {
+          relativePath = `hooks/${resourceName}`;
+        } else {
+          relativePath = `memory/${resourceName}`;
+        }
+
+        // Check if file is new (untracked or staged but not committed)
+        const isNew = syncStatus.new.some(f => f === relativePath || f.startsWith(relativePath + '/'));
+        const isStaged = syncStatus.staged.some(f => f === relativePath || f.startsWith(relativePath + '/'));
+
+        if (isNew || isStaged) {
+          return 'new';
+        }
+        if (syncStatus.modified.some(f => f === relativePath || f.startsWith(relativePath + '/'))) {
+          return 'modified';
+        }
+        if (syncStatus.deleted.some(f => f === relativePath || f.startsWith(relativePath + '/'))) {
+          return 'deleted';
+        }
+        return 'synced';
+      };
 
       // Collect per-agent resources
       interface AgentResourceDisplay {
         agentId: AgentId;
         agentName: string;
         version: string | null;
-        commands: Array<{ name: string; path: string }>;
-        skills: Array<{ name: string; path: string; ruleCount?: number }>;
-        mcp: Array<{ name: string }>;
-        memory: Array<{ name: string; path: string }>;
-        hooks: Array<{ name: string; path: string }>;
+        commands: ResourceWithSync[];
+        skills: ResourceWithSync[];
+        mcp: ResourceWithSync[];
+        memory: ResourceWithSync[];
+        hooks: ResourceWithSync[];
       }
 
       const perAgentResources: AgentResourceDisplay[] = [];
@@ -74,20 +131,38 @@ export function registerStatusCommand(program: Command): void {
           agentId,
           agentName: AGENTS[agentId].name,
           version,
-          commands: resources.commands,
-          skills: resources.skills,
-          mcp: resources.mcp,
-          memory: resources.memory,
-          hooks: resources.hooks,
+          commands: resources.commands.map(r => ({
+            ...r,
+            syncState: getSyncState(r.name, 'commands', commandsSync),
+          })),
+          skills: resources.skills.map(r => ({
+            ...r,
+            syncState: getSyncState(r.name, 'skills', skillsSync),
+          })),
+          mcp: resources.mcp.map(r => ({ name: r.name })),
+          memory: resources.memory.map(r => ({
+            ...r,
+            syncState: getSyncState(r.name, 'memory', memorySync),
+          })),
+          hooks: resources.hooks.map(r => ({
+            ...r,
+            syncState: getSyncState(r.name, 'hooks', hooksSync),
+          })),
         });
       }
 
       spinner.stop();
 
+      // Show legend if git repo exists
+      if (hasGitRepo) {
+        console.log(chalk.gray('Legend:'), chalk.green('Synced'), chalk.blue('New'), chalk.yellow('Modified'), chalk.red('Deleted'));
+        console.log();
+      }
+
       // Render helper for per-agent resources
       function renderPerAgentSection(
         title: string,
-        getResources: (data: AgentResourceDisplay) => Array<{ name: string; path?: string; ruleCount?: number }>
+        getResources: (data: AgentResourceDisplay) => ResourceWithSync[]
       ): void {
         console.log(chalk.bold(`\n${title}\n`));
 
@@ -101,7 +176,14 @@ export function registerStatusCommand(program: Command): void {
           console.log(`  ${chalk.bold(data.agentName)}${chalk.gray(versionStr)}:`);
 
           for (const r of resources) {
-            let display = chalk.cyan(r.name);
+            // Color based on sync state
+            let nameColor = chalk.cyan;
+            if (r.syncState === 'synced') nameColor = chalk.green;
+            else if (r.syncState === 'new') nameColor = chalk.blue;
+            else if (r.syncState === 'modified') nameColor = chalk.yellow;
+            else if (r.syncState === 'deleted') nameColor = chalk.red;
+
+            let display = nameColor(r.name);
             if (r.ruleCount !== undefined) display += chalk.gray(` (${r.ruleCount} rules)`);
             const pathStr = r.path ? chalk.gray(formatPath(r.path, cwd)) : '';
             console.log(`    ${display.padEnd(24)} ${pathStr}`);

@@ -337,3 +337,192 @@ export async function hasUncommittedChanges(repoPath: string): Promise<boolean> 
     return false;
   }
 }
+
+/**
+ * Check if a directory is a git repository.
+ */
+export function isGitRepo(dir: string): boolean {
+  return fs.existsSync(path.join(dir, '.git'));
+}
+
+/**
+ * Initialize a git repo in an existing directory.
+ */
+export async function initRepo(dir: string): Promise<void> {
+  const git = simpleGit(dir);
+  await git.init();
+}
+
+/**
+ * Clone a repo into an existing directory (for initializing ~/.agents/).
+ * This clones into a temp dir and moves .git + tracked files.
+ */
+export async function cloneIntoExisting(
+  source: string,
+  targetDir: string
+): Promise<{ success: boolean; commit: string; error?: string }> {
+  const parsed = parseSource(source);
+  if (parsed.type === 'local') {
+    return { success: false, commit: '', error: 'Cannot clone local source' };
+  }
+
+  const git = simpleGit();
+  const tempDir = path.join(targetDir, '.git-clone-temp');
+
+  try {
+    // Clone to temp directory
+    fs.mkdirSync(tempDir, { recursive: true });
+    await git.clone(parsed.url, tempDir);
+
+    const repoGit = simpleGit(tempDir);
+    if (parsed.ref) {
+      await repoGit.checkout(parsed.ref);
+    }
+
+    // Move .git directory
+    const gitDir = path.join(tempDir, '.git');
+    const targetGitDir = path.join(targetDir, '.git');
+    if (fs.existsSync(targetGitDir)) {
+      fs.rmSync(targetGitDir, { recursive: true });
+    }
+    fs.renameSync(gitDir, targetGitDir);
+
+    // Copy tracked files (but don't overwrite existing or local-only dirs)
+    const localOnlyDirs = new Set([
+      'versions', 'shims', 'repos', 'runs', 'jobs',
+      'drives', 'packages', 'swarm', 'agents',
+    ]);
+    const files = fs.readdirSync(tempDir);
+    for (const file of files) {
+      if (file === '.git') continue;
+      // Never copy local-only directories even if they exist in remote
+      if (localOnlyDirs.has(file)) continue;
+      const src = path.join(tempDir, file);
+      const dst = path.join(targetDir, file);
+      // Only copy if target doesn't exist
+      if (!fs.existsSync(dst)) {
+        const stat = fs.statSync(src);
+        if (stat.isDirectory()) {
+          fs.cpSync(src, dst, { recursive: true });
+        } else {
+          fs.copyFileSync(src, dst);
+        }
+      }
+    }
+
+    // Clean up temp
+    fs.rmSync(tempDir, { recursive: true });
+
+    // Get commit
+    const targetGit = simpleGit(targetDir);
+    const log = await targetGit.log({ maxCount: 1 });
+
+    return {
+      success: true,
+      commit: log.latest?.hash.slice(0, 8) || 'unknown',
+    };
+  } catch (err) {
+    // Clean up temp on error
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true });
+    }
+    return { success: false, commit: '', error: (err as Error).message };
+  }
+}
+
+/**
+ * Pull changes in an existing repo.
+ */
+export async function pullRepo(dir: string): Promise<{ success: boolean; commit: string; error?: string }> {
+  try {
+    const git = simpleGit(dir);
+    await git.fetch();
+    await git.pull();
+    const log = await git.log({ maxCount: 1 });
+    return {
+      success: true,
+      commit: log.latest?.hash.slice(0, 8) || 'unknown',
+    };
+  } catch (err) {
+    return { success: false, commit: '', error: (err as Error).message };
+  }
+}
+
+/**
+ * Get git status for sync display.
+ * Returns files categorized by their status relative to HEAD.
+ */
+export interface GitSyncStatus {
+  synced: string[];      // Tracked and unchanged
+  modified: string[];    // Modified but not staged
+  new: string[];         // Untracked files
+  staged: string[];      // Staged for commit
+  deleted: string[];     // Deleted files
+}
+
+export async function getGitSyncStatus(dir: string, subdir?: string): Promise<GitSyncStatus | null> {
+  if (!isGitRepo(dir)) {
+    return null;
+  }
+
+  try {
+    const git = simpleGit(dir);
+    const status = await git.status();
+
+    const result: GitSyncStatus = {
+      synced: [],
+      modified: [],
+      new: [],
+      staged: [],
+      deleted: [],
+    };
+
+    // Filter to subdir if specified
+    const filterPath = (file: string) => {
+      if (!subdir) return true;
+      return file.startsWith(subdir + '/') || file === subdir;
+    };
+
+    // Working tree changes (not staged)
+    for (const file of status.modified.filter(filterPath)) {
+      result.modified.push(file);
+    }
+    for (const file of status.not_added.filter(filterPath)) {
+      result.new.push(file);
+    }
+    for (const file of status.deleted.filter(filterPath)) {
+      result.deleted.push(file);
+    }
+
+    // Staged changes (in index, ready to commit)
+    for (const file of status.created.filter(filterPath)) {
+      result.staged.push(file);
+    }
+    for (const file of status.staged.filter(filterPath)) {
+      if (!result.staged.includes(file)) {
+        result.staged.push(file);
+      }
+    }
+
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get list of files tracked by git in a directory.
+ */
+export async function getTrackedFiles(dir: string, subdir?: string): Promise<string[]> {
+  if (!isGitRepo(dir)) {
+    return [];
+  }
+
+  try {
+    const git = simpleGit(dir);
+    const result = await git.raw(['ls-files', subdir || '.']);
+    return result.split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+}

@@ -292,7 +292,7 @@ export function registerCommandsCommands(program: Command): void {
       const cliStates = await getAllCliStates();
       let pushed = 0;
       for (const agentId of agents) {
-        if (!cliStates[agentId]?.installed && agentId !== 'cursor') continue;
+        if (!cliStates[agentId]?.installed && listInstalledVersions(agentId).length === 0) continue;
 
         const result = promoteCommandToUser(agentId, name, cwd);
         if (result.success) {
