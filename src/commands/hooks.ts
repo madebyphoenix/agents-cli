@@ -92,47 +92,98 @@ export function registerHooksCommands(program: Command): void {
     });
 
   hooksCmd
-    .command('add <source>')
+    .command('add [source]')
     .description('Install hooks from a repo or local path')
     .option('-a, --agents <list>', 'Comma-separated agents to install to')
     .option('-y, --yes', 'Skip prompts and use defaults')
-    .action(async (source: string, options) => {
-      const spinner = ora('Fetching hooks...').start();
-
+    .action(async (source: string | undefined, options) => {
       try {
-        // Detect if source is a git repo (gh:, git:, ssh:, https://, http://)
-        const isGitRepo = source.startsWith('gh:') || source.startsWith('git:') ||
-                          source.startsWith('ssh:') || source.startsWith('https://') ||
-                          source.startsWith('http://');
+        let hooks: string[];
 
-        let localPath: string;
-        if (isGitRepo) {
-          const result = await cloneRepo(source);
-          localPath = result.localPath;
-          spinner.succeed('Repository cloned');
-        } else {
-          // It's a local path - expand ~ to home directory
-          localPath = source.startsWith('~')
-            ? path.join(os.homedir(), source.slice(1))
-            : path.resolve(source);
-
-          if (!fs.existsSync(localPath)) {
-            spinner.fail(`Path not found: ${localPath}`);
+        if (!source) {
+          // Interactive mode: pick from central storage
+          const centralHooks = listCentralHooks();
+          if (centralHooks.length === 0) {
+            console.log(chalk.yellow('No hooks in ~/.agents/hooks/'));
+            console.log(chalk.gray('\nTo add hooks from a repo:'));
+            console.log(chalk.cyan('  agents hooks add gh:user/repo'));
             return;
           }
-          spinner.succeed('Using local path');
-        }
 
-        const hooks = discoverHooksFromRepo(localPath);
-        console.log(chalk.bold(`\nFound ${hooks.length} hook(s):`));
+          const choices = centralHooks.map((hook) => ({
+            value: hook.name,
+            name: hook.name,
+          }));
 
-        if (hooks.length === 0) {
-          console.log(chalk.yellow('No hooks found'));
-          return;
-        }
+          const selected = await checkbox({
+            message: 'Select hooks to install',
+            choices: [
+              { value: '__all__', name: chalk.bold('Select All') },
+              ...choices,
+            ],
+          });
 
-        for (const name of hooks) {
-          console.log(`  ${chalk.cyan(name)}`);
+          if (selected.length === 0) {
+            console.log(chalk.gray('No hooks selected.'));
+            return;
+          }
+
+          hooks = selected.includes('__all__')
+            ? centralHooks.map((h) => h.name)
+            : selected.filter((s) => s !== '__all__');
+        } else {
+          // Source provided: fetch from repo or local path
+          const spinner = ora('Fetching hooks...').start();
+
+          const isGitRepo = source.startsWith('gh:') || source.startsWith('git:') ||
+                            source.startsWith('ssh:') || source.startsWith('https://') ||
+                            source.startsWith('http://');
+
+          let localPath: string;
+          if (isGitRepo) {
+            const result = await cloneRepo(source);
+            localPath = result.localPath;
+            spinner.succeed('Repository cloned');
+          } else {
+            localPath = source.startsWith('~')
+              ? path.join(os.homedir(), source.slice(1))
+              : path.resolve(source);
+
+            if (!fs.existsSync(localPath)) {
+              spinner.fail(`Path not found: ${localPath}`);
+              return;
+            }
+            spinner.succeed('Using local path');
+          }
+
+          hooks = discoverHooksFromRepo(localPath);
+          console.log(chalk.bold(`\nFound ${hooks.length} hook(s):`));
+
+          if (hooks.length === 0) {
+            console.log(chalk.yellow('No hooks found'));
+            return;
+          }
+
+          for (const name of hooks) {
+            console.log(`  ${chalk.cyan(name)}`);
+          }
+
+          // Install to central storage first
+          const installSpinner = ora('Installing hooks to central storage...').start();
+          const centralResult = await installHooksCentrally(localPath);
+
+          if (centralResult.installed.length > 0) {
+            installSpinner.succeed(`Installed ${centralResult.installed.length} hooks to ~/.agents/hooks/`);
+          } else {
+            installSpinner.info('No hooks to install');
+          }
+
+          if (centralResult.errors.length > 0) {
+            console.log(chalk.red('\nErrors:'));
+            for (const error of centralResult.errors) {
+              console.log(chalk.red(`  ${error}`));
+            }
+          }
         }
 
         // Get agent and version selection
@@ -162,23 +213,6 @@ export function registerHooksCommands(program: Command): void {
           return;
         }
 
-        // Install hooks to central location
-        const installSpinner = ora('Installing hooks to central storage...').start();
-        const centralResult = await installHooksCentrally(localPath);
-
-        if (centralResult.installed.length > 0) {
-          installSpinner.succeed(`Installed ${centralResult.installed.length} hooks to ~/.agents/hooks/`);
-        } else {
-          installSpinner.info('No hooks to install');
-        }
-
-        if (centralResult.errors.length > 0) {
-          console.log(chalk.red('\nErrors:'));
-          for (const error of centralResult.errors) {
-            console.log(chalk.red(`  ${error}`));
-          }
-        }
-
         // Sync to selected versions
         const syncSpinner = ora('Syncing to agent versions...').start();
         let synced = 0;
@@ -203,7 +237,7 @@ export function registerHooksCommands(program: Command): void {
           console.log(chalk.gray('\nCancelled'));
           return;
         }
-        spinner.fail('Failed to add hooks');
+        console.error(chalk.red('Failed to add hooks'));
         console.error(chalk.red((err as Error).message));
         process.exit(1);
       }

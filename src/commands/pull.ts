@@ -229,8 +229,8 @@ export function registerPullCommand(program: Command): void {
           if (!cliStates[agentId]?.installed && listInstalledVersions(agentId).length === 0) continue;
 
           const versions = listInstalledVersions(agentId);
-          const defaultVer = getGlobalDefault(agentId);
-          const targetVersions = defaultVer ? [defaultVer] : versions.slice(-1);
+          // Sync to ALL installed versions, not just default
+          const targetVersions = versions;
 
           for (const ver of targetVersions) {
             syncResourcesToVersion(agentId, ver);

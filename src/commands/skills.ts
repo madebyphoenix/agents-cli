@@ -155,73 +155,129 @@ export function registerSkillsCommands(program: Command): void {
     });
 
   skillsCmd
-    .command('add <source>')
+    .command('add [source]')
     .description('Install skills from a repo or local path')
     .option('-a, --agents <list>', 'Comma-separated agents to install to')
     .option('-y, --yes', 'Skip prompts and use defaults')
-    .action(async (source: string, options) => {
-      const spinner = ora('Fetching skills...').start();
-
+    .action(async (source: string | undefined, options) => {
       try {
-        // Detect if source is a git repo (gh:, git:, ssh:, https://, http://)
-        const isGitRepo = source.startsWith('gh:') || source.startsWith('git:') ||
-                          source.startsWith('ssh:') || source.startsWith('https://') ||
-                          source.startsWith('http://');
+        let skills: { name: string; path?: string; metadata: { description?: string }; ruleCount?: number }[];
 
-        let localPath: string;
-        let skills: ReturnType<typeof discoverSkillsFromRepo>;
-
-        if (isGitRepo) {
-          const result = await cloneRepo(source);
-          localPath = result.localPath;
-          skills = discoverSkillsFromRepo(localPath);
-          spinner.succeed('Repository cloned');
-        } else {
-          // It's a local path - expand ~ to home directory
-          localPath = source.startsWith('~')
-            ? path.join(os.homedir(), source.slice(1))
-            : path.resolve(source);
-
-          if (!fs.existsSync(localPath)) {
-            spinner.fail(`Path not found: ${localPath}`);
+        if (!source) {
+          // Interactive mode: pick from central storage
+          const installedSkills = listInstalledSkills();
+          if (installedSkills.size === 0) {
+            console.log(chalk.yellow('No skills in ~/.agents/skills/'));
+            console.log(chalk.gray('\nTo add skills from a repo:'));
+            console.log(chalk.cyan('  agents skills add gh:user/repo'));
             return;
           }
 
-          // Check if this is a direct skill directory (contains SKILL.md)
-          const skillMdPath = path.join(localPath, 'SKILL.md');
-          if (fs.existsSync(skillMdPath)) {
-            // Direct skill directory - create a single-item skills array
-            const skillName = path.basename(localPath);
-            const { parseSkillMetadata, validateSkillMetadata, countSkillRules } = await import('../lib/skills.js');
-            const metadata = parseSkillMetadata(localPath);
-            const validation = validateSkillMetadata(metadata, skillName);
-            skills = [{
-              name: skillName,
-              path: localPath,
-              metadata: metadata || { name: skillName, description: '' },
-              ruleCount: countSkillRules(localPath),
-              validation,
-            }];
-            spinner.succeed('Using skill directory');
+          const choices = Array.from(installedSkills.entries()).map(([name, skill]) => ({
+            value: name,
+            name: skill.metadata.description
+              ? `${name}  ${chalk.gray(skill.metadata.description.slice(0, 50))}`
+              : name,
+          }));
+
+          const selected = await checkbox({
+            message: 'Select skills to install',
+            choices: [
+              { value: '__all__', name: chalk.bold('Select All') },
+              ...choices,
+            ],
+          });
+
+          if (selected.length === 0) {
+            console.log(chalk.gray('No skills selected.'));
+            return;
+          }
+
+          const selectedNames = selected.includes('__all__')
+            ? Array.from(installedSkills.keys())
+            : selected.filter((s) => s !== '__all__');
+
+          skills = selectedNames.map((name) => {
+            const skill = installedSkills.get(name);
+            return { name, metadata: skill?.metadata || {} };
+          });
+        } else {
+          // Source provided: fetch from repo or local path
+          const spinner = ora('Fetching skills...').start();
+
+          const isGitRepo = source.startsWith('gh:') || source.startsWith('git:') ||
+                            source.startsWith('ssh:') || source.startsWith('https://') ||
+                            source.startsWith('http://');
+
+          let localPath: string;
+          let discoveredSkills: ReturnType<typeof discoverSkillsFromRepo>;
+
+          if (isGitRepo) {
+            const result = await cloneRepo(source);
+            localPath = result.localPath;
+            discoveredSkills = discoverSkillsFromRepo(localPath);
+            spinner.succeed('Repository cloned');
           } else {
-            // Directory containing skills - discover them
-            skills = discoverSkillsFromRepo(localPath);
-            spinner.succeed('Using local path');
+            localPath = source.startsWith('~')
+              ? path.join(os.homedir(), source.slice(1))
+              : path.resolve(source);
+
+            if (!fs.existsSync(localPath)) {
+              spinner.fail(`Path not found: ${localPath}`);
+              return;
+            }
+
+            const skillMdPath = path.join(localPath, 'SKILL.md');
+            if (fs.existsSync(skillMdPath)) {
+              const skillName = path.basename(localPath);
+              const { parseSkillMetadata, validateSkillMetadata, countSkillRules } = await import('../lib/skills.js');
+              const metadata = parseSkillMetadata(localPath);
+              const validation = validateSkillMetadata(metadata, skillName);
+              discoveredSkills = [{
+                name: skillName,
+                path: localPath,
+                metadata: metadata || { name: skillName, description: '' },
+                ruleCount: countSkillRules(localPath),
+                validation,
+              }];
+              spinner.succeed('Using skill directory');
+            } else {
+              discoveredSkills = discoverSkillsFromRepo(localPath);
+              spinner.succeed('Using local path');
+            }
           }
-        }
 
-        console.log(chalk.bold(`\nFound ${skills.length} skill(s):`));
+          console.log(chalk.bold(`\nFound ${discoveredSkills.length} skill(s):`));
 
-        if (skills.length === 0) {
-          console.log(chalk.yellow('No skills found (looking for SKILL.md files)'));
-          return;
-        }
-
-        for (const skill of skills) {
-          console.log(`\n  ${chalk.cyan(skill.name)}: ${skill.metadata.description || 'no description'}`);
-          if (skill.ruleCount > 0) {
-            console.log(`    ${chalk.gray(`${skill.ruleCount} rules`)}`);
+          if (discoveredSkills.length === 0) {
+            console.log(chalk.yellow('No skills found (looking for SKILL.md files)'));
+            return;
           }
+
+          for (const skill of discoveredSkills) {
+            console.log(`\n  ${chalk.cyan(skill.name)}: ${skill.metadata.description || 'no description'}`);
+            if (skill.ruleCount > 0) {
+              console.log(`    ${chalk.gray(`${skill.ruleCount} rules`)}`);
+            }
+          }
+
+          // Install to central storage first
+          const installSpinner = ora('Installing skills to central storage...').start();
+          let installed = 0;
+
+          for (const skill of discoveredSkills) {
+            const result = installSkillCentrally(skill.path, skill.name);
+            if (result.success) {
+              installed++;
+            } else {
+              installSpinner.stop();
+              console.log(chalk.red(`\n  Failed to install ${skill.name}: ${result.error}`));
+              installSpinner.start();
+            }
+          }
+
+          installSpinner.succeed(`Installed ${installed} skills to ~/.agents/skills/`);
+          skills = discoveredSkills;
         }
 
         // Get agent and version selection
@@ -229,7 +285,6 @@ export function registerSkillsCommands(program: Command): void {
         let versionSelections: Map<AgentId, string[]>;
 
         if (options.agents) {
-          // Use specified agents with default versions
           selectedAgents = options.agents.split(',') as AgentId[];
           versionSelections = new Map();
           for (const agentId of selectedAgents) {
@@ -249,23 +304,6 @@ export function registerSkillsCommands(program: Command): void {
           console.log(chalk.yellow('\nNo agents selected.'));
           return;
         }
-
-        // Install skills to central location
-        const installSpinner = ora('Installing skills to central storage...').start();
-        let installed = 0;
-
-        for (const skill of skills) {
-          const result = installSkillCentrally(skill.path, skill.name);
-          if (result.success) {
-            installed++;
-          } else {
-            installSpinner.stop();
-            console.log(chalk.red(`\n  Failed to install ${skill.name}: ${result.error}`));
-            installSpinner.start();
-          }
-        }
-
-        installSpinner.succeed(`Installed ${installed} skills to ~/.agents/skills/`);
 
         // Sync to selected versions
         const syncSpinner = ora('Syncing to agent versions...').start();
@@ -292,7 +330,7 @@ export function registerSkillsCommands(program: Command): void {
           console.log(chalk.gray('\nCancelled'));
           return;
         }
-        spinner.fail('Failed to add skills');
+        console.error(chalk.red('Failed to add skills'));
         console.error(chalk.red((err as Error).message));
         process.exit(1);
       }

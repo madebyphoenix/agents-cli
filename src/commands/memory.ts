@@ -4,7 +4,7 @@ import ora from 'ora';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { select } from '@inquirer/prompts';
+import { select, checkbox } from '@inquirer/prompts';
 
 import {
   AGENTS,
@@ -22,6 +22,7 @@ import {
   promoteInstructionsToUser,
   instructionsExists,
   getInstructionsContent,
+  listCentralMemory,
 } from '../lib/memory.js';
 import {
   listInstalledVersions,
@@ -95,56 +96,102 @@ export function registerMemoryCommands(program: Command): void {
     });
 
   memoryCmd
-    .command('add <source>')
+    .command('add [source]')
     .description('Install memory files from a repo or local path')
     .option('-a, --agents <list>', 'Comma-separated agents to install to')
     .option('-y, --yes', 'Skip prompts and use defaults')
-    .action(async (source: string, options) => {
-      const spinner = ora('Fetching memory files...').start();
-
+    .action(async (source: string | undefined, options) => {
       try {
-        // Detect if source is a git repo (gh:, git:, ssh:, https://, http://)
-        const isGitRepo = source.startsWith('gh:') || source.startsWith('git:') ||
-                          source.startsWith('ssh:') || source.startsWith('https://') ||
-                          source.startsWith('http://');
+        let memoryNames: string[];
 
-        let localPath: string;
-        if (isGitRepo) {
-          const result = await cloneRepo(source);
-          localPath = result.localPath;
-          spinner.succeed('Repository cloned');
-        } else {
-          // It's a local path - expand ~ to home directory
-          localPath = source.startsWith('~')
-            ? path.join(os.homedir(), source.slice(1))
-            : path.resolve(source);
-
-          if (!fs.existsSync(localPath)) {
-            spinner.fail(`Path not found: ${localPath}`);
+        if (!source) {
+          // Interactive mode: pick from central storage
+          const centralMemory = listCentralMemory();
+          if (centralMemory.length === 0) {
+            console.log(chalk.yellow('No memory files in ~/.agents/memory/'));
+            console.log(chalk.gray('\nTo add memory files from a repo:'));
+            console.log(chalk.cyan('  agents memory add gh:user/repo'));
             return;
           }
-          spinner.succeed('Using local path');
-        }
 
-        // Discover memory files from repo
-        const agentInstructions = discoverInstructionsFromRepo(localPath);
-        const memoryFiles = discoverMemoryFilesFromRepo(localPath);
+          const choices = centralMemory.map((name) => ({
+            value: name,
+            name,
+          }));
 
-        const totalFiles = agentInstructions.length + memoryFiles.length;
-        console.log(chalk.bold(`\nFound ${totalFiles} memory file(s):`));
+          const selected = await checkbox({
+            message: 'Select memory files to install',
+            choices: [
+              { value: '__all__', name: chalk.bold('Select All') },
+              ...choices,
+            ],
+          });
 
-        if (totalFiles === 0) {
-          console.log(chalk.yellow('No memory files found'));
-          return;
-        }
+          if (selected.length === 0) {
+            console.log(chalk.gray('No memory files selected.'));
+            return;
+          }
 
-        // Show agent-specific instructions
-        for (const instr of agentInstructions) {
-          console.log(`  ${chalk.cyan(AGENTS[instr.agentId].instructionsFile)} (${AGENTS[instr.agentId].name})`);
-        }
-        // Show shared memory files
-        for (const file of memoryFiles) {
-          console.log(`  ${chalk.cyan(file)} (shared)`);
+          memoryNames = selected.includes('__all__')
+            ? centralMemory
+            : selected.filter((s) => s !== '__all__');
+        } else {
+          // Source provided: fetch from repo or local path
+          const spinner = ora('Fetching memory files...').start();
+
+          const isGitRepo = source.startsWith('gh:') || source.startsWith('git:') ||
+                            source.startsWith('ssh:') || source.startsWith('https://') ||
+                            source.startsWith('http://');
+
+          let localPath: string;
+          if (isGitRepo) {
+            const result = await cloneRepo(source);
+            localPath = result.localPath;
+            spinner.succeed('Repository cloned');
+          } else {
+            localPath = source.startsWith('~')
+              ? path.join(os.homedir(), source.slice(1))
+              : path.resolve(source);
+
+            if (!fs.existsSync(localPath)) {
+              spinner.fail(`Path not found: ${localPath}`);
+              return;
+            }
+            spinner.succeed('Using local path');
+          }
+
+          const agentInstructions = discoverInstructionsFromRepo(localPath);
+          const memoryFiles = discoverMemoryFilesFromRepo(localPath);
+
+          const totalFiles = agentInstructions.length + memoryFiles.length;
+          console.log(chalk.bold(`\nFound ${totalFiles} memory file(s):`));
+
+          if (totalFiles === 0) {
+            console.log(chalk.yellow('No memory files found'));
+            return;
+          }
+
+          for (const instr of agentInstructions) {
+            console.log(`  ${chalk.cyan(AGENTS[instr.agentId].instructionsFile)} (${AGENTS[instr.agentId].name})`);
+          }
+          for (const file of memoryFiles) {
+            console.log(`  ${chalk.cyan(file)} (shared)`);
+          }
+
+          // Install to central storage first
+          const installSpinner = ora('Installing memory files to central storage...').start();
+          const centralResult = installInstructionsCentrally(localPath);
+
+          if (centralResult.errors.length > 0) {
+            installSpinner.stop();
+            for (const error of centralResult.errors) {
+              console.log(chalk.yellow(`\n  Warning: ${error}`));
+            }
+            installSpinner.start();
+          }
+
+          installSpinner.succeed(`Installed ${centralResult.installed.length} memory files to ~/.agents/memory/`);
+          memoryNames = centralResult.installed.map((p) => path.basename(p));
         }
 
         // Get agent and version selection
@@ -172,27 +219,9 @@ export function registerMemoryCommands(program: Command): void {
           return;
         }
 
-        // Install memory files to central location
-        const installSpinner = ora('Installing memory files to central storage...').start();
-
-        // Use installInstructionsCentrally which handles both agent-specific and shared files
-        const centralResult = installInstructionsCentrally(localPath);
-        const installed = centralResult.installed.length;
-
-        if (centralResult.errors.length > 0) {
-          installSpinner.stop();
-          for (const error of centralResult.errors) {
-            console.log(chalk.yellow(`\n  Warning: ${error}`));
-          }
-          installSpinner.start();
-        }
-
-        installSpinner.succeed(`Installed ${installed} memory files to ~/.agents/memory/`);
-
         // Sync to selected versions
         const syncSpinner = ora('Syncing to agent versions...').start();
         let synced = 0;
-        const memoryNames = centralResult.installed.map((p) => path.basename(p));
 
         for (const [agentId, versions] of versionSelections) {
           for (const version of versions) {
@@ -214,7 +243,7 @@ export function registerMemoryCommands(program: Command): void {
           console.log(chalk.gray('\nCancelled'));
           return;
         }
-        spinner.fail('Failed to add memory files');
+        console.error(chalk.red('Failed to add memory files'));
         console.error(chalk.red((err as Error).message));
         process.exit(1);
       }

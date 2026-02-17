@@ -99,47 +99,117 @@ export function registerCommandsCommands(program: Command): void {
     });
 
   commandsCmd
-    .command('add <source>')
+    .command('add [source]')
     .description('Install commands from a repo or local path')
     .option('-a, --agents <list>', 'Comma-separated agents to install to')
     .option('-y, --yes', 'Skip prompts and use defaults')
-    .action(async (source: string, options) => {
-      const spinner = ora('Fetching commands...').start();
-
+    .action(async (source: string | undefined, options) => {
       try {
-        // Detect if source is a git repo (gh:, git:, ssh:, https://, http://)
-        const isGitRepo = source.startsWith('gh:') || source.startsWith('git:') ||
-                          source.startsWith('ssh:') || source.startsWith('https://') ||
-                          source.startsWith('http://');
+        let commands: { name: string; description: string; sourcePath?: string }[];
+        let fromCentral = false;
 
-        let localPath: string;
-        if (isGitRepo) {
-          const result = await cloneRepo(source);
-          localPath = result.localPath;
-          spinner.succeed('Repository cloned');
-        } else {
-          // It's a local path - expand ~ to home directory
-          localPath = source.startsWith('~')
-            ? path.join(os.homedir(), source.slice(1))
-            : path.resolve(source);
-
-          if (!fs.existsSync(localPath)) {
-            spinner.fail(`Path not found: ${localPath}`);
+        if (!source) {
+          // Interactive mode: pick from central storage
+          const centralCommands = listCentralCommands();
+          if (centralCommands.length === 0) {
+            console.log(chalk.yellow('No commands in ~/.agents/commands/'));
+            console.log(chalk.gray('\nTo add commands from a repo:'));
+            console.log(chalk.cyan('  agents commands add gh:user/repo'));
             return;
           }
-          spinner.succeed('Using local path');
-        }
 
-        const commands = discoverCommands(localPath);
-        console.log(chalk.bold(`\nFound ${commands.length} command(s):`));
+          // Build choices with descriptions
+          const choices = centralCommands.map((name) => {
+            const cmdPath = path.join(os.homedir(), '.agents', 'commands', `${name}.md`);
+            let description = '';
+            if (fs.existsSync(cmdPath)) {
+              const content = fs.readFileSync(cmdPath, 'utf-8');
+              const match = content.match(/description:\s*(.+)/i) || content.match(/description\s*=\s*"([^"]+)"/);
+              if (match) description = match[1].trim();
+            }
+            return {
+              value: name,
+              name: description ? `${name}  ${chalk.gray(description.slice(0, 50))}` : name,
+            };
+          });
 
-        if (commands.length === 0) {
-          console.log(chalk.yellow('No commands found'));
-          return;
-        }
+          const selected = await checkbox({
+            message: 'Select commands to install',
+            choices: [
+              { value: '__all__', name: chalk.bold('Select All') },
+              ...choices,
+            ],
+          });
 
-        for (const command of commands) {
-          console.log(`\n  ${chalk.cyan(command.name)}: ${command.description}`);
+          if (selected.length === 0) {
+            console.log(chalk.gray('No commands selected.'));
+            return;
+          }
+
+          const selectedNames = selected.includes('__all__')
+            ? centralCommands
+            : selected.filter((s) => s !== '__all__');
+
+          commands = selectedNames.map((name) => ({ name, description: '' }));
+          fromCentral = true;
+        } else {
+          // Source provided: fetch from repo or local path
+          const spinner = ora('Fetching commands...').start();
+
+          const isGitRepo = source.startsWith('gh:') || source.startsWith('git:') ||
+                            source.startsWith('ssh:') || source.startsWith('https://') ||
+                            source.startsWith('http://');
+
+          let localPath: string;
+          if (isGitRepo) {
+            const result = await cloneRepo(source);
+            localPath = result.localPath;
+            spinner.succeed('Repository cloned');
+          } else {
+            localPath = source.startsWith('~')
+              ? path.join(os.homedir(), source.slice(1))
+              : path.resolve(source);
+
+            if (!fs.existsSync(localPath)) {
+              spinner.fail(`Path not found: ${localPath}`);
+              return;
+            }
+            spinner.succeed('Using local path');
+          }
+
+          const discovered = discoverCommands(localPath);
+          console.log(chalk.bold(`\nFound ${discovered.length} command(s):`));
+
+          if (discovered.length === 0) {
+            console.log(chalk.yellow('No commands found'));
+            return;
+          }
+
+          for (const command of discovered) {
+            console.log(`\n  ${chalk.cyan(command.name)}: ${command.description}`);
+          }
+
+          commands = discovered;
+
+          // Install to central storage first
+          const installSpinner = ora('Installing commands to central storage...').start();
+          let installed = 0;
+
+          for (const command of discovered) {
+            const sourcePath = resolveCommandSource(localPath, command.name);
+            if (sourcePath) {
+              const result = installCommandCentrally(sourcePath, command.name);
+              if (result.error) {
+                installSpinner.stop();
+                console.log(chalk.yellow(`\n  Warning: ${command.name}: ${result.error}`));
+                installSpinner.start();
+              } else {
+                installed++;
+              }
+            }
+          }
+
+          installSpinner.succeed(`Installed ${installed} commands to ~/.agents/commands/`);
         }
 
         // Get agent and version selection
@@ -167,27 +237,6 @@ export function registerCommandsCommands(program: Command): void {
           return;
         }
 
-        // Install commands to central location
-        const installSpinner = ora('Installing commands to central storage...').start();
-        let installed = 0;
-
-        for (const command of commands) {
-          // Find source path
-          const sourcePath = resolveCommandSource(localPath, command.name);
-          if (sourcePath) {
-            const result = installCommandCentrally(sourcePath, command.name);
-            if (result.error) {
-              installSpinner.stop();
-              console.log(chalk.yellow(`\n  Warning: ${command.name}: ${result.error}`));
-              installSpinner.start();
-            } else {
-              installed++;
-            }
-          }
-        }
-
-        installSpinner.succeed(`Installed ${installed} commands to ~/.agents/commands/`);
-
         // Sync to selected versions
         const syncSpinner = ora('Syncing to agent versions...').start();
         let synced = 0;
@@ -213,7 +262,7 @@ export function registerCommandsCommands(program: Command): void {
           console.log(chalk.gray('\nCancelled'));
           return;
         }
-        spinner.fail('Failed to add commands');
+        console.error(chalk.red('Failed to add commands'));
         console.error(chalk.red((err as Error).message));
         process.exit(1);
       }

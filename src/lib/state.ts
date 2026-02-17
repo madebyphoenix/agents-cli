@@ -150,12 +150,41 @@ meta.yaml
 `;
 
 /**
- * Ensure .gitignore exists in ~/.agents/ with correct content.
+ * Ensure .gitignore in ~/.agents/ contains all required patterns.
+ * Merges with existing content if file exists.
  */
 export function ensureGitignore(): void {
   const gitignorePath = path.join(AGENTS_DIR, '.gitignore');
-  if (!fs.existsSync(gitignorePath)) {
-    fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT, 'utf-8');
+  const requiredPatterns = GITIGNORE_CONTENT.split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'));
+
+  let existingPatterns: Set<string> = new Set();
+  let existingContent = '';
+
+  if (fs.existsSync(gitignorePath)) {
+    existingContent = fs.readFileSync(gitignorePath, 'utf-8');
+    existingPatterns = new Set(
+      existingContent.split('\n')
+        .map(line => line.trim())
+        .filter(line => line && !line.startsWith('#'))
+    );
+  }
+
+  // Find missing patterns
+  const missingPatterns = requiredPatterns.filter(p => !existingPatterns.has(p));
+
+  if (missingPatterns.length > 0) {
+    // Append missing patterns
+    const appendContent = (existingContent && !existingContent.endsWith('\n') ? '\n' : '') +
+      (existingContent ? '\n# Auto-added by agents-cli\n' : GITIGNORE_CONTENT.split('\n').filter(l => l.startsWith('#')).join('\n') + '\n') +
+      missingPatterns.join('\n') + '\n';
+
+    if (existingContent) {
+      fs.appendFileSync(gitignorePath, appendContent, 'utf-8');
+    } else {
+      fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT, 'utf-8');
+    }
   }
 }
 

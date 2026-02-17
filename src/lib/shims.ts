@@ -269,13 +269,14 @@ function copyDirContents(src: string, dest: string): void {
       copyDirContents(srcPath, destPath);
     } else if (entry.isSymbolicLink()) {
       const linkTarget = fs.readlinkSync(srcPath);
-      if (!fs.existsSync(destPath)) {
-        fs.symlinkSync(linkTarget, destPath);
+      // Always overwrite - source takes precedence
+      if (fs.existsSync(destPath)) {
+        fs.unlinkSync(destPath);
       }
+      fs.symlinkSync(linkTarget, destPath);
     } else {
-      if (!fs.existsSync(destPath)) {
-        fs.copyFileSync(srcPath, destPath);
-      }
+      // Always overwrite - source (user's current config) takes precedence
+      fs.copyFileSync(srcPath, destPath);
     }
   }
 }

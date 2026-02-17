@@ -64,6 +64,7 @@ Resources
   mcp                             Manage MCP servers
   skills                          Manage skills (SKILL.md + rules/)
   hooks                           Manage agent hooks
+  permissions                     Manage agent permissions
 
 Packages
   search <query>                  Search MCP servers

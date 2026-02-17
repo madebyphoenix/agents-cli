@@ -135,14 +135,85 @@ export function registerPermissionsCommands(program: Command): void {
     });
 
   permissionsCmd
-    .command('add <source>')
+    .command('add [source]')
     .description('Install permissions from a repo, YAML file, or agent config file')
     .option('-a, --agents <list>', 'Comma-separated agents to apply to')
     .option('-y, --yes', 'Skip prompts and use defaults')
-    .action(async (source: string, options) => {
-      const spinner = ora('Fetching permissions...').start();
-
+    .action(async (source: string | undefined, options) => {
       try {
+        // Interactive mode: pick from central storage
+        if (!source) {
+          const installedSets = listInstalledPermissions();
+          if (installedSets.length === 0) {
+            console.log(chalk.yellow('No permission sets in ~/.agents/permissions/'));
+            console.log(chalk.gray('\nTo add permissions from a file or repo:'));
+            console.log(chalk.cyan('  agents permissions add ~/.claude/settings.json'));
+            console.log(chalk.cyan('  agents permissions add gh:user/repo'));
+            return;
+          }
+
+          const choices = installedSets.map((installed) => ({
+            value: installed.name,
+            name: installed.set.description
+              ? `${installed.name}  ${chalk.gray(installed.set.description.slice(0, 40))}`
+              : `${installed.name}  ${chalk.gray(`${installed.set.allow.length} allow, ${installed.set.deny?.length || 0} deny`)}`,
+          }));
+
+          const selected = await checkbox({
+            message: 'Select permission sets to apply',
+            choices: [
+              { value: '__all__', name: chalk.bold('Select All') },
+              ...choices,
+            ],
+          });
+
+          if (selected.length === 0) {
+            console.log(chalk.gray('No permission sets selected.'));
+            return;
+          }
+
+          const selectedNames = selected.includes('__all__')
+            ? installedSets.map((s) => s.name)
+            : selected.filter((s) => s !== '__all__');
+
+          // Get agent and version selection
+          const result = await promptAgentVersionSelection(
+            PERMISSIONS_CAPABLE_AGENTS,
+            { skipPrompts: options.yes }
+          );
+
+          if (result.selectedAgents.length === 0) {
+            console.log(chalk.yellow('\nNo agents selected.'));
+            return;
+          }
+
+          // Apply selected permission sets
+          let applied = 0;
+          for (const setName of selectedNames) {
+            const installed = installedSets.find((s) => s.name === setName);
+            if (!installed) continue;
+
+            for (const [agentId, versions] of result.versionSelections) {
+              for (const version of versions) {
+                const versionHome = getVersionHomePath(agentId, version);
+                const applyResult = applyPermissionsToVersion(agentId, installed.set, versionHome, true);
+                if (applyResult.success) {
+                  console.log(chalk.green(`  Applied ${setName} to ${AGENTS[agentId].name}@${version}`));
+                  recordVersionResources(agentId, version, 'permissions', [setName]);
+                  applied++;
+                } else {
+                  console.log(chalk.red(`  Failed: ${AGENTS[agentId].name}@${version}: ${applyResult.error}`));
+                }
+              }
+            }
+          }
+
+          console.log(chalk.green(`\nApplied permissions to ${applied} version(s).`));
+          return;
+        }
+
+        const spinner = ora('Fetching permissions...').start();
+
         const isGitRepo = source.startsWith('gh:') || source.startsWith('git:') ||
                           source.startsWith('ssh:') || source.startsWith('https://') ||
                           source.startsWith('http://');
@@ -408,11 +479,10 @@ export function registerPermissionsCommands(program: Command): void {
         }
       } catch (err) {
         if (isPromptCancelled(err)) {
-          spinner.stop();
           console.log(chalk.gray('\nCancelled.'));
           return;
         }
-        spinner.fail(`Error: ${(err as Error).message}`);
+        console.error(chalk.red(`Error: ${(err as Error).message}`));
       }
     });
 

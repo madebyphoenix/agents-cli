@@ -1,5 +1,41 @@
 # agents-cli Development Guide
 
+## Purpose
+
+agents-cli manages AI coding agent CLIs (Claude, Codex, Gemini, Cursor, OpenCode) with two core goals:
+
+1. **Version Management** - Install and switch between multiple versions of agent CLIs, similar to `nvm` for Node.js
+2. **Config Backup & Sync** - Back up agent configuration (commands, skills, hooks, memory) to a git repo and restore across machines
+
+### The Source of Truth
+
+`~/.agents/` IS the user's git repo. It contains:
+- `commands/` - Slash commands (git-tracked)
+- `skills/` - Agent skills (git-tracked)
+- `hooks/` - Event hooks (git-tracked)
+- `memory/` - Memory/instruction files (git-tracked)
+- `versions/` - Installed CLI versions (local-only, .gitignore'd)
+- `shims/` - Version switching scripts (local-only, .gitignore'd)
+
+### Push/Pull Flow
+
+**`agents pull <source>`** - Restore config FROM remote repo
+- Clones/pulls the repo directly into `~/.agents/`
+- Remote repo is source of truth - overwrites local
+- Then syncs resources to installed version homes via symlinks
+
+**`agents push`** - Backup config TO remote repo
+- Commits and pushes `~/.agents/` to remote
+- Local config is source of truth - overwrites remote
+
+### Version Isolation
+
+Each installed version has isolated config at `~/.agents/versions/{agent}/{version}/home/.{agent}/`. Resources from `~/.agents/` are symlinked into version homes.
+
+The user's `~/.{agent}/` directory is a symlink to the active version's config dir. When running `agents use {agent}@{version}`:
+- If `~/.{agent}/` is a real directory, migrate its contents to the version home (user's current config takes precedence)
+- Then replace with symlink to version home
+
 ## Architecture
 
 ```
