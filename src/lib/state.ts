@@ -143,7 +143,8 @@ swarm/
 agents/
 
 # Local state files
-*.json
+cache.json
+config.json
 *.log
 *.pid
 meta.yaml

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { confirm } from '@inquirer/prompts';
 import type { AgentId } from './types.js';
 import { getShimsDir, getVersionsDir, ensureAgentsDir } from './state.js';
 export { getShimsDir };
@@ -182,10 +183,10 @@ function getVersionConfigPath(agent: AgentId, version: string): string {
  *
  * Returns: { success: boolean, migrated?: boolean, error?: string }
  */
-export function switchConfigSymlink(
+export async function switchConfigSymlink(
   agent: AgentId,
   version: string
-): { success: boolean; migrated?: boolean; error?: string } {
+): Promise<{ success: boolean; migrated?: boolean; error?: string }> {
   const configPath = getAgentConfigPath(agent);
   const versionConfigPath = getVersionConfigPath(agent, version);
 
@@ -208,8 +209,8 @@ export function switchConfigSymlink(
       const tempPath = `${configPath}.backup.${Date.now()}`;
       fs.renameSync(configPath, tempPath);
 
-      // Copy contents from backup to version config
-      copyDirContents(tempPath, versionConfigPath);
+      // Copy contents from backup to version config (with prompts for conflicts)
+      await copyDirContents(tempPath, versionConfigPath);
 
       // Create symlink
       fs.symlinkSync(versionConfigPath, configPath);
@@ -253,9 +254,10 @@ export function getConfigSymlinkVersion(agent: AgentId): string | null {
 }
 
 /**
- * Copy directory contents (non-recursive for top level, recursive for subdirs).
+ * Copy directory contents with conflict prompts.
+ * When a file exists in dest, backs it up and asks user whether to overwrite.
  */
-function copyDirContents(src: string, dest: string): void {
+async function copyDirContents(src: string, dest: string): Promise<void> {
   if (!fs.existsSync(dest)) {
     fs.mkdirSync(dest, { recursive: true });
   }
@@ -266,16 +268,29 @@ function copyDirContents(src: string, dest: string): void {
     const destPath = path.join(dest, entry.name);
 
     if (entry.isDirectory()) {
-      copyDirContents(srcPath, destPath);
+      await copyDirContents(srcPath, destPath);
     } else if (entry.isSymbolicLink()) {
       const linkTarget = fs.readlinkSync(srcPath);
-      // Always overwrite - source takes precedence
       if (fs.existsSync(destPath)) {
         fs.unlinkSync(destPath);
       }
       fs.symlinkSync(linkTarget, destPath);
     } else {
-      // Always overwrite - source (user's current config) takes precedence
+      // File - check for conflict
+      if (fs.existsSync(destPath)) {
+        // Back up dest file
+        fs.copyFileSync(destPath, `${destPath}.backup`);
+
+        // Ask user
+        const overwrite = await confirm({
+          message: `${entry.name} exists in version home. Overwrite with your current config?`,
+          default: true,
+        });
+
+        if (!overwrite) {
+          continue; // Keep dest, skip copying src
+        }
+      }
       fs.copyFileSync(srcPath, destPath);
     }
   }

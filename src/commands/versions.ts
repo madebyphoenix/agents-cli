@@ -391,7 +391,7 @@ export function registerVersionsCommands(program: Command): void {
           setGlobalDefault(agentId, finalVersion);
 
           // Switch config symlink (e.g., ~/.claude -> version's config)
-          const symlinkResult = switchConfigSymlink(agentId, finalVersion);
+          const symlinkResult = await switchConfigSymlink(agentId, finalVersion);
           if (!symlinkResult.success) {
             console.log(chalk.yellow(`Warning: Could not update config symlink: ${symlinkResult.error}`));
           } else if (symlinkResult.migrated) {
