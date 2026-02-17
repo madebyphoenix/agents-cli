@@ -355,7 +355,7 @@ export async function initRepo(dir: string): Promise<void> {
 
 /**
  * Clone a repo into an existing directory (for initializing ~/.agents/).
- * This clones into a temp dir and moves .git + tracked files.
+ * This clones into a temp dir, moves .git, then checks out tracked files.
  */
 export async function cloneIntoExisting(
   source: string,
@@ -379,7 +379,7 @@ export async function cloneIntoExisting(
       await repoGit.checkout(parsed.ref);
     }
 
-    // Move .git directory
+    // Move .git directory to target
     const gitDir = path.join(tempDir, '.git');
     const targetGitDir = path.join(targetDir, '.git');
     if (fs.existsSync(targetGitDir)) {
@@ -387,34 +387,13 @@ export async function cloneIntoExisting(
     }
     fs.renameSync(gitDir, targetGitDir);
 
-    // Copy tracked files (but don't overwrite existing or local-only dirs)
-    const localOnlyDirs = new Set([
-      'versions', 'shims', 'repos', 'runs', 'jobs',
-      'drives', 'packages', 'swarm', 'agents',
-    ]);
-    const files = fs.readdirSync(tempDir);
-    for (const file of files) {
-      if (file === '.git') continue;
-      // Never copy local-only directories even if they exist in remote
-      if (localOnlyDirs.has(file)) continue;
-      const src = path.join(tempDir, file);
-      const dst = path.join(targetDir, file);
-      // Only copy if target doesn't exist
-      if (!fs.existsSync(dst)) {
-        const stat = fs.statSync(src);
-        if (stat.isDirectory()) {
-          fs.cpSync(src, dst, { recursive: true });
-        } else {
-          fs.copyFileSync(src, dst);
-        }
-      }
-    }
-
     // Clean up temp
     fs.rmSync(tempDir, { recursive: true });
 
-    // Get commit
+    // Checkout tracked files from git (restores repo files, respects .gitignore)
     const targetGit = simpleGit(targetDir);
+    await targetGit.checkout('.');
+
     const log = await targetGit.log({ maxCount: 1 });
 
     return {

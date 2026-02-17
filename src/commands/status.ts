@@ -121,6 +121,9 @@ export function registerStatusCommand(program: Command): void {
 
       for (const agentId of agentsToShow) {
         const version = resolveVersion(agentId, cwd);
+        // Only show agents that have a version installed via agents-cli
+        if (!version) continue;
+
         const resources = getAgentResources(agentId, {
           cwd,
           scope: 'user',
@@ -152,12 +155,6 @@ export function registerStatusCommand(program: Command): void {
       }
 
       spinner.stop();
-
-      // Show legend if git repo exists
-      if (hasGitRepo) {
-        console.log(chalk.gray('Legend:'), chalk.green('Synced'), chalk.blue('New'), chalk.yellow('Modified'), chalk.red('Deleted'));
-        console.log();
-      }
 
       // Render helper for per-agent resources
       function renderPerAgentSection(
@@ -233,6 +230,12 @@ export function registerStatusCommand(program: Command): void {
 
       // 6. Hooks
       renderPerAgentSection('Hooks', (d) => d.hooks);
+
+      // Show legend at the end if git repo exists
+      if (hasGitRepo) {
+        console.log();
+        console.log(chalk.gray('Legend:'), chalk.green('Synced'), chalk.blue('New'), chalk.yellow('Modified'), chalk.red('Deleted'));
+      }
 
       console.log('');
     });
