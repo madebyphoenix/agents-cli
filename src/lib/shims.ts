@@ -199,7 +199,15 @@ export async function switchConfigSymlink(
     const stat = fs.lstatSync(configPath);
 
     if (stat.isSymbolicLink()) {
-      // Already a symlink - update it
+      // Already a symlink - check if it points to the correct target
+      const currentTarget = fs.readlinkSync(configPath);
+      const resolvedCurrent = path.resolve(path.dirname(configPath), currentTarget);
+      const resolvedTarget = path.resolve(versionConfigPath);
+      if (resolvedCurrent === resolvedTarget) {
+        // Already pointing to correct target, no-op
+        return { success: true };
+      }
+      // Different target - update it
       fs.unlinkSync(configPath);
       fs.symlinkSync(versionConfigPath, configPath);
       return { success: true };
@@ -325,34 +333,126 @@ export function isShimsInPath(): boolean {
 }
 
 /**
- * Get shell configuration instructions for adding shims to PATH.
+ * Get the shell rc file path for the current shell.
  */
-export function getPathSetupInstructions(): string {
-  const shimsDir = getShimsDir();
+function getShellRcFile(): { rcFile: string; rcPath: string; shell: string } {
   const shell = process.env.SHELL || '/bin/bash';
   const shellName = path.basename(shell);
 
   let rcFile: string;
   switch (shellName) {
     case 'zsh':
-      rcFile = '~/.zshrc';
+      rcFile = '.zshrc';
       break;
     case 'fish':
-      return `Add to ~/.config/fish/config.fish:
-  fish_add_path ${shimsDir}`;
+      rcFile = '.config/fish/config.fish';
+      break;
     case 'bash':
     default:
-      rcFile = '~/.bashrc';
+      rcFile = '.bashrc';
       break;
   }
 
-  return `Add to ${rcFile} (BEFORE any nvm/node setup):
+  return {
+    rcFile,
+    rcPath: path.join(os.homedir(), rcFile),
+    shell: shellName,
+  };
+}
+
+/**
+ * Get shell configuration instructions for adding shims to PATH.
+ */
+export function getPathSetupInstructions(): string {
+  const shimsDir = getShimsDir();
+  const { rcFile, shell } = getShellRcFile();
+
+  if (shell === 'fish') {
+    return `Add to ~/.config/fish/config.fish:
+  fish_add_path ${shimsDir}`;
+  }
+
+  return `Add to ~/${rcFile} (BEFORE any nvm/node setup):
   export PATH="${shimsDir}:$PATH"
 
 IMPORTANT: Shims must come FIRST in PATH to override global installs.
 
 Then restart your shell or run:
-  source ${rcFile}`;
+  source ~/${rcFile}`;
+}
+
+/**
+ * Add shims directory to shell PATH configuration.
+ * Returns true if added, false if already present or failed.
+ */
+export function addShimsToPath(): { success: boolean; alreadyPresent?: boolean; rcFile?: string; error?: string } {
+  const shimsDir = getShimsDir();
+  const { rcFile, rcPath, shell } = getShellRcFile();
+
+  // Read current rc file content
+  let content = '';
+  try {
+    if (fs.existsSync(rcPath)) {
+      content = fs.readFileSync(rcPath, 'utf-8');
+    }
+  } catch (err) {
+    return { success: false, error: `Could not read ${rcFile}: ${(err as Error).message}` };
+  }
+
+  // Check if shims path already in file
+  if (content.includes(shimsDir) || content.includes('$HOME/.agents/shims')) {
+    return { success: true, alreadyPresent: true, rcFile };
+  }
+
+  // Generate the export line
+  let exportLine: string;
+  if (shell === 'fish') {
+    exportLine = `\n# agents-cli: version-managed agent CLIs\nfish_add_path ${shimsDir}\n`;
+  } else {
+    exportLine = `\n# agents-cli: version-managed agent CLIs\nexport PATH="${shimsDir}:$PATH"\n`;
+  }
+
+  // Find insertion point - BEFORE nvm/node setup if possible
+  // Look for common patterns that should come AFTER our shims
+  const insertBeforePatterns = [
+    /^export NVM_DIR=/m,
+    /^source.*nvm/m,
+    /^\[ -s.*nvm/m,
+    /^eval.*fnm/m,
+    /^export PATH.*node/m,
+    /^export PATH.*npm/m,
+  ];
+
+  let insertIndex = -1;
+  for (const pattern of insertBeforePatterns) {
+    const match = content.match(pattern);
+    if (match && match.index !== undefined) {
+      // Find start of this line
+      let lineStart = match.index;
+      while (lineStart > 0 && content[lineStart - 1] !== '\n') {
+        lineStart--;
+      }
+      if (insertIndex === -1 || lineStart < insertIndex) {
+        insertIndex = lineStart;
+      }
+    }
+  }
+
+  // Write the updated content
+  try {
+    let newContent: string;
+    if (insertIndex > 0) {
+      // Insert before nvm/node setup
+      newContent = content.slice(0, insertIndex) + exportLine + content.slice(insertIndex);
+    } else {
+      // Append to end
+      newContent = content + exportLine;
+    }
+    fs.writeFileSync(rcPath, newContent, 'utf-8');
+    return { success: true, rcFile };
+  } catch (err) {
+    return { success: false, error: `Could not write ${rcFile}: ${(err as Error).message}` };
+  }
 }
 
 /**

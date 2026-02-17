@@ -38,11 +38,19 @@ import {
   installVersion,
   listInstalledVersions,
   getGlobalDefault,
+  setGlobalDefault,
   getBinaryPath,
   getVersionHomePath,
   syncResourcesToVersion,
 } from '../lib/versions.js';
-import { createShim } from '../lib/shims.js';
+import {
+  createShim,
+  isShimsInPath,
+  addShimsToPath,
+  getPathSetupInstructions,
+  switchConfigSymlink,
+} from '../lib/shims.js';
+import { select } from '@inquirer/prompts';
 import { isPromptCancelled } from './utils.js';
 
 export function registerPullCommand(program: Command): void {
@@ -241,6 +249,56 @@ export function registerPullCommand(program: Command): void {
 
         if (synced === 0) {
           console.log(chalk.gray('  No versions to sync'));
+        }
+
+        // Auto-add shims to PATH if not already there
+        if (!isShimsInPath()) {
+          const pathResult = addShimsToPath();
+          if (pathResult.success && !pathResult.alreadyPresent) {
+            console.log(chalk.green(`\nAdded shims to ~/${pathResult.rcFile}`));
+            console.log(chalk.gray('Restart your shell or run: source ~/' + pathResult.rcFile));
+          } else if (!pathResult.success) {
+            console.log(chalk.yellow('\nCould not auto-add shims to PATH:'));
+            console.log(chalk.gray(getPathSetupInstructions()));
+          }
+        }
+
+        // Check for agents without a default version - offer to switch
+        if (!options.yes) {
+          const agentsNeedingDefault: AgentId[] = [];
+          for (const agentId of agentsToSync) {
+            const versions = listInstalledVersions(agentId);
+            if (versions.length > 0 && !getGlobalDefault(agentId)) {
+              agentsNeedingDefault.push(agentId);
+            }
+          }
+
+          for (const agentId of agentsNeedingDefault) {
+            const versions = listInstalledVersions(agentId);
+            const agent = AGENTS[agentId];
+
+            const shouldSwitch = await select({
+              message: `${agent.name} has no default version. Set one now?`,
+              choices: [
+                { name: 'Yes, pick a version', value: 'pick' },
+                { name: 'Skip for now', value: 'skip' },
+              ],
+            });
+
+            if (shouldSwitch === 'pick') {
+              const selectedVersion = await select({
+                message: `Select ${agent.name} version:`,
+                choices: versions.map((v) => ({ name: v, value: v })),
+              });
+
+              setGlobalDefault(agentId, selectedVersion);
+              const symlinkResult = await switchConfigSymlink(agentId, selectedVersion);
+              if (!symlinkResult.success) {
+                console.log(chalk.yellow(`Warning: ${symlinkResult.error}`));
+              }
+              console.log(chalk.green(`Set ${agent.name}@${selectedVersion} as default`));
+            }
+          }
         }
 
         console.log(chalk.green('\nPull complete'));

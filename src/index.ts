@@ -39,7 +39,7 @@ const program = new Command();
 
 program
   .name('agents')
-  .description('Manage AI coding agents - configs, CLIs, and automation')
+  .description('Environment manager for AI agents')
   .version(VERSION)
   .helpOption('-h, --help', 'Show help')
   .addHelpCommand(false);
@@ -50,7 +50,7 @@ program.helpInformation = function () {
   if (this.name() === 'agents' && !this.parent) {
     return `Usage: agents [options] [command]
 
-Manage AI coding agents - configs, CLIs, and automation
+Environment manager for AI agents
 
 Agents
   add <agent>[@version]           Install agent CLI

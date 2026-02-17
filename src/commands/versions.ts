@@ -33,6 +33,7 @@ import {
   getShimsDir,
   isShimsInPath,
   getPathSetupInstructions,
+  addShimsToPath,
   switchConfigSymlink,
   getConfigSymlinkVersion,
   compareVersionResources,
@@ -145,12 +146,16 @@ export function registerVersionsCommands(program: Command): void {
               console.log(chalk.yellow(`  No default set. Run: agents use ${agent}@${result.installedVersion}`));
             }
 
-            // Check if shims in PATH
+            // Auto-add shims to PATH if not already there
             if (!isShimsInPath()) {
-              console.log();
-              console.log(chalk.yellow('Shims directory not in PATH. Add it to use version switching:'));
-              console.log(chalk.gray(getPathSetupInstructions()));
-              console.log();
+              const pathResult = addShimsToPath();
+              if (pathResult.success && !pathResult.alreadyPresent) {
+                console.log(chalk.green(`  Added shims to ~/${pathResult.rcFile}`));
+                console.log(chalk.gray('  Restart your shell or run: source ~/' + pathResult.rcFile));
+              } else if (!pathResult.success) {
+                console.log(chalk.yellow('\nCould not auto-add shims to PATH:'));
+                console.log(chalk.gray(getPathSetupInstructions()));
+              }
             }
           } else {
             spinner.fail(`Failed to install ${agentConfig.name}@${version}`);
