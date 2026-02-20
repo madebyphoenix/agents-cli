@@ -113,14 +113,14 @@ export function registerMcpCommands(program: Command): void {
         const defaultVer = getGlobalDefault(agentId);
 
         if (!agent.capabilities.mcp) {
-          console.log(chalk.bold('MCP Servers\n'));
-          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('mcp not supported')}`);
+          console.log(chalk.bold(`MCP Servers for ${agent.name}\n`));
+          console.log(`  ${chalk.gray('mcp not supported')}`);
           return;
         }
 
         if (installedVersions.length === 0) {
           // Not version-managed
-          console.log(chalk.bold('MCP Servers\n'));
+          console.log(chalk.bold(`MCP Servers for ${agent.name}\n`));
           if (!cliStates[agentId]?.installed) {
             console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('CLI not installed')}`);
           } else {
@@ -144,7 +144,7 @@ export function registerMcpCommands(program: Command): void {
           return;
         }
 
-        console.log(chalk.bold('MCP Servers\n'));
+        console.log(chalk.bold(`MCP Servers for ${agent.name}\n`));
 
         let versionsToShow: string[];
         if (requestedVersion === 'default') {

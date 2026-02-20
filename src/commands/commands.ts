@@ -117,7 +117,7 @@ export function registerCommandsCommands(program: Command): void {
 
         if (installedVersions.length === 0) {
           // Not version-managed, show from effective home
-          console.log(chalk.bold('Installed Commands\n'));
+          console.log(chalk.bold(`Installed Commands for ${agent.name}\n`));
           const commands = listInstalledCommandsWithScope(agentId, cwd).filter(
             (c) => options.scope === 'all' || c.scope === options.scope
           );
@@ -136,7 +136,7 @@ export function registerCommandsCommands(program: Command): void {
           return;
         }
 
-        console.log(chalk.bold('Installed Commands\n'));
+        console.log(chalk.bold(`Installed Commands for ${agent.name}\n`));
 
         let versionsToShow: string[];
         if (requestedVersion === 'default') {

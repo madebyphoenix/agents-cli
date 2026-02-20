@@ -118,7 +118,7 @@ export function registerHooksCommands(program: Command): void {
 
         if (installedVersions.length === 0) {
           // Not version-managed
-          console.log(chalk.bold('Installed Hooks\n'));
+          console.log(chalk.bold(`Installed Hooks for ${agent.name}\n`));
           if (!agent.supportsHooks) {
             console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('hooks not supported')}`);
           } else {
@@ -141,7 +141,7 @@ export function registerHooksCommands(program: Command): void {
           return;
         }
 
-        console.log(chalk.bold('Installed Hooks\n'));
+        console.log(chalk.bold(`Installed Hooks for ${agent.name}\n`));
 
         let versionsToShow: string[];
         if (requestedVersion === 'default') {

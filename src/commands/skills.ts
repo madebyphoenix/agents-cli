@@ -195,7 +195,7 @@ export function registerSkillsCommands(program: Command): void {
           return;
         }
 
-        console.log(chalk.bold('Installed Agent Skills\n'));
+        console.log(chalk.bold(`Installed Agent Skills for ${agent.name}\n`));
 
         // Determine which versions to show
         let versionsToShow: string[];

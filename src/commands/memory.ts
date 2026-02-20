@@ -99,11 +99,10 @@ export function registerMemoryCommands(program: Command): void {
         console.log();
       };
 
-      console.log(chalk.bold('Installed Memory\n'));
-
       // Single agent specified - show versions based on requestedVersion
       if (agentId) {
         const agent = AGENTS[agentId];
+        console.log(chalk.bold(`Installed Memory for ${agent.name}\n`));
         const installedVersions = listInstalledVersions(agentId);
         const defaultVer = getGlobalDefault(agentId);
 
@@ -161,6 +160,7 @@ export function registerMemoryCommands(program: Command): void {
       }
 
       // No agent specified - show default version for each agent
+      console.log(chalk.bold('Installed Memory\n'));
       for (const aid of ALL_AGENT_IDS) {
         const agent = AGENTS[aid];
         const installedVersions = listInstalledVersions(aid);

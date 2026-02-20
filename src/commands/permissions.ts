@@ -139,7 +139,7 @@ export function registerPermissionsCommands(program: Command): void {
         const installedVersions = listInstalledVersions(agentId);
         const defaultVer = getGlobalDefault(agentId);
 
-        console.log(chalk.bold(`${agent.name} Permissions (${options.scope}):\n`));
+        console.log(chalk.bold(`Installed Permissions for ${agent.name} (${options.scope}):\n`));
 
         if (installedVersions.length === 0) {
           // Not version-managed - use default home
