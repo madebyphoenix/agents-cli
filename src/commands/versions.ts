@@ -39,6 +39,9 @@ import {
   compareVersionResources,
   hasResourceDiff,
   copyResourcesToVersion,
+  detectMigrationConflicts,
+  promptConflictStrategy,
+  type ConflictStrategy,
 } from '../lib/shims.js';
 import { isPromptCancelled } from './utils.js';
 
@@ -380,8 +383,20 @@ export function registerVersionsCommands(program: Command): void {
           // Set global default
           setGlobalDefault(agentId, finalVersion);
 
+          // Detect migration conflicts before switching
+          const conflictInfo = detectMigrationConflicts(agentId, finalVersion);
+          let strategy: ConflictStrategy = 'keep-dest';
+
+          if (conflictInfo && conflictInfo.conflicts.length > 0) {
+            // Prompt for strategy
+            const chosenStrategy = await promptConflictStrategy([conflictInfo]);
+            if (chosenStrategy) {
+              strategy = chosenStrategy;
+            }
+          }
+
           // Switch config symlink (e.g., ~/.claude -> version's config)
-          const symlinkResult = await switchConfigSymlink(agentId, finalVersion);
+          const symlinkResult = await switchConfigSymlink(agentId, finalVersion, strategy);
           if (!symlinkResult.success) {
             console.log(chalk.yellow(`Warning: Could not update config symlink: ${symlinkResult.error}`));
           } else if (symlinkResult.migrated) {

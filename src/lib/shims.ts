@@ -82,31 +82,40 @@ export async function promptConflictStrategy(
     return null; // No conflicts, no prompt needed
   }
 
-  // Show what has conflicts
-  console.log('\nFound config conflicts during migration:');
+  // Show what has conflicts with clear paths
+  console.log('\nFile conflicts detected:');
   for (const info of conflictInfos) {
     const agentConfig = AGENTS[info.agent];
-    console.log(`  ${agentConfig.name}@${info.version}: ${info.conflicts.length} file(s)`);
+    const configDir = agentConfig.configDir; // e.g., ".opencode"
+    console.log(`  ${info.conflicts.length} file(s) conflict between:`);
+    console.log(`    ~/${configDir}/ (your config)`);
+    console.log(`    ${agentConfig.name}@${info.version} (managed version)`);
   }
   console.log();
 
+  // Build choice labels with agent info for clarity
+  const firstInfo = conflictInfos[0];
+  const firstAgent = AGENTS[firstInfo.agent];
+  const versionLabel = conflictInfos.length === 1
+    ? `${firstAgent.name}@${firstInfo.version}`
+    : 'version';
+
   const strategy = await select<ConflictStrategy>({
-    message: 'How should conflicts be resolved?',
+    message: 'Which files should be kept?',
     choices: [
       {
         value: 'keep-dest' as ConflictStrategy,
-        name: 'Keep version home files (recommended)',
-        description: 'Preserve existing files in version home - no data loss',
+        name: `Keep ${versionLabel} files (recommended)`,
       },
       {
         value: 'overwrite' as ConflictStrategy,
-        name: 'Use your current config',
-        description: 'Overwrite version home files with your current config',
+        name: conflictInfos.length === 1
+          ? `Keep ~/${firstAgent.configDir}/ files`
+          : 'Keep my config files',
       },
       {
         value: 'ask-per-file' as ConflictStrategy,
-        name: 'Ask per file',
-        description: `Review each of the ${totalConflicts} conflicting file(s) individually`,
+        name: `Decide per file (${totalConflicts} file${totalConflicts === 1 ? '' : 's'})`,
       },
     ],
     default: 'keep-dest',
@@ -286,14 +295,57 @@ function getVersionConfigPath(agent: AgentId, version: string): string {
 }
 
 /**
+ * Detect conflicts that would occur when switching config symlink for an agent/version.
+ * This allows collecting conflicts upfront before prompting for a strategy.
+ *
+ * Returns null if no migration is needed (already symlink or doesn't exist),
+ * or ConflictInfo with the list of conflicting files.
+ */
+export function detectMigrationConflicts(agent: AgentId, version: string): ConflictInfo | null {
+  const configPath = getAgentConfigPath(agent);
+  const versionConfigPath = getVersionConfigPath(agent, version);
+
+  try {
+    const stat = fs.lstatSync(configPath);
+
+    if (stat.isSymbolicLink()) {
+      // Already a symlink - no migration needed, no conflicts
+      return null;
+    } else if (stat.isDirectory()) {
+      // Real directory exists - would need migration
+      // Detect conflicts between user's current config and version home
+      const conflicts = detectConflicts(configPath, versionConfigPath);
+      return {
+        agent,
+        version,
+        conflicts,
+      };
+    }
+    // Not a directory or symlink - unusual, no conflicts to report
+    return null;
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // Config path doesn't exist - no migration needed
+      return null;
+    }
+    return null;
+  }
+}
+
+/**
  * Switch the agent's config symlink to point to a specific version.
  * e.g., ~/.claude -> ~/.agents/versions/claude/2.0.65/home/.claude/
+ *
+ * @param agent - The agent ID
+ * @param version - The version to switch to
+ * @param strategy - How to handle conflicts during migration (default: 'keep-dest')
  *
  * Returns: { success: boolean, migrated?: boolean, error?: string }
  */
 export async function switchConfigSymlink(
   agent: AgentId,
-  version: string
+  version: string,
+  strategy: ConflictStrategy = 'keep-dest'
 ): Promise<{ success: boolean; migrated?: boolean; error?: string }> {
   const configPath = getAgentConfigPath(agent);
   const versionConfigPath = getVersionConfigPath(agent, version);
@@ -326,8 +378,9 @@ export async function switchConfigSymlink(
       fs.renameSync(configPath, tempPath);
 
       try {
-        // Copy contents from backup to version config (with prompts for conflicts)
-        await copyDirContents(tempPath, versionConfigPath);
+        // Copy contents from backup to version config using the specified strategy
+        const context: CopyContext = { agent, version };
+        await copyDirContents(tempPath, versionConfigPath, strategy, context);
 
         // Create symlink
         fs.symlinkSync(versionConfigPath, configPath);
@@ -387,11 +440,28 @@ export function getConfigSymlinkVersion(agent: AgentId): string | null {
 }
 
 /**
- * Copy directory contents with conflict prompts.
- * When a file exists in dest, backs it up and asks user whether to overwrite.
- * Skips when dest is a symlink (managed resources that shouldn't be overwritten).
+ * Context for conflict resolution prompts.
  */
-async function copyDirContents(src: string, dest: string): Promise<void> {
+interface CopyContext {
+  agent: AgentId;
+  version: string;
+}
+
+/**
+ * Copy directory contents with configurable conflict strategy.
+ * Skips when dest is a symlink (managed resources that shouldn't be overwritten).
+ *
+ * @param src - Source directory
+ * @param dest - Destination directory
+ * @param strategy - How to handle conflicts: 'keep-dest', 'overwrite', or 'ask-per-file'
+ * @param context - Agent/version context for prompts (only used when strategy is 'ask-per-file')
+ */
+async function copyDirContents(
+  src: string,
+  dest: string,
+  strategy: ConflictStrategy = 'keep-dest',
+  context?: CopyContext
+): Promise<void> {
   // If dest is a symlink, skip - these are managed resources (skills, commands, etc.)
   // that link to central ~/.agents/ and shouldn't be overwritten with local copies
   try {
@@ -423,7 +493,7 @@ async function copyDirContents(src: string, dest: string): Promise<void> {
     }
 
     if (entry.isDirectory()) {
-      await copyDirContents(srcPath, destPath);
+      await copyDirContents(srcPath, destPath, strategy, context);
     } else if (entry.isSymbolicLink()) {
       const linkTarget = fs.readlinkSync(srcPath);
       if (fs.existsSync(destPath)) {
@@ -433,17 +503,30 @@ async function copyDirContents(src: string, dest: string): Promise<void> {
     } else {
       // File - check for conflict
       if (fs.existsSync(destPath)) {
-        // Back up dest file
-        fs.copyFileSync(destPath, `${destPath}.backup`);
+        // Handle based on strategy
+        if (strategy === 'keep-dest') {
+          // Keep existing file, skip copying
+          continue;
+        } else if (strategy === 'overwrite') {
+          // Back up and overwrite
+          fs.copyFileSync(destPath, `${destPath}.backup`);
+        } else if (strategy === 'ask-per-file') {
+          // Back up dest file
+          fs.copyFileSync(destPath, `${destPath}.backup`);
 
-        // Ask user
-        const overwrite = await confirm({
-          message: `${entry.name} exists in version home. Overwrite with your current config?`,
-          default: true,
-        });
+          // Ask user with context - use clear path-based terminology
+          const agentConfig = context ? AGENTS[context.agent] : null;
+          const versionLabel = agentConfig
+            ? `${agentConfig.name}@${context!.version}`
+            : 'version';
+          const useMyFile = await confirm({
+            message: `${entry.name}: Use your config file instead of ${versionLabel}?`,
+            default: false, // Default to keep version (safer)
+          });
 
-        if (!overwrite) {
-          continue; // Keep dest, skip copying src
+          if (!useMyFile) {
+            continue; // Keep dest (version file), skip copying src
+          }
         }
       }
       fs.copyFileSync(srcPath, destPath);

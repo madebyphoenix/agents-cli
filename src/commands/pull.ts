@@ -54,6 +54,10 @@ import {
   addShimsToPath,
   getPathSetupInstructions,
   switchConfigSymlink,
+  detectMigrationConflicts,
+  promptConflictStrategy,
+  type ConflictStrategy,
+  type ConflictInfo,
 } from '../lib/shims.js';
 import { select } from '@inquirer/prompts';
 import { isPromptCancelled } from './utils.js';
@@ -396,6 +400,9 @@ export function registerPullCommand(program: Command): void {
             }
           }
 
+          // Phase 1: Collect all version selections first
+          const selectedVersions: Array<{ agentId: AgentId; version: string }> = [];
+
           for (const agentId of agentsNeedingDefault) {
             const versions = listInstalledVersions(agentId);
             const agent = AGENTS[agentId];
@@ -414,13 +421,37 @@ export function registerPullCommand(program: Command): void {
                 choices: versions.map((v) => ({ name: v, value: v })),
               });
 
-              setGlobalDefault(agentId, selectedVersion);
-              const symlinkResult = await switchConfigSymlink(agentId, selectedVersion);
-              if (!symlinkResult.success) {
-                console.log(chalk.yellow(`Warning: ${symlinkResult.error}`));
-              }
-              console.log(chalk.green(`Set ${agent.name}@${selectedVersion} as default`));
+              selectedVersions.push({ agentId, version: selectedVersion });
             }
+          }
+
+          // Phase 2: Detect conflicts for all selected versions
+          const allConflicts: ConflictInfo[] = [];
+          for (const { agentId, version } of selectedVersions) {
+            const conflictInfo = detectMigrationConflicts(agentId, version);
+            if (conflictInfo && conflictInfo.conflicts.length > 0) {
+              allConflicts.push(conflictInfo);
+            }
+          }
+
+          // Phase 3: Prompt for strategy ONCE if any conflicts exist
+          let strategy: ConflictStrategy = 'keep-dest';
+          if (allConflicts.length > 0) {
+            const chosenStrategy = await promptConflictStrategy(allConflicts);
+            if (chosenStrategy) {
+              strategy = chosenStrategy;
+            }
+          }
+
+          // Phase 4: Apply migrations with the chosen strategy
+          for (const { agentId, version } of selectedVersions) {
+            const agent = AGENTS[agentId];
+            setGlobalDefault(agentId, version);
+            const symlinkResult = await switchConfigSymlink(agentId, version, strategy);
+            if (!symlinkResult.success) {
+              console.log(chalk.yellow(`Warning: ${symlinkResult.error}`));
+            }
+            console.log(chalk.green(`Set ${agent.name}@${version} as default`));
           }
         }
 
