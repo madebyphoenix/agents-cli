@@ -23,6 +23,7 @@ import {
 import type { AgentId } from '../lib/types.js';
 import {
   isGitRepo,
+  isSystemRepoOrigin,
   getGitHubUsername,
   checkGitHubRepoExists,
   initRepo,
@@ -88,6 +89,14 @@ export function registerPushCommand(program: Command): void {
           await initRepo(agentsDir);
           await setRemoteUrl(agentsDir, `https://github.com/${username}/.agents.git`);
           spinner.succeed(`Initialized git repo with remote ${username}/.agents`);
+        }
+
+        // Check if origin is system repo (can't push there)
+        if (await isSystemRepoOrigin(agentsDir)) {
+          console.log(chalk.red("Can't push to the system repo."));
+          console.log(chalk.gray('\nTo save your changes, fork the repo first:'));
+          console.log(chalk.cyan('  agents fork'));
+          return;
         }
 
         // Update manifest with current CLI versions and MCPs

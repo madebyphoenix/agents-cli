@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.68
+
+- Upgrade prompt now shows on ALL command flows (--version, --help, bare `agents`)
+
 ## 1.5.67
 
 **Unified view command**

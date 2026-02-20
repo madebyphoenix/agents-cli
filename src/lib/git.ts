@@ -570,3 +570,59 @@ export async function getTrackedFiles(dir: string, subdir?: string): Promise<str
     return [];
   }
 }
+
+/**
+ * Check if upstream remote is configured.
+ */
+export async function hasUpstreamRemote(dir: string): Promise<boolean> {
+  try {
+    const git = simpleGit(dir);
+    const remotes = await git.getRemotes(true);
+    return remotes.some(r => r.name === 'upstream');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Add or update the upstream remote.
+ */
+export async function setUpstreamRemote(dir: string, url: string): Promise<void> {
+  const git = simpleGit(dir);
+  const remotes = await git.getRemotes(true);
+  const hasUpstream = remotes.some(r => r.name === 'upstream');
+
+  if (hasUpstream) {
+    await git.remote(['set-url', 'upstream', url]);
+  } else {
+    await git.remote(['add', 'upstream', url]);
+  }
+}
+
+/**
+ * Pull from upstream remote (merge updates from system repo).
+ */
+export async function pullFromUpstream(dir: string): Promise<{ success: boolean; commit: string; error?: string }> {
+  try {
+    const git = simpleGit(dir);
+
+    // Check if upstream exists
+    const remotes = await git.getRemotes(true);
+    const upstream = remotes.find(r => r.name === 'upstream');
+    if (!upstream) {
+      return { success: false, commit: '', error: 'No upstream remote configured. Run `agents fork` first.' };
+    }
+
+    // Fetch and merge from upstream
+    await git.fetch('upstream');
+    await git.merge(['upstream/main']);
+
+    const log = await git.log({ maxCount: 1 });
+    return {
+      success: true,
+      commit: log.latest?.hash.slice(0, 8) || 'unknown',
+    };
+  } catch (err) {
+    return { success: false, commit: '', error: (err as Error).message };
+  }
+}

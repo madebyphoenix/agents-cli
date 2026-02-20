@@ -20,6 +20,7 @@ const VERSION = packageJson.version;
 // Import command registrations
 import { registerPullCommand } from './commands/pull.js';
 import { registerPushCommand } from './commands/push.js';
+import { registerForkCommand } from './commands/fork.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerViewCommand } from './commands/view.js';
 import { registerCommandsCommands } from './commands/commands.js';
@@ -77,6 +78,7 @@ Automation
 Env
   pull                            Sync from .agents repo
   push                            Push config to your .agents repo
+  fork                            Fork system repo to your GitHub
 
 Options:
   -V, --version                   Show version number
@@ -195,15 +197,6 @@ async function checkForUpdates(): Promise<void> {
   }
 }
 
-// Run update check before command runs
-program.hook('preAction', async () => {
-  const args = process.argv.slice(2);
-  const skipCommands = ['--version', '-V', '--help', '-h'];
-  if (args.length === 0 || skipCommands.includes(args[0])) {
-    return;
-  }
-  await checkForUpdates();
-});
 
 // Register all commands
 registerViewCommand(program);
@@ -220,6 +213,7 @@ registerDaemonCommands(program);
 registerJobsCommands(program);
 registerPullCommand(program);
 registerPushCommand(program);
+registerForkCommand(program);
 
 applyGlobalHelpConventions(program);
 
@@ -273,5 +267,8 @@ program.on('command:*', (operands) => {
   }
   process.exit(1);
 });
+
+// Run update check on EVERY invocation before parsing
+await checkForUpdates();
 
 program.parse();

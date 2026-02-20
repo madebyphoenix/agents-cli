@@ -30,9 +30,11 @@ import {
   isGitRepo,
   cloneIntoExisting,
   pullRepo,
+  pullFromUpstream,
   parseSource,
   getGitHubUsername,
   checkGitHubRepoExists,
+  hasUpstreamRemote,
 } from '../lib/git.js';
 import {
   installVersion,
@@ -60,6 +62,7 @@ export function registerPullCommand(program: Command): void {
     .description('Sync config from a .agents repo')
     .option('-y, --yes', 'Skip prompts and use defaults')
     .option('--skip-clis', 'Do not sync CLI versions')
+    .option('--upstream', 'Pull from upstream (system repo) instead of origin')
     .action(async (arg1: string | undefined, arg2: string | undefined, options) => {
       // Parse source and agent filter from positional args
       let targetSource: string | undefined;
@@ -81,6 +84,34 @@ export function registerPullCommand(program: Command): void {
       const agentsDir = getAgentsDir();
       ensureAgentsDir();
       ensureGitignore();
+
+      // Handle --upstream: pull from upstream remote
+      if (options.upstream) {
+        if (!isGitRepo(agentsDir)) {
+          console.log(chalk.red('~/.agents/ is not a git repository.'));
+          console.log(chalk.gray('\nInitialize first: agents pull'));
+          return;
+        }
+
+        if (!await hasUpstreamRemote(agentsDir)) {
+          console.log(chalk.red('No upstream remote configured.'));
+          console.log(chalk.gray('\nIf you forked from the system repo, run: agents fork'));
+          console.log(chalk.gray('This will set up the upstream remote automatically.'));
+          return;
+        }
+
+        const spinner = ora('Pulling from upstream...').start();
+        const result = await pullFromUpstream(agentsDir);
+        if (!result.success) {
+          spinner.fail(`Failed: ${result.error}`);
+          return;
+        }
+        spinner.succeed(`Merged upstream changes (${result.commit})`);
+
+        // Continue with the rest of the sync (CLI versions, MCP, resources)
+        // Skip the source determination since we already pulled
+        targetSource = 'existing';
+      }
 
       // Determine source
       const meta = readMeta();
