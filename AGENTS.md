@@ -53,6 +53,7 @@ src/
     commands.ts         # Slash command discovery and installation
     skills.ts           # Agent Skills (SKILL.md + rules/) management
     instructions.ts     # Agent memory files (CLAUDE.md, AGENTS.md, etc.) management
+    permissions.ts      # Permission set discovery and installation
     convert.ts          # Markdown <-> TOML conversion
     registry.ts         # Package registry client (MCP, skills)
     jobs.ts             # Job config YAML parsing and management
@@ -288,6 +289,112 @@ const myCmd = program.command('my').description('Parent command');
 myCmd.command('sub').action(() => { ... });
 ```
 
+## UX Design Guidelines
+
+Follow these patterns when adding new commands to ensure consistent user experience.
+
+### Color Conventions (chalk)
+
+| Color | Usage |
+|-------|-------|
+| `chalk.red()` | Errors, failures, invalid input |
+| `chalk.green()` | Success messages, positive actions, synced resources |
+| `chalk.yellow()` | Warnings, cautions, hints for user action needed |
+| `chalk.gray()` | Secondary info, hints, explanations, file paths |
+| `chalk.cyan()` | Highlighted items, user values, user-scope resources |
+| `chalk.blue()` | Local-only/new resources (not yet synced) |
+
+### Progress Indicators (ora)
+
+Use spinners for operations that may take >500ms:
+
+```typescript
+const spinner = ora(`Installing ${name}...`).start();
+spinner.text = 'Downloading...';  // Update during operation
+spinner.succeed(`Installed ${name}`);  // Success
+spinner.fail(`Failed: ${error}`);      // Error
+spinner.warn(`Warning message`);       // Non-blocking issue
+```
+
+Suppress spinners in non-TTY environments:
+```typescript
+const spinner = ora({ text: 'Working...', isSilent: !process.stdout.isTTY }).start();
+```
+
+### Error Handling
+
+Always provide actionable feedback:
+
+```typescript
+// Single-line error + gray hint with fix command
+console.log(chalk.red(`Invalid agent: ${spec}`));
+console.log(chalk.gray(`Format: <agent>[@version]. Available: ${ALL_AGENT_IDS.join(', ')}`));
+
+// Or via spinner
+spinner.fail(`Failed to install ${name}`);
+console.log(chalk.gray('\nTry: agents add claude@latest'));
+```
+
+### Interactive Prompts (@inquirer/prompts)
+
+```typescript
+import { select, checkbox, confirm } from '@inquirer/prompts';
+
+// Single choice
+const version = await select({
+  message: 'Select version:',
+  choices: versions.map(v => ({ name: v, value: v })),
+});
+
+// Multiple selection
+const selected = await checkbox({
+  message: 'Select items:',
+  choices: items.map(i => ({ name: i, value: i })),
+});
+
+// Always handle cancellation
+try {
+  const answer = await select({ ... });
+} catch (err) {
+  if (isPromptCancelled(err)) return;
+  throw err;
+}
+```
+
+### Output Formatting
+
+Use consistent indentation and alignment:
+
+```typescript
+// Section headers
+console.log(chalk.bold('Installed Agent CLIs\n'));
+
+// Hierarchical display (2-space indent per level)
+console.log(`  ${agentName}`);
+console.log(`    ${version} ${chalk.green('(default)')}`);
+
+// Aligned columns with padding
+const maxLen = Math.max(...items.map(i => i.name.length));
+for (const item of items) {
+  console.log(`  ${item.name.padEnd(maxLen)}  ${chalk.gray(item.path)}`);
+}
+
+// Scope-separated lists
+console.log(`  ${chalk.gray('User:')}`);
+for (const item of userItems) console.log(`    ${chalk.cyan(item)}`);
+console.log(`  ${chalk.gray('Project:')}`);
+for (const item of projectItems) console.log(`    ${chalk.yellow(item)}`);
+```
+
+### Path Display
+
+Always use `formatPath()` to normalize paths for display:
+
+```typescript
+import { formatPath } from './lib/utils';
+console.log(chalk.gray(formatPath(fullPath)));  // Shows ~/... or relative
+```
+
 ## Build & Test
 
 ```bash
@@ -318,6 +425,9 @@ bun test         # Run vitest
 | External packages | `~/.agents/packages/` |
 | Shared skills | `~/.agents/skills/` |
 | Shared commands | `~/.agents/commands/` |
+| Shared hooks | `~/.agents/hooks/` |
+| Shared memory | `~/.agents/memory/` |
+| Shared permissions | `~/.agents/permissions/` |
 | CLI versions | `~/.agents/versions/{agent}/{version}/` |
 | Version HOME | `~/.agents/versions/{agent}/{version}/home/` |
 | Shims | `~/.agents/shims/` |
