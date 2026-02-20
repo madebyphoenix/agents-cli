@@ -43,54 +43,52 @@ export function registerPermissionsCommands(program: Command): void {
 
   permissionsCmd
     .command('list [agent]')
-    .description('List permissions (central sets or agent-specific)')
+    .description('List permissions (central sets or agent-specific). Use agent@version for specific version, agent@default for default only.')
     .option('-s, --scope <scope>', 'Filter by scope: user, project', 'user')
     .action(async (agentArg, options) => {
       const cwd = process.cwd();
 
-      if (agentArg) {
-        // List permissions for a specific agent
-        const agentId = resolveAgentName(agentArg);
-        if (!agentId) {
-          console.log(chalk.red(`Unknown agent '${agentArg}'. Use ${PERMISSIONS_CAPABLE_AGENTS.join(', ')}`));
-          process.exit(1);
-        }
+      // Helper to render permissions for a specific version
+      const renderVersionPermissions = (
+        agentId: AgentId,
+        version: string,
+        isDefault: boolean,
+        home: string,
+        scope: 'user' | 'project'
+      ) => {
+        const agent = AGENTS[agentId];
+        const defaultLabel = isDefault ? ' default' : '';
+        const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
-        if (!PERMISSIONS_CAPABLE_AGENTS.includes(agentId)) {
-          console.log(chalk.yellow(`${AGENTS[agentId].name} does not support fine-grained permissions`));
-          return;
-        }
-
-        const perms = readAgentPermissions(agentId, options.scope, cwd);
+        const perms = readAgentPermissions(agentId, scope, cwd, { home });
         if (!perms) {
-          console.log(chalk.gray(`No permissions configured for ${AGENTS[agentId].name} (${options.scope} scope)`));
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
+          console.log();
           return;
         }
 
-        const defaultVer = getGlobalDefault(agentId);
-        const versionStr = defaultVer ? ` (${defaultVer})` : '';
-        console.log(chalk.bold(`${AGENTS[agentId].name}${versionStr} Permissions (${options.scope}):\n`));
+        console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
 
         if (agentId === 'claude') {
           const claudePerms = perms as { permissions: { allow: string[]; deny: string[] } };
           if (claudePerms.permissions.allow.length > 0) {
-            console.log(chalk.green('  Allow:'));
+            console.log(chalk.green('    Allow:'));
             for (const p of claudePerms.permissions.allow) {
-              console.log(`    ${chalk.cyan(p)}`);
+              console.log(`      ${chalk.cyan(p)}`);
             }
           }
           if (claudePerms.permissions.deny.length > 0) {
-            console.log(chalk.red('  Deny:'));
+            console.log(chalk.red('    Deny:'));
             for (const p of claudePerms.permissions.deny) {
-              console.log(`    ${chalk.yellow(p)}`);
+              console.log(`      ${chalk.yellow(p)}`);
             }
           }
         } else if (agentId === 'opencode') {
           const ocPerms = perms as { permission: { bash: Record<string, string> } };
-          console.log(chalk.gray('  Bash commands:'));
+          console.log(chalk.gray('    Bash commands:'));
           for (const [pattern, action] of Object.entries(ocPerms.permission.bash)) {
             const color = action === 'allow' ? chalk.green : action === 'deny' ? chalk.red : chalk.yellow;
-            console.log(`    ${chalk.cyan(pattern)}: ${color(action)}`);
+            console.log(`      ${chalk.cyan(pattern)}: ${color(action)}`);
           }
         } else if (agentId === 'codex') {
           const codexPerms = perms as {
@@ -99,23 +97,105 @@ export function registerPermissionsCommands(program: Command): void {
             sandbox_workspace_write?: { network_access?: boolean; writable_roots?: string[] };
           };
           if (codexPerms.approval_policy) {
-            console.log(`  ${chalk.gray('approval_policy:')} ${chalk.cyan(codexPerms.approval_policy)}`);
+            console.log(`    ${chalk.gray('approval_policy:')} ${chalk.cyan(codexPerms.approval_policy)}`);
           }
           if (codexPerms.sandbox_mode) {
-            console.log(`  ${chalk.gray('sandbox_mode:')} ${chalk.cyan(codexPerms.sandbox_mode)}`);
+            console.log(`    ${chalk.gray('sandbox_mode:')} ${chalk.cyan(codexPerms.sandbox_mode)}`);
           }
           if (codexPerms.sandbox_workspace_write) {
             const sw = codexPerms.sandbox_workspace_write;
             if (sw.network_access !== undefined) {
-              console.log(`  ${chalk.gray('network_access:')} ${chalk.cyan(String(sw.network_access))}`);
+              console.log(`    ${chalk.gray('network_access:')} ${chalk.cyan(String(sw.network_access))}`);
             }
             if (sw.writable_roots && sw.writable_roots.length > 0) {
-              console.log(`  ${chalk.gray('writable_roots:')}`);
+              console.log(`    ${chalk.gray('writable_roots:')}`);
               for (const r of sw.writable_roots) {
-                console.log(`    ${chalk.cyan(r)}`);
+                console.log(`      ${chalk.cyan(r)}`);
               }
             }
           }
+        }
+        console.log();
+      };
+
+      if (agentArg) {
+        // Parse agent@version syntax
+        const parts = agentArg.split('@');
+        const agentName = parts[0];
+        const requestedVersion = parts[1] || null;
+
+        const agentId = resolveAgentName(agentName);
+        if (!agentId) {
+          console.log(chalk.red(`Unknown agent '${agentName}'. Use ${PERMISSIONS_CAPABLE_AGENTS.join(', ')}`));
+          process.exit(1);
+        }
+
+        if (!PERMISSIONS_CAPABLE_AGENTS.includes(agentId)) {
+          console.log(chalk.yellow(`${AGENTS[agentId].name} does not support fine-grained permissions`));
+          return;
+        }
+
+        const agent = AGENTS[agentId];
+        const installedVersions = listInstalledVersions(agentId);
+        const defaultVer = getGlobalDefault(agentId);
+
+        console.log(chalk.bold(`${agent.name} Permissions (${options.scope}):\n`));
+
+        if (installedVersions.length === 0) {
+          // Not version-managed - use default home
+          const perms = readAgentPermissions(agentId, options.scope, cwd);
+          if (!perms) {
+            console.log(chalk.gray(`  No permissions configured`));
+            return;
+          }
+
+          console.log(`  ${chalk.bold(agent.name)}:`);
+
+          if (agentId === 'claude') {
+            const claudePerms = perms as { permissions: { allow: string[]; deny: string[] } };
+            if (claudePerms.permissions.allow.length > 0) {
+              console.log(chalk.green('    Allow:'));
+              for (const p of claudePerms.permissions.allow) {
+                console.log(`      ${chalk.cyan(p)}`);
+              }
+            }
+            if (claudePerms.permissions.deny.length > 0) {
+              console.log(chalk.red('    Deny:'));
+              for (const p of claudePerms.permissions.deny) {
+                console.log(`      ${chalk.yellow(p)}`);
+              }
+            }
+          }
+          return;
+        }
+
+        // Version-managed: determine which versions to show
+        let versionsToShow: string[];
+        if (requestedVersion === 'default') {
+          if (!defaultVer) {
+            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
+            return;
+          }
+          versionsToShow = [defaultVer];
+        } else if (requestedVersion) {
+          if (!installedVersions.includes(requestedVersion)) {
+            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
+            console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
+            return;
+          }
+          versionsToShow = [requestedVersion];
+        } else {
+          // Show all versions, default first
+          versionsToShow = [...installedVersions].sort((a, b) => {
+            if (a === defaultVer) return -1;
+            if (b === defaultVer) return 1;
+            return 0;
+          });
+        }
+
+        for (const version of versionsToShow) {
+          const home = getVersionHomePath(agentId, version);
+          renderVersionPermissions(agentId, version, version === defaultVer, home, options.scope);
         }
       } else {
         // List central permission sets

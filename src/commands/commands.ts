@@ -28,6 +28,7 @@ import {
   getGlobalDefault,
   syncResourcesToVersion,
   promptAgentVersionSelection,
+  getVersionHomePath,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
 import { isPromptCancelled, formatPath } from './utils.js';
@@ -39,41 +40,47 @@ export function registerCommandsCommands(program: Command): void {
 
   commandsCmd
     .command('list [agent]')
-    .description('List installed commands')
+    .description('List installed commands. Use agent@version for specific version, agent@default for default only.')
     .option('-a, --agent <agent>', 'Filter by agent')
     .option('-s, --scope <scope>', 'Filter by scope: user, project, or all', 'all')
     .action(async (agentArg, options) => {
       const spinner = ora({ text: 'Loading...', isSilent: !process.stdout.isTTY }).start();
       const cwd = process.cwd();
 
-      // Resolve agent filter - positional arg takes precedence over -a flag
+      // Parse agent input - handle agent@version syntax
       const agentInput = agentArg || options.agent;
-      let agents: AgentId[];
+      let agentId: AgentId | null = null;
+      let requestedVersion: string | null = null;
+
       if (agentInput) {
-        const resolved = resolveAgentName(agentInput);
-        if (!resolved) {
+        const parts = agentInput.split('@');
+        const agentName = parts[0];
+        requestedVersion = parts[1] || null;
+
+        agentId = resolveAgentName(agentName);
+        if (!agentId) {
           spinner.stop();
-          console.log(chalk.red(`Unknown agent '${agentInput}'. Use ${ALL_AGENT_IDS.join(', ')}`));
+          console.log(chalk.red(`Unknown agent '${agentName}'. Use ${ALL_AGENT_IDS.join(', ')}`));
           process.exit(1);
         }
-        agents = [resolved];
-      } else {
-        agents = ALL_AGENT_IDS;
       }
-      // Collect all data while spinner is active
-      const agentCommands = agents.map((agentId) => ({
-        agent: AGENTS[agentId],
-        commands: listInstalledCommandsWithScope(agentId, cwd).filter(
+
+      const showPaths = !!agentInput;
+
+      // Helper to render commands for a specific version
+      const renderVersionCommands = (
+        agentId: AgentId,
+        version: string,
+        isDefault: boolean,
+        home: string
+      ) => {
+        const agent = AGENTS[agentId];
+        const commands = listInstalledCommandsWithScope(agentId, cwd, { home }).filter(
           (c) => options.scope === 'all' || c.scope === options.scope
-        ),
-      }));
+        );
 
-      spinner.stop();
-      console.log(chalk.bold('Installed Commands\n'));
-
-      for (const { agent, commands } of agentCommands) {
-        const defaultVer = getGlobalDefault(agent.id);
-        const versionStr = defaultVer ? chalk.gray(` (${defaultVer})`) : '';
+        const defaultLabel = isDefault ? ' default' : '';
+        const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
         if (commands.length === 0) {
           console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
@@ -98,6 +105,98 @@ export function registerCommandsCommands(program: Command): void {
           }
         }
         console.log();
+      };
+
+      spinner.stop();
+
+      // Single agent specified - show versions based on requestedVersion
+      if (agentId) {
+        const agent = AGENTS[agentId];
+        const installedVersions = listInstalledVersions(agentId);
+        const defaultVer = getGlobalDefault(agentId);
+
+        if (installedVersions.length === 0) {
+          // Not version-managed, show from effective home
+          console.log(chalk.bold('Installed Commands\n'));
+          const commands = listInstalledCommandsWithScope(agentId, cwd).filter(
+            (c) => options.scope === 'all' || c.scope === options.scope
+          );
+          if (commands.length === 0) {
+            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+          } else {
+            console.log(`  ${chalk.bold(agent.name)}:`);
+            const userCommands = commands.filter((c) => c.scope === 'user');
+            if (userCommands.length > 0) {
+              console.log(`    ${chalk.gray('User:')}`);
+              for (const cmd of userCommands) {
+                console.log(`      ${chalk.cyan(cmd.name.padEnd(20))} ${chalk.gray(formatPath(cmd.path, cwd))}`);
+              }
+            }
+          }
+          return;
+        }
+
+        console.log(chalk.bold('Installed Commands\n'));
+
+        let versionsToShow: string[];
+        if (requestedVersion === 'default') {
+          if (!defaultVer) {
+            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
+            return;
+          }
+          versionsToShow = [defaultVer];
+        } else if (requestedVersion) {
+          if (!installedVersions.includes(requestedVersion)) {
+            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
+            console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
+            return;
+          }
+          versionsToShow = [requestedVersion];
+        } else {
+          versionsToShow = [...installedVersions].sort((a, b) => {
+            if (a === defaultVer) return -1;
+            if (b === defaultVer) return 1;
+            return 0;
+          });
+        }
+
+        for (const version of versionsToShow) {
+          const home = getVersionHomePath(agentId, version);
+          renderVersionCommands(agentId, version, version === defaultVer, home);
+        }
+        return;
+      }
+
+      // No agent specified - show default version for each agent
+      console.log(chalk.bold('Installed Commands\n'));
+
+      for (const aid of ALL_AGENT_IDS) {
+        const agent = AGENTS[aid];
+        const installedVersions = listInstalledVersions(aid);
+        const defaultVer = getGlobalDefault(aid);
+
+        if (installedVersions.length > 0 && defaultVer) {
+          const home = getVersionHomePath(aid, defaultVer);
+          renderVersionCommands(aid, defaultVer, true, home);
+        } else if (installedVersions.length > 0) {
+          // Version managed but no default
+          const commands = listInstalledCommandsWithScope(aid, cwd).filter(
+            (c) => options.scope === 'all' || c.scope === options.scope
+          );
+          if (commands.length === 0) {
+            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+          } else {
+            console.log(`  ${chalk.bold(agent.name)}:`);
+            const userCommands = commands.filter((c) => c.scope === 'user');
+            if (userCommands.length > 0) {
+              console.log(`    ${chalk.gray('User:')}`);
+              for (const cmd of userCommands) {
+                console.log(`      ${chalk.cyan(cmd.name.padEnd(20))} ${chalk.gray(formatPath(cmd.path, cwd))}`);
+              }
+            }
+          }
+          console.log();
+        }
       }
     });
 

@@ -29,6 +29,7 @@ import {
   getGlobalDefault,
   syncResourcesToVersion,
   promptAgentVersionSelection,
+  getVersionHomePath,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
 import { isPromptCancelled, formatPath } from './utils.js';
@@ -40,61 +41,157 @@ export function registerMemoryCommands(program: Command): void {
 
   memoryCmd
     .command('list [agent]')
-    .description('List installed memory files')
+    .description('List installed memory files. Use agent@version for specific version, agent@default for default only.')
     .option('-a, --agent <agent>', 'Filter by agent')
     .action(async (agentArg, options) => {
       const cwd = process.cwd();
 
-      // Resolve agent filter - positional arg takes precedence over -a flag
+      // Parse agent input - handle agent@version syntax
       const agentInput = agentArg || options.agent;
-      let agents: AgentId[];
+      let agentId: AgentId | null = null;
+      let requestedVersion: string | null = null;
+
       if (agentInput) {
-        const resolved = resolveAgentName(agentInput);
-        if (!resolved) {
-          console.log(chalk.red(`Unknown agent '${agentInput}'. Use ${ALL_AGENT_IDS.join(', ')}`));
+        const parts = agentInput.split('@');
+        const agentName = parts[0];
+        requestedVersion = parts[1] || null;
+
+        agentId = resolveAgentName(agentName);
+        if (!agentId) {
+          console.log(chalk.red(`Unknown agent '${agentName}'. Use ${ALL_AGENT_IDS.join(', ')}`));
           process.exit(1);
         }
-        agents = [resolved];
-      } else {
-        agents = ALL_AGENT_IDS;
       }
 
-      console.log(chalk.bold('Installed Memory\n'));
-
-      for (const agentId of agents) {
+      // Helper to render memory for a specific version
+      const renderVersionMemory = (
+        agentId: AgentId,
+        version: string,
+        isDefault: boolean,
+        home: string
+      ) => {
         const agent = AGENTS[agentId];
-        const defaultVer = getGlobalDefault(agentId);
-        const versionStr = defaultVer ? chalk.gray(` (${defaultVer})`) : '';
-
-        const installed = listInstalledInstructionsWithScope(agentId, cwd);
+        const installed = listInstalledInstructionsWithScope(agentId, cwd, { home });
         const userInstr = installed.find((i) => i.scope === 'user');
         const projectInstr = installed.find((i) => i.scope === 'project');
 
         const hasUser = userInstr?.exists;
         const hasProject = projectInstr?.exists;
 
-        if (!hasUser && !hasProject) {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
-          console.log(`    ${chalk.gray('User:')} ${chalk.gray('none')}`);
-          console.log(`    ${chalk.gray('Project:')} ${chalk.gray('none')}`);
-        } else {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
+        const defaultLabel = isDefault ? ' default' : '';
+        const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
+        console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
+
+        if (hasUser) {
+          console.log(`    ${chalk.gray('User:')}`);
+          console.log(`      ${chalk.cyan(agent.instructionsFile.padEnd(20))} ${chalk.gray(formatPath(userInstr.path, cwd))}`);
+        } else {
+          console.log(`    ${chalk.gray('User:')} ${chalk.gray('none')}`);
+        }
+
+        if (hasProject) {
+          console.log(`    ${chalk.gray('Project:')}`);
+          console.log(`      ${chalk.yellow(agent.instructionsFile.padEnd(20))} ${chalk.gray(formatPath(projectInstr.path, cwd))}`);
+        } else {
+          console.log(`    ${chalk.gray('Project:')} ${chalk.gray('none')}`);
+        }
+        console.log();
+      };
+
+      console.log(chalk.bold('Installed Memory\n'));
+
+      // Single agent specified - show versions based on requestedVersion
+      if (agentId) {
+        const agent = AGENTS[agentId];
+        const installedVersions = listInstalledVersions(agentId);
+        const defaultVer = getGlobalDefault(agentId);
+
+        if (installedVersions.length === 0) {
+          // Not version-managed
+          const installed = listInstalledInstructionsWithScope(agentId, cwd);
+          const userInstr = installed.find((i) => i.scope === 'user');
+          const projectInstr = installed.find((i) => i.scope === 'project');
+          const hasUser = userInstr?.exists;
+          const hasProject = projectInstr?.exists;
+
+          console.log(`  ${chalk.bold(agent.name)}:`);
           if (hasUser) {
             console.log(`    ${chalk.gray('User:')}`);
             console.log(`      ${chalk.cyan(agent.instructionsFile.padEnd(20))} ${chalk.gray(formatPath(userInstr.path, cwd))}`);
           } else {
             console.log(`    ${chalk.gray('User:')} ${chalk.gray('none')}`);
           }
-
           if (hasProject) {
             console.log(`    ${chalk.gray('Project:')}`);
             console.log(`      ${chalk.yellow(agent.instructionsFile.padEnd(20))} ${chalk.gray(formatPath(projectInstr.path, cwd))}`);
           } else {
             console.log(`    ${chalk.gray('Project:')} ${chalk.gray('none')}`);
           }
+          return;
         }
-        console.log();
+
+        let versionsToShow: string[];
+        if (requestedVersion === 'default') {
+          if (!defaultVer) {
+            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
+            return;
+          }
+          versionsToShow = [defaultVer];
+        } else if (requestedVersion) {
+          if (!installedVersions.includes(requestedVersion)) {
+            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
+            console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
+            return;
+          }
+          versionsToShow = [requestedVersion];
+        } else {
+          versionsToShow = [...installedVersions].sort((a, b) => {
+            if (a === defaultVer) return -1;
+            if (b === defaultVer) return 1;
+            return 0;
+          });
+        }
+
+        for (const version of versionsToShow) {
+          const home = getVersionHomePath(agentId, version);
+          renderVersionMemory(agentId, version, version === defaultVer, home);
+        }
+        return;
+      }
+
+      // No agent specified - show default version for each agent
+      for (const aid of ALL_AGENT_IDS) {
+        const agent = AGENTS[aid];
+        const installedVersions = listInstalledVersions(aid);
+        const defaultVer = getGlobalDefault(aid);
+
+        if (installedVersions.length > 0 && defaultVer) {
+          const home = getVersionHomePath(aid, defaultVer);
+          renderVersionMemory(aid, defaultVer, true, home);
+        } else {
+          // Not version-managed or no default
+          const installed = listInstalledInstructionsWithScope(aid, cwd);
+          const userInstr = installed.find((i) => i.scope === 'user');
+          const projectInstr = installed.find((i) => i.scope === 'project');
+          const hasUser = userInstr?.exists;
+          const hasProject = projectInstr?.exists;
+
+          console.log(`  ${chalk.bold(agent.name)}:`);
+          if (hasUser) {
+            console.log(`    ${chalk.gray('User:')}`);
+            console.log(`      ${chalk.cyan(agent.instructionsFile.padEnd(20))} ${chalk.gray(formatPath(userInstr.path, cwd))}`);
+          } else {
+            console.log(`    ${chalk.gray('User:')} ${chalk.gray('none')}`);
+          }
+          if (hasProject) {
+            console.log(`    ${chalk.gray('Project:')}`);
+            console.log(`      ${chalk.yellow(agent.instructionsFile.padEnd(20))} ${chalk.gray(formatPath(projectInstr.path, cwd))}`);
+          } else {
+            console.log(`    ${chalk.gray('Project:')} ${chalk.gray('none')}`);
+          }
+          console.log();
+        }
       }
     });
 

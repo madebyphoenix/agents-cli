@@ -377,12 +377,15 @@ export function listInstalledSkills(): Map<string, DiscoveredSkill> {
 
 export function listInstalledSkillsWithScope(
   agentId: AgentId,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  options?: { home?: string }
 ): InstalledSkill[] {
   const results: InstalledSkill[] = [];
 
-  // User-scoped skills
-  const userSkillsDir = getAgentSkillsDir(agentId);
+  // User-scoped skills (version-aware when home is provided)
+  const userSkillsDir = options?.home
+    ? path.join(options.home, `.${agentId}`, 'skills')
+    : getAgentSkillsDir(agentId);
   if (fs.existsSync(userSkillsDir)) {
     try {
       const entries = fs.readdirSync(userSkillsDir, { withFileTypes: true });

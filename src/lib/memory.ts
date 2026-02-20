@@ -193,12 +193,15 @@ export function instructionsContentMatches(
 
 export function listInstalledInstructionsWithScope(
   agentId: AgentId,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  options?: { home?: string }
 ): InstalledInstructions[] {
   const results: InstalledInstructions[] = [];
   const agent = AGENTS[agentId];
 
-  const userConfigDir = getUserConfigDir(agentId);
+  // User-scoped instructions (version-aware when home is provided)
+  const home = options?.home || getEffectiveHome(agentId);
+  const userConfigDir = path.join(home, `.${agentId}`);
   const userPath = path.join(userConfigDir, agent.instructionsFile);
   results.push({
     agentId,

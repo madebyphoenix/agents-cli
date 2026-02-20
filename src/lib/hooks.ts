@@ -226,7 +226,8 @@ export function hookContentMatches(
 
 export function listInstalledHooksWithScope(
   agentId: AgentId,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  options?: { home?: string }
 ): InstalledHook[] {
   const agent = AGENTS[agentId];
   if (!agent.supportsHooks) {
@@ -235,7 +236,9 @@ export function listInstalledHooksWithScope(
 
   const results: InstalledHook[] = [];
 
-  const userDir = getHooksDir(agentId);
+  // User-scoped hooks (version-aware when home is provided)
+  const home = options?.home || getEffectiveHome(agentId);
+  const userDir = path.join(home, `.${agentId}`, agent.hooksDir);
   const userHooks = listHookEntriesFromDir(userDir);
   for (const hook of userHooks) {
     results.push({

@@ -9,6 +9,7 @@ import { checkbox } from '@inquirer/prompts';
 import {
   AGENTS,
   HOOKS_CAPABLE_AGENTS,
+  resolveAgentName,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -25,6 +26,7 @@ import {
   getGlobalDefault,
   syncResourcesToVersion,
   promptAgentVersionSelection,
+  getVersionHomePath,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
 import { isPromptCancelled } from './utils.js';
@@ -33,40 +35,53 @@ export function registerHooksCommands(program: Command): void {
   const hooksCmd = program.command('hooks').description('Manage agent hooks');
 
   hooksCmd
-    .command('list')
-    .description('List installed hooks')
+    .command('list [agent]')
+    .description('List installed hooks. Use agent@version for specific version, agent@default for default only.')
     .option('-a, --agent <agent>', 'Filter by agent')
     .option('-s, --scope <scope>', 'Filter by scope: user, project, or all', 'all')
-    .action(async (options) => {
+    .action(async (agentArg, options) => {
       const spinner = ora({ text: 'Loading...', isSilent: !process.stdout.isTTY }).start();
       const cwd = process.cwd();
 
-      const agents = options.agent
-        ? [options.agent as AgentId]
-        : (Array.from(HOOKS_CAPABLE_AGENTS) as AgentId[]);
+      // Parse agent input - handle agent@version syntax
+      const agentInput = agentArg || options.agent;
+      let agentId: AgentId | null = null;
+      let requestedVersion: string | null = null;
 
-      // Collect all data while spinner is active
-      const agentHooks = agents.map((agentId) => ({
-        agent: AGENTS[agentId],
-        hooks: AGENTS[agentId].supportsHooks
-          ? listInstalledHooksWithScope(agentId, cwd).filter(
-              (h) => options.scope === 'all' || h.scope === options.scope
-            )
-          : null,
-      }));
+      if (agentInput) {
+        const parts = agentInput.split('@');
+        const agentName = parts[0];
+        requestedVersion = parts[1] || null;
 
-      spinner.stop();
-      console.log(chalk.bold('Installed Hooks\n'));
-
-      for (const { agent, hooks } of agentHooks) {
-        const defaultVer = getGlobalDefault(agent.id);
-        const versionStr = defaultVer ? chalk.gray(` (${defaultVer})`) : '';
-
-        if (hooks === null) {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('hooks not supported')}`);
-          console.log();
-          continue;
+        agentId = resolveAgentName(agentName);
+        if (!agentId) {
+          spinner.stop();
+          console.log(chalk.red(`Unknown agent '${agentName}'. Hooks-capable agents: ${Array.from(HOOKS_CAPABLE_AGENTS).join(', ')}`));
+          process.exit(1);
         }
+      }
+
+      // Helper to render hooks for a specific version
+      const renderVersionHooks = (
+        agentId: AgentId,
+        version: string,
+        isDefault: boolean,
+        home: string
+      ) => {
+        const agent = AGENTS[agentId];
+        if (!agent.supportsHooks) {
+          const defaultLabel = isDefault ? ' default' : '';
+          console.log(`  ${chalk.bold(agent.name)} (${version}${defaultLabel}): ${chalk.gray('hooks not supported')}`);
+          console.log();
+          return;
+        }
+
+        const hooks = listInstalledHooksWithScope(agentId, cwd, { home }).filter(
+          (h) => options.scope === 'all' || h.scope === options.scope
+        );
+
+        const defaultLabel = isDefault ? ' default' : '';
+        const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
         if (hooks.length === 0) {
           console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
@@ -91,6 +106,106 @@ export function registerHooksCommands(program: Command): void {
           }
         }
         console.log();
+      };
+
+      spinner.stop();
+
+      // Single agent specified - show versions based on requestedVersion
+      if (agentId) {
+        const agent = AGENTS[agentId];
+        const installedVersions = listInstalledVersions(agentId);
+        const defaultVer = getGlobalDefault(agentId);
+
+        if (installedVersions.length === 0) {
+          // Not version-managed
+          console.log(chalk.bold('Installed Hooks\n'));
+          if (!agent.supportsHooks) {
+            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('hooks not supported')}`);
+          } else {
+            const hooks = listInstalledHooksWithScope(agentId, cwd).filter(
+              (h) => options.scope === 'all' || h.scope === options.scope
+            );
+            if (hooks.length === 0) {
+              console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+            } else {
+              console.log(`  ${chalk.bold(agent.name)}:`);
+              const userHooks = hooks.filter((h) => h.scope === 'user');
+              if (userHooks.length > 0) {
+                console.log(`    ${chalk.gray('User:')}`);
+                for (const hook of userHooks) {
+                  console.log(`      ${chalk.cyan(hook.name)}`);
+                }
+              }
+            }
+          }
+          return;
+        }
+
+        console.log(chalk.bold('Installed Hooks\n'));
+
+        let versionsToShow: string[];
+        if (requestedVersion === 'default') {
+          if (!defaultVer) {
+            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
+            return;
+          }
+          versionsToShow = [defaultVer];
+        } else if (requestedVersion) {
+          if (!installedVersions.includes(requestedVersion)) {
+            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
+            console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
+            return;
+          }
+          versionsToShow = [requestedVersion];
+        } else {
+          versionsToShow = [...installedVersions].sort((a, b) => {
+            if (a === defaultVer) return -1;
+            if (b === defaultVer) return 1;
+            return 0;
+          });
+        }
+
+        for (const version of versionsToShow) {
+          const home = getVersionHomePath(agentId, version);
+          renderVersionHooks(agentId, version, version === defaultVer, home);
+        }
+        return;
+      }
+
+      // No agent specified - show default version for each hooks-capable agent
+      console.log(chalk.bold('Installed Hooks\n'));
+
+      for (const aid of HOOKS_CAPABLE_AGENTS) {
+        const agent = AGENTS[aid];
+        const installedVersions = listInstalledVersions(aid);
+        const defaultVer = getGlobalDefault(aid);
+
+        if (installedVersions.length > 0 && defaultVer) {
+          const home = getVersionHomePath(aid, defaultVer);
+          renderVersionHooks(aid, defaultVer, true, home);
+        } else {
+          // Not version-managed or no default
+          if (!agent.supportsHooks) {
+            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('hooks not supported')}`);
+          } else {
+            const hooks = listInstalledHooksWithScope(aid, cwd).filter(
+              (h) => options.scope === 'all' || h.scope === options.scope
+            );
+            if (hooks.length === 0) {
+              console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+            } else {
+              console.log(`  ${chalk.bold(agent.name)}:`);
+              const userHooks = hooks.filter((h) => h.scope === 'user');
+              if (userHooks.length > 0) {
+                console.log(`    ${chalk.gray('User:')}`);
+                for (const hook of userHooks) {
+                  console.log(`      ${chalk.cyan(hook.name)}`);
+                }
+              }
+            }
+          }
+          console.log();
+        }
       }
     });
 

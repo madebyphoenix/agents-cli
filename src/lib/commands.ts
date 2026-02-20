@@ -315,17 +315,19 @@ function listCommandsFromDir(dir: string, format: 'markdown' | 'toml'): string[]
 
 /**
  * List installed commands with scope information.
+ * Pass options.home to read from a version-managed agent's home directory.
  */
 export function listInstalledCommandsWithScope(
   agentId: AgentId,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  options?: { home?: string }
 ): InstalledCommand[] {
   const agent = AGENTS[agentId];
   const ext = agent.format === 'toml' ? '.toml' : '.md';
   const results: InstalledCommand[] = [];
 
-  // User-scoped commands (version-aware)
-  const home = getEffectiveHome(agentId);
+  // User-scoped commands (version-aware when home is provided)
+  const home = options?.home || getEffectiveHome(agentId);
   const userCommandsDir = path.join(home, `.${agentId}`, agent.commandsSubdir);
   const userCommands = listCommandsFromDir(userCommandsDir, agent.format);
   for (const name of userCommands) {

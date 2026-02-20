@@ -29,6 +29,7 @@ import {
   getGlobalDefault,
   syncResourcesToVersion,
   promptAgentVersionSelection,
+  getVersionHomePath,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
 import { isPromptCancelled } from './utils.js';
@@ -40,63 +41,50 @@ export function registerSkillsCommands(program: Command): void {
 
   skillsCmd
     .command('list [agent]')
-    .description('List installed skills')
+    .description('List installed skills. Use agent@version for specific version, agent@default for default only.')
     .option('-a, --agent <agent>', 'Filter by agent')
     .option('-s, --scope <scope>', 'Filter by scope: user, project, or all', 'all')
     .action(async (agentArg, options) => {
       const spinner = ora({ text: 'Loading...', isSilent: !process.stdout.isTTY }).start();
       const cwd = process.cwd();
 
-      // Resolve agent filter - positional arg takes precedence over -a flag
+      // Parse agent input - handle agent@version syntax
       const agentInput = agentArg || options.agent;
-      let agents: AgentId[];
+      let agentId: AgentId | null = null;
+      let requestedVersion: string | null = null; // null = all versions, 'default' = default only, 'x.y.z' = specific
+
       if (agentInput) {
-        const resolved = resolveAgentName(agentInput);
-        if (!resolved) {
+        const parts = agentInput.split('@');
+        const agentName = parts[0];
+        requestedVersion = parts[1] || null; // null means show all versions
+
+        agentId = resolveAgentName(agentName);
+        if (!agentId) {
           spinner.stop();
-          console.log(chalk.red(`Unknown agent '${agentInput}'. Use ${SKILLS_CAPABLE_AGENTS.join(', ')}`));
+          console.log(chalk.red(`Unknown agent '${agentName}'. Use ${SKILLS_CAPABLE_AGENTS.join(', ')}`));
           process.exit(1);
         }
-        agents = [resolved];
-      } else {
-        agents = SKILLS_CAPABLE_AGENTS;
       }
+
       const showPaths = !!agentInput;
 
       // Get CLI states to determine managed vs unmanaged
       const cliStates = await getAllCliStates();
 
-      // Separate version-managed from globally-installed agents
-      const versionManaged: AgentId[] = [];
-      const globallyInstalled: AgentId[] = [];
-
-      for (const agentId of agents) {
-        const versions = listInstalledVersions(agentId);
-        const cliState = cliStates[agentId];
-
-        if (versions.length > 0) {
-          versionManaged.push(agentId);
-        } else if (cliState?.installed) {
-          globallyInstalled.push(agentId);
-        }
-      }
-
-      // Helper to render skills for an agent
-      const renderAgentSkills = (agentId: AgentId, showVersion: boolean = false) => {
+      // Helper to render skills for a specific version
+      const renderVersionSkills = (
+        agentId: AgentId,
+        version: string,
+        isDefault: boolean,
+        home: string
+      ) => {
         const agent = AGENTS[agentId];
-        if (!agent.capabilities.skills) {
-          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('skills not supported')}`);
-          console.log();
-          return;
-        }
-
-        const skills = listInstalledSkillsWithScope(agentId, cwd).filter(
+        const skills = listInstalledSkillsWithScope(agentId, cwd, { home }).filter(
           (s) => options.scope === 'all' || s.scope === options.scope
         );
 
-        // Get version info for managed agents
-        const defaultVer = showVersion ? getGlobalDefault(agentId) : null;
-        const versionStr = defaultVer ? chalk.gray(` (${defaultVer})`) : '';
+        const defaultLabel = isDefault ? ' default' : '';
+        const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
         if (skills.length === 0) {
           console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
@@ -129,25 +117,166 @@ export function registerSkillsCommands(program: Command): void {
         console.log();
       };
 
+      // Helper to render skills for an agent (default version only, for multi-agent view)
+      const renderAgentSkillsDefault = (agentId: AgentId) => {
+        const agent = AGENTS[agentId];
+        if (!agent.capabilities.skills) {
+          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('skills not supported')}`);
+          console.log();
+          return;
+        }
+
+        const defaultVer = getGlobalDefault(agentId);
+        if (defaultVer) {
+          const home = getVersionHomePath(agentId, defaultVer);
+          renderVersionSkills(agentId, defaultVer, true, home);
+        } else {
+          // No default set, show from effective home
+          const skills = listInstalledSkillsWithScope(agentId, cwd).filter(
+            (s) => options.scope === 'all' || s.scope === options.scope
+          );
+          if (skills.length === 0) {
+            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+          } else {
+            console.log(`  ${chalk.bold(agent.name)}:`);
+            const userSkills = skills.filter((s) => s.scope === 'user');
+            if (userSkills.length > 0) {
+              console.log(`    ${chalk.gray('User:')}`);
+              for (const skill of userSkills) {
+                const desc = skill.metadata.description ? ` - ${chalk.gray(skill.metadata.description)}` : '';
+                const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
+                console.log(`      ${chalk.cyan(skill.name)}${desc}${ruleInfo}`);
+              }
+            }
+          }
+          console.log();
+        }
+      };
+
       spinner.stop();
 
-      // Show version-managed agents first
+      // Single agent specified - show versions based on requestedVersion
+      if (agentId) {
+        const agent = AGENTS[agentId];
+        if (!agent.capabilities.skills) {
+          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('skills not supported')}`);
+          return;
+        }
+
+        const installedVersions = listInstalledVersions(agentId);
+        const defaultVer = getGlobalDefault(agentId);
+
+        if (installedVersions.length === 0) {
+          // Not version-managed, check if globally installed
+          const cliState = cliStates[agentId];
+          if (cliState?.installed) {
+            console.log(chalk.bold('Not Managed by Agents CLI\n'));
+            const skills = listInstalledSkillsWithScope(agentId, cwd).filter(
+              (s) => options.scope === 'all' || s.scope === options.scope
+            );
+            if (skills.length === 0) {
+              console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+            } else {
+              console.log(`  ${chalk.bold(agent.name)}:`);
+              const userSkills = skills.filter((s) => s.scope === 'user');
+              if (userSkills.length > 0) {
+                console.log(`    ${chalk.gray('User:')}`);
+                for (const skill of userSkills) {
+                  const desc = skill.metadata.description ? ` - ${chalk.gray(skill.metadata.description)}` : '';
+                  const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
+                  console.log(`      ${chalk.cyan(skill.name)}${desc}${ruleInfo}`);
+                  if (showPaths) console.log(chalk.gray(`        ${skill.path}`));
+                }
+              }
+            }
+          } else {
+            console.log(chalk.gray(`  ${agent.name} is not installed.`));
+          }
+          return;
+        }
+
+        console.log(chalk.bold('Installed Agent Skills\n'));
+
+        // Determine which versions to show
+        let versionsToShow: string[];
+        if (requestedVersion === 'default') {
+          // Show only default version
+          if (!defaultVer) {
+            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
+            return;
+          }
+          versionsToShow = [defaultVer];
+        } else if (requestedVersion) {
+          // Show specific version
+          if (!installedVersions.includes(requestedVersion)) {
+            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
+            console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
+            return;
+          }
+          versionsToShow = [requestedVersion];
+        } else {
+          // Show all versions, default first
+          versionsToShow = [...installedVersions].sort((a, b) => {
+            if (a === defaultVer) return -1;
+            if (b === defaultVer) return 1;
+            return 0;
+          });
+        }
+
+        for (const version of versionsToShow) {
+          const home = getVersionHomePath(agentId, version);
+          renderVersionSkills(agentId, version, version === defaultVer, home);
+        }
+        return;
+      }
+
+      // No agent specified - show default version for each agent
+      const versionManaged: AgentId[] = [];
+      const globallyInstalled: AgentId[] = [];
+
+      for (const aid of SKILLS_CAPABLE_AGENTS) {
+        const versions = listInstalledVersions(aid);
+        const cliState = cliStates[aid];
+
+        if (versions.length > 0) {
+          versionManaged.push(aid);
+        } else if (cliState?.installed) {
+          globallyInstalled.push(aid);
+        }
+      }
+
       if (versionManaged.length > 0) {
         console.log(chalk.bold('Installed Agent Skills\n'));
-        for (const agentId of versionManaged) {
-          renderAgentSkills(agentId, true);
+        for (const aid of versionManaged) {
+          renderAgentSkillsDefault(aid);
         }
       }
 
-      // Show globally installed (not managed) agents
       if (globallyInstalled.length > 0) {
         console.log(chalk.bold('Not Managed by Agents CLI\n'));
-        for (const agentId of globallyInstalled) {
-          renderAgentSkills(agentId, false);
+        for (const aid of globallyInstalled) {
+          const agent = AGENTS[aid];
+          const skills = listInstalledSkillsWithScope(aid, cwd).filter(
+            (s) => options.scope === 'all' || s.scope === options.scope
+          );
+          if (skills.length === 0) {
+            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+          } else {
+            console.log(`  ${chalk.bold(agent.name)}:`);
+            const userSkills = skills.filter((s) => s.scope === 'user');
+            if (userSkills.length > 0) {
+              console.log(`    ${chalk.gray('User:')}`);
+              for (const skill of userSkills) {
+                const desc = skill.metadata.description ? ` - ${chalk.gray(skill.metadata.description)}` : '';
+                const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
+                console.log(`      ${chalk.cyan(skill.name)}${desc}${ruleInfo}`);
+              }
+            }
+          }
+          console.log();
         }
       }
 
-      // No agents with skills
       if (versionManaged.length === 0 && globallyInstalled.length === 0) {
         console.log(chalk.gray('  No agents with skills installed.'));
         console.log();

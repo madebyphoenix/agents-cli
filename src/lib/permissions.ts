@@ -357,9 +357,14 @@ function stripJsonComments(content: string): string {
 /**
  * Read Claude's current permissions from settings.json.
  */
-export function readClaudePermissions(scope: 'user' | 'project' = 'user', cwd?: string): ClaudePermissions | null {
+export function readClaudePermissions(
+  scope: 'user' | 'project' = 'user',
+  cwd?: string,
+  options?: { home?: string }
+): ClaudePermissions | null {
+  const home = options?.home || HOME;
   const configPath = scope === 'user'
-    ? path.join(HOME, '.claude', 'settings.json')
+    ? path.join(home, '.claude', 'settings.json')
     : path.join(cwd || process.cwd(), '.claude', 'settings.json');
 
   if (!fs.existsSync(configPath)) {
@@ -386,9 +391,14 @@ export function readClaudePermissions(scope: 'user' | 'project' = 'user', cwd?: 
 /**
  * Read OpenCode's current permissions from opencode.jsonc.
  */
-export function readOpenCodePermissions(scope: 'user' | 'project' = 'user', cwd?: string): OpenCodePermissions | null {
+export function readOpenCodePermissions(
+  scope: 'user' | 'project' = 'user',
+  cwd?: string,
+  options?: { home?: string }
+): OpenCodePermissions | null {
+  const home = options?.home || HOME;
   const configPath = scope === 'user'
-    ? path.join(HOME, '.opencode', 'opencode.jsonc')
+    ? path.join(home, '.opencode', 'opencode.jsonc')
     : path.join(cwd || process.cwd(), '.opencode', 'opencode.jsonc');
 
   if (!fs.existsSync(configPath)) {
@@ -414,9 +424,14 @@ export function readOpenCodePermissions(scope: 'user' | 'project' = 'user', cwd?
 /**
  * Read Codex's current permissions from config.toml.
  */
-export function readCodexPermissions(scope: 'user' | 'project' = 'user', cwd?: string): CodexPermissions | null {
+export function readCodexPermissions(
+  scope: 'user' | 'project' = 'user',
+  cwd?: string,
+  options?: { home?: string }
+): CodexPermissions | null {
+  const home = options?.home || HOME;
   const configPath = scope === 'user'
-    ? path.join(HOME, '.codex', 'config.toml')
+    ? path.join(home, '.codex', 'config.toml')
     : path.join(cwd || process.cwd(), '.codex', 'config.toml');
 
   if (!fs.existsSync(configPath)) {
@@ -455,15 +470,16 @@ export function readCodexPermissions(scope: 'user' | 'project' = 'user', cwd?: s
 export function readAgentPermissions(
   agentId: AgentId,
   scope: 'user' | 'project' = 'user',
-  cwd?: string
+  cwd?: string,
+  options?: { home?: string }
 ): ClaudePermissions | OpenCodePermissions | CodexPermissions | null {
   switch (agentId) {
     case 'claude':
-      return readClaudePermissions(scope, cwd);
+      return readClaudePermissions(scope, cwd, options);
     case 'opencode':
-      return readOpenCodePermissions(scope, cwd);
+      return readOpenCodePermissions(scope, cwd, options);
     case 'codex':
-      return readCodexPermissions(scope, cwd);
+      return readCodexPermissions(scope, cwd, options);
     default:
       return null;
   }
