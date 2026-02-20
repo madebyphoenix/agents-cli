@@ -165,6 +165,8 @@ export function discoverSkillsFromRepo(repoPath: string): DiscoveredSkill[] {
       const entries = fs.readdirSync(searchPath, { withFileTypes: true });
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
+        // Skip hidden directories (e.g., .system)
+        if (entry.name.startsWith('.')) continue;
 
         const skillDir = path.join(searchPath, entry.name);
         const skillMdPath = path.join(skillDir, 'SKILL.md');
@@ -380,6 +382,8 @@ export function listInstalledSkills(): Map<string, DiscoveredSkill> {
     const entries = fs.readdirSync(centralDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      // Skip hidden directories (e.g., .system)
+      if (entry.name.startsWith('.')) continue;
 
       const skillDir = path.join(centralDir, entry.name);
       const metadata = parseSkillMetadata(skillDir);
@@ -417,6 +421,9 @@ export function listInstalledSkillsWithScope(
     try {
       const entries = fs.readdirSync(userSkillsDir, { withFileTypes: true });
       for (const entry of entries) {
+        // Skip hidden directories (e.g., .system)
+        if (entry.name.startsWith('.')) continue;
+
         const skillDir = path.join(userSkillsDir, entry.name);
 
         // Handle both directories and symlinks to directories
@@ -462,6 +469,9 @@ export function listInstalledSkillsWithScope(
     try {
       const entries = fs.readdirSync(projectSkillsDir, { withFileTypes: true });
       for (const entry of entries) {
+        // Skip hidden directories (e.g., .system)
+        if (entry.name.startsWith('.')) continue;
+
         const skillDir = path.join(projectSkillsDir, entry.name);
 
         // Handle both directories and symlinks to directories
