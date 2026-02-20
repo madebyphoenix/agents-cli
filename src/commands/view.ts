@@ -318,7 +318,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
       ...r,
       syncState: getSyncState(r.name, 'skills', skillsSync),
     })),
-    mcp: resources.mcp.map(r => ({ name: r.name })),
+    mcp: resources.mcp.map(r => ({ name: r.name, syncState: 'synced' as SyncState })),
     memory: resources.memory.map(r => ({
       ...r,
       syncState: getSyncState(r.name, 'memory', memorySync),
@@ -380,7 +380,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
   // Show legend at the end if git repo exists
   if (hasGitRepo) {
     console.log();
-    console.log(chalk.gray('Legend:'), chalk.green('Synced'), chalk.blue('New'), chalk.yellow('Modified'), chalk.red('Deleted'));
+    console.log(chalk.gray('Legend:'), chalk.green('Tracked'), chalk.blue('Local-only'), chalk.yellow('Modified'), chalk.red('Deleted'));
   }
 
   console.log('');
