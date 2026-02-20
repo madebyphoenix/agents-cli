@@ -9,6 +9,7 @@ import { confirm, checkbox } from '@inquirer/prompts';
 import {
   AGENTS,
   resolveAgentName,
+  formatAgentError,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -126,7 +127,7 @@ export function registerPermissionsCommands(program: Command): void {
 
         const agentId = resolveAgentName(agentName);
         if (!agentId) {
-          console.log(chalk.red(`Unknown agent '${agentName}'. Use ${PERMISSIONS_CAPABLE_AGENTS.join(', ')}`));
+          console.log(chalk.red(formatAgentError(agentName, PERMISSIONS_CAPABLE_AGENTS)));
           process.exit(1);
         }
 

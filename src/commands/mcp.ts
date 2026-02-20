@@ -9,6 +9,7 @@ import {
   ALL_AGENT_IDS,
   getAllCliStates,
   resolveAgentName,
+  formatAgentError,
   registerMcp,
   unregisterMcp,
   promoteMcpToUser,
@@ -47,7 +48,7 @@ export function registerMcpCommands(program: Command): void {
         agentId = resolveAgentName(agentName);
         if (!agentId) {
           spinner.stop();
-          console.log(chalk.red(`Unknown agent '${agentName}'. Use ${ALL_AGENT_IDS.join(', ')}`));
+          console.log(chalk.red(formatAgentError(agentName)));
           process.exit(1);
         }
       }
@@ -88,7 +89,7 @@ export function registerMcpCommands(program: Command): void {
           if (userMcps.length > 0 && (options.scope === 'all' || options.scope === 'user')) {
             console.log(`    ${chalk.gray('User:')}`);
             for (const mcp of userMcps) {
-              console.log(`      ${chalk.cyan(mcp.name)}`);
+              console.log(`      ${chalk.cyan(mcp.name.padEnd(20))}`);
               if (showPaths && mcp.command) console.log(chalk.gray(`        ${mcp.command}`));
             }
           }
@@ -96,7 +97,7 @@ export function registerMcpCommands(program: Command): void {
           if (projectMcps.length > 0 && (options.scope === 'all' || options.scope === 'project')) {
             console.log(`    ${chalk.gray('Project:')}`);
             for (const mcp of projectMcps) {
-              console.log(`      ${chalk.yellow(mcp.name)}`);
+              console.log(`      ${chalk.yellow(mcp.name.padEnd(20))}`);
               if (showPaths && mcp.command) console.log(chalk.gray(`        ${mcp.command}`));
             }
           }
@@ -135,7 +136,7 @@ export function registerMcpCommands(program: Command): void {
               if (userMcps.length > 0) {
                 console.log(`    ${chalk.gray('User:')}`);
                 for (const mcp of userMcps) {
-                  console.log(`      ${chalk.cyan(mcp.name)}`);
+                  console.log(`      ${chalk.cyan(mcp.name.padEnd(20))}`);
                   if (showPaths && mcp.command) console.log(chalk.gray(`        ${mcp.command}`));
                 }
               }

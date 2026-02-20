@@ -10,6 +10,7 @@ import {
   AGENTS,
   HOOKS_CAPABLE_AGENTS,
   resolveAgentName,
+  formatAgentError,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -56,7 +57,7 @@ export function registerHooksCommands(program: Command): void {
         agentId = resolveAgentName(agentName);
         if (!agentId) {
           spinner.stop();
-          console.log(chalk.red(`Unknown agent '${agentName}'. Hooks-capable agents: ${Array.from(HOOKS_CAPABLE_AGENTS).join(', ')}`));
+          console.log(chalk.red(formatAgentError(agentName, [...HOOKS_CAPABLE_AGENTS])));
           process.exit(1);
         }
       }
@@ -94,14 +95,14 @@ export function registerHooksCommands(program: Command): void {
           if (userHooks.length > 0 && (options.scope === 'all' || options.scope === 'user')) {
             console.log(`    ${chalk.gray('User:')}`);
             for (const hook of userHooks) {
-              console.log(`      ${chalk.cyan(hook.name)}`);
+              console.log(`      ${chalk.cyan(hook.name.padEnd(20))}`);
             }
           }
 
           if (projectHooks.length > 0 && (options.scope === 'all' || options.scope === 'project')) {
             console.log(`    ${chalk.gray('Project:')}`);
             for (const hook of projectHooks) {
-              console.log(`      ${chalk.yellow(hook.name)}`);
+              console.log(`      ${chalk.yellow(hook.name.padEnd(20))}`);
             }
           }
         }
@@ -133,7 +134,7 @@ export function registerHooksCommands(program: Command): void {
               if (userHooks.length > 0) {
                 console.log(`    ${chalk.gray('User:')}`);
                 for (const hook of userHooks) {
-                  console.log(`      ${chalk.cyan(hook.name)}`);
+                  console.log(`      ${chalk.cyan(hook.name.padEnd(20))}`);
                 }
               }
             }
@@ -199,7 +200,7 @@ export function registerHooksCommands(program: Command): void {
               if (userHooks.length > 0) {
                 console.log(`    ${chalk.gray('User:')}`);
                 for (const hook of userHooks) {
-                  console.log(`      ${chalk.cyan(hook.name)}`);
+                  console.log(`      ${chalk.cyan(hook.name.padEnd(20))}`);
                 }
               }
             }

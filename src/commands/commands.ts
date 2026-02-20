@@ -11,6 +11,7 @@ import {
   ALL_AGENT_IDS,
   getAllCliStates,
   resolveAgentName,
+  formatAgentError,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -60,7 +61,7 @@ export function registerCommandsCommands(program: Command): void {
         agentId = resolveAgentName(agentName);
         if (!agentId) {
           spinner.stop();
-          console.log(chalk.red(`Unknown agent '${agentName}'. Use ${ALL_AGENT_IDS.join(', ')}`));
+          console.log(chalk.red(formatAgentError(agentName)));
           process.exit(1);
         }
       }

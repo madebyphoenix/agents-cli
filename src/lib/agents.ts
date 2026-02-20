@@ -769,3 +769,7 @@ export function resolveAgentName(input: string): AgentId | null {
 export function isAgentName(input: string): boolean {
   return resolveAgentName(input) !== null;
 }
+
+export function formatAgentError(agentName: string, validAgents: AgentId[] = ALL_AGENT_IDS): string {
+  return `Unknown agent '${agentName}'. Valid agents: ${validAgents.join(', ')}`;
+}

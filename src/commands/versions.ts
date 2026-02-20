@@ -10,6 +10,8 @@ import {
   ALL_AGENT_IDS,
   getAllCliStates,
   getAccountEmail,
+  resolveAgentName,
+  formatAgentError,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
@@ -428,25 +430,20 @@ export function registerVersionsCommands(program: Command): void {
 
   program
     .command('list [agent]')
-    .description('List installed agent CLI versions')
+    .description('List installed agent CLI versions. Use agent@version to filter to specific version.')
     .action(async (agentArg?: string) => {
       // Resolve agent filter before spinner so we can personalize the message
       let filterAgentId: AgentId | undefined;
+      let requestedVersion: string | null = null;
+
       if (agentArg) {
-        const agentMap: Record<string, AgentId> = {
-          claude: 'claude',
-          'claude-code': 'claude',
-          codex: 'codex',
-          gemini: 'gemini',
-          cursor: 'cursor',
-          opencode: 'opencode',
-          openclaw: 'openclaw',
-          claw: 'openclaw',
-        };
-        filterAgentId = agentMap[agentArg.toLowerCase()];
+        const parts = agentArg.split('@');
+        const agentName = parts[0];
+        requestedVersion = parts[1] || null;
+
+        filterAgentId = resolveAgentName(agentName) || undefined;
         if (!filterAgentId) {
-          console.log(chalk.red(`Unknown agent: ${agentArg}`));
-          console.log(chalk.gray(`Valid agents: claude, codex, gemini, cursor, opencode, openclaw`));
+          console.log(chalk.red(formatAgentError(agentName)));
           process.exit(1);
         }
       }
@@ -454,7 +451,7 @@ export function registerVersionsCommands(program: Command): void {
       const spinnerText = filterAgentId
         ? `Checking ${AGENTS[filterAgentId].name} agents...`
         : 'Checking installed agents...';
-      const spinner = ora(spinnerText).start();
+      const spinner = ora({ text: spinnerText, isSilent: !process.stdout.isTTY }).start();
       const cliStates = await getAllCliStates();
       spinner.stop();
 
@@ -522,11 +519,21 @@ export function registerVersionsCommands(program: Command): void {
           console.log(`  ${chalk.bold(agent.name)}`);
 
           // Sort versions with default first, then by semver descending
-          const sortedVersions = [...versions].sort((a, b) => {
+          let sortedVersions = [...versions].sort((a, b) => {
             if (a === globalDefault) return -1;
             if (b === globalDefault) return 1;
             return compareVersions(b, a); // descending for non-default
           });
+
+          // Filter to specific version if requested
+          if (requestedVersion) {
+            sortedVersions = sortedVersions.filter((v) => v === requestedVersion);
+            if (sortedVersions.length === 0) {
+              console.log(chalk.gray(`    Version ${requestedVersion} not installed`));
+              console.log();
+              continue;
+            }
+          }
           const maxVerLabel = Math.max(...sortedVersions.map((v) => (v === globalDefault ? `${v} (default)` : v).length));
           for (const version of sortedVersions) {
             const isDefault = version === globalDefault;

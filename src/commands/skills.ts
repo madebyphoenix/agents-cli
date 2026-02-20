@@ -11,6 +11,7 @@ import {
   SKILLS_CAPABLE_AGENTS,
   resolveAgentName,
   getAllCliStates,
+  formatAgentError,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -61,7 +62,7 @@ export function registerSkillsCommands(program: Command): void {
         agentId = resolveAgentName(agentName);
         if (!agentId) {
           spinner.stop();
-          console.log(chalk.red(`Unknown agent '${agentName}'. Use ${SKILLS_CAPABLE_AGENTS.join(', ')}`));
+          console.log(chalk.red(formatAgentError(agentName, SKILLS_CAPABLE_AGENTS)));
           process.exit(1);
         }
       }
@@ -97,9 +98,9 @@ export function registerSkillsCommands(program: Command): void {
           if (userSkills.length > 0 && (options.scope === 'all' || options.scope === 'user')) {
             console.log(`    ${chalk.gray('User:')}`);
             for (const skill of userSkills) {
-              const desc = skill.metadata.description ? ` - ${chalk.gray(skill.metadata.description)}` : '';
+              const desc = skill.metadata.description ? ` ${chalk.gray(skill.metadata.description)}` : '';
               const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
-              console.log(`      ${chalk.cyan(skill.name)}${desc}${ruleInfo}`);
+              console.log(`      ${chalk.cyan(skill.name.padEnd(20))}${desc}${ruleInfo}`);
               if (showPaths) console.log(chalk.gray(`        ${skill.path}`));
             }
           }
@@ -107,9 +108,9 @@ export function registerSkillsCommands(program: Command): void {
           if (projectSkills.length > 0 && (options.scope === 'all' || options.scope === 'project')) {
             console.log(`    ${chalk.gray('Project:')}`);
             for (const skill of projectSkills) {
-              const desc = skill.metadata.description ? ` - ${chalk.gray(skill.metadata.description)}` : '';
+              const desc = skill.metadata.description ? ` ${chalk.gray(skill.metadata.description)}` : '';
               const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
-              console.log(`      ${chalk.yellow(skill.name)}${desc}${ruleInfo}`);
+              console.log(`      ${chalk.yellow(skill.name.padEnd(20))}${desc}${ruleInfo}`);
               if (showPaths) console.log(chalk.gray(`        ${skill.path}`));
             }
           }
@@ -143,9 +144,9 @@ export function registerSkillsCommands(program: Command): void {
             if (userSkills.length > 0) {
               console.log(`    ${chalk.gray('User:')}`);
               for (const skill of userSkills) {
-                const desc = skill.metadata.description ? ` - ${chalk.gray(skill.metadata.description)}` : '';
+                const desc = skill.metadata.description ? ` ${chalk.gray(skill.metadata.description)}` : '';
                 const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
-                console.log(`      ${chalk.cyan(skill.name)}${desc}${ruleInfo}`);
+                console.log(`      ${chalk.cyan(skill.name.padEnd(20))}${desc}${ruleInfo}`);
               }
             }
           }
@@ -267,9 +268,9 @@ export function registerSkillsCommands(program: Command): void {
             if (userSkills.length > 0) {
               console.log(`    ${chalk.gray('User:')}`);
               for (const skill of userSkills) {
-                const desc = skill.metadata.description ? ` - ${chalk.gray(skill.metadata.description)}` : '';
+                const desc = skill.metadata.description ? ` ${chalk.gray(skill.metadata.description)}` : '';
                 const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
-                console.log(`      ${chalk.cyan(skill.name)}${desc}${ruleInfo}`);
+                console.log(`      ${chalk.cyan(skill.name.padEnd(20))}${desc}${ruleInfo}`);
               }
             }
           }

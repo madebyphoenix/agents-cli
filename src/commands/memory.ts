@@ -10,6 +10,7 @@ import {
   AGENTS,
   ALL_AGENT_IDS,
   resolveAgentName,
+  formatAgentError,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -58,7 +59,7 @@ export function registerMemoryCommands(program: Command): void {
 
         agentId = resolveAgentName(agentName);
         if (!agentId) {
-          console.log(chalk.red(`Unknown agent '${agentName}'. Use ${ALL_AGENT_IDS.join(', ')}`));
+          console.log(chalk.red(formatAgentError(agentName)));
           process.exit(1);
         }
       }
@@ -352,16 +353,21 @@ export function registerMemoryCommands(program: Command): void {
   memoryCmd
     .command('view [agent]')
     .alias('show')
-    .description('Show memory content for an agent')
+    .description('Show memory content for an agent. Use agent@version for specific version.')
     .option('-s, --scope <scope>', 'Scope: user or project', 'user')
     .action(async (agentArg?: string, options?: { scope?: string }) => {
       const cwd = process.cwd();
       let agentId: AgentId | undefined;
+      let requestedVersion: string | null = null;
 
       if (agentArg) {
-        agentId = resolveAgentName(agentArg) || undefined;
+        const parts = agentArg.split('@');
+        const agentName = parts[0];
+        requestedVersion = parts[1] || null;
+
+        agentId = resolveAgentName(agentName) || undefined;
         if (!agentId) {
-          console.log(chalk.red(`Unknown agent: ${agentArg}`));
+          console.log(chalk.red(formatAgentError(agentName)));
           process.exit(1);
         }
       } else {
@@ -377,6 +383,27 @@ export function registerMemoryCommands(program: Command): void {
       }
 
       const scope = (options?.scope || 'user') as 'user' | 'project';
+
+      // Handle version-specific view
+      if (requestedVersion && scope === 'user') {
+        const installedVersions = listInstalledVersions(agentId);
+        if (!installedVersions.includes(requestedVersion)) {
+          console.log(chalk.red(`Version ${requestedVersion} not installed for ${AGENTS[agentId].name}`));
+          console.log(chalk.gray(`Installed versions: ${installedVersions.join(', ') || 'none'}`));
+          return;
+        }
+        const home = getVersionHomePath(agentId, requestedVersion);
+        const memPath = path.join(home, `.${agentId}`, AGENTS[agentId].instructionsFile);
+        if (!fs.existsSync(memPath)) {
+          console.log(chalk.yellow(`No user memory found for ${AGENTS[agentId].name}@${requestedVersion}`));
+          return;
+        }
+        const content = fs.readFileSync(memPath, 'utf-8');
+        console.log(chalk.bold(`\n${AGENTS[agentId].name}@${requestedVersion} Memory (${scope}):\n`));
+        console.log(content);
+        return;
+      }
+
       const content = getInstructionsContent(agentId, scope, cwd);
 
       if (!content) {
@@ -390,14 +417,40 @@ export function registerMemoryCommands(program: Command): void {
 
   memoryCmd
     .command('push <agent>')
-    .description('Promote project memory to user scope')
+    .description('Promote project memory to user scope. Use agent@version for specific version.')
     .action((agentArg: string) => {
       const cwd = process.cwd();
-      const agentId = resolveAgentName(agentArg);
+      const parts = agentArg.split('@');
+      const agentName = parts[0];
+      const requestedVersion = parts[1] || null;
 
+      const agentId = resolveAgentName(agentName);
       if (!agentId) {
-        console.log(chalk.red(`Unknown agent: ${agentArg}`));
+        console.log(chalk.red(formatAgentError(agentName)));
         process.exit(1);
+      }
+
+      // Handle version-specific push
+      if (requestedVersion) {
+        const installedVersions = listInstalledVersions(agentId);
+        if (!installedVersions.includes(requestedVersion)) {
+          console.log(chalk.red(`Version ${requestedVersion} not installed for ${AGENTS[agentId].name}`));
+          console.log(chalk.gray(`Installed versions: ${installedVersions.join(', ') || 'none'}`));
+          process.exit(1);
+        }
+        const home = getVersionHomePath(agentId, requestedVersion);
+        const agent = AGENTS[agentId];
+        const projectPath = path.join(cwd, `.${agentId}`, agent.instructionsFile);
+        const userPath = path.join(home, `.${agentId}`, agent.instructionsFile);
+
+        if (!fs.existsSync(projectPath)) {
+          console.log(chalk.red(`No project memory found for ${agent.name}`));
+          process.exit(1);
+        }
+        fs.mkdirSync(path.dirname(userPath), { recursive: true });
+        fs.copyFileSync(projectPath, userPath);
+        console.log(chalk.green(`Pushed ${agent.instructionsFile} to ${agent.name}@${requestedVersion} user scope`));
+        return;
       }
 
       const result = promoteInstructionsToUser(agentId, cwd);
@@ -410,13 +463,37 @@ export function registerMemoryCommands(program: Command): void {
 
   memoryCmd
     .command('remove <agent>')
-    .description('Remove user memory for an agent')
+    .description('Remove user memory for an agent. Use agent@version for specific version.')
     .action((agentArg: string) => {
-      const agentId = resolveAgentName(agentArg);
+      const parts = agentArg.split('@');
+      const agentName = parts[0];
+      const requestedVersion = parts[1] || null;
 
+      const agentId = resolveAgentName(agentName);
       if (!agentId) {
-        console.log(chalk.red(`Unknown agent: ${agentArg}`));
+        console.log(chalk.red(formatAgentError(agentName)));
         process.exit(1);
+      }
+
+      // Handle version-specific remove
+      if (requestedVersion) {
+        const installedVersions = listInstalledVersions(agentId);
+        if (!installedVersions.includes(requestedVersion)) {
+          console.log(chalk.red(`Version ${requestedVersion} not installed for ${AGENTS[agentId].name}`));
+          console.log(chalk.gray(`Installed versions: ${installedVersions.join(', ') || 'none'}`));
+          process.exit(1);
+        }
+        const home = getVersionHomePath(agentId, requestedVersion);
+        const agent = AGENTS[agentId];
+        const memPath = path.join(home, `.${agentId}`, agent.instructionsFile);
+
+        if (fs.existsSync(memPath)) {
+          fs.unlinkSync(memPath);
+          console.log(chalk.green(`Removed ${agent.instructionsFile} from ${agent.name}@${requestedVersion}`));
+        } else {
+          console.log(chalk.yellow(`No memory file found for ${agent.name}@${requestedVersion}`));
+        }
+        return;
       }
 
       const result = uninstallInstructions(agentId);
