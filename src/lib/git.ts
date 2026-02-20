@@ -1,7 +1,7 @@
 import simpleGit, { SimpleGit } from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getRepoLocalPath, getPackageLocalPath } from './state.js';
+import { getPackageLocalPath } from './state.js';
 
 export interface GitSource {
   type: 'github' | 'url' | 'local';
@@ -192,7 +192,7 @@ export async function cloneRepo(source: string): Promise<{
     };
   }
 
-  const localPath = getRepoLocalPath(source);
+  const localPath = getPackageLocalPath(source);
   const result = await cloneOrPull(parsed, localPath);
 
   return {
@@ -410,17 +410,82 @@ export async function cloneIntoExisting(
 }
 
 /**
- * Pull changes in an existing repo.
+ * Check if the repo's origin points to the system repo.
  */
-export async function pullRepo(dir: string): Promise<{ success: boolean; commit: string; error?: string }> {
+export async function isSystemRepoOrigin(dir: string): Promise<boolean> {
   try {
     const git = simpleGit(dir);
+    const remotes = await git.getRemotes(true);
+    const origin = remotes.find(r => r.name === 'origin');
+    if (!origin?.refs?.fetch) return false;
+
+    // Check if it's muqsitnawaz/.agents
+    const url = origin.refs.fetch.toLowerCase();
+    return url.includes('muqsitnawaz/.agents') || url.includes('muqsitnawaz/agents');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if repo has uncommitted changes (including untracked files).
+ */
+export async function hasLocalChanges(dir: string): Promise<boolean> {
+  try {
+    const git = simpleGit(dir);
+    const status = await git.status();
+    return !status.isClean();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pull changes in an existing repo.
+ * Handles untracked files by stashing (for system repo) or committing (for user's repo).
+ */
+export async function pullRepo(dir: string): Promise<{ success: boolean; commit: string; error?: string; stashed?: boolean }> {
+  try {
+    const git = simpleGit(dir);
+    const status = await git.status();
+    const hasChanges = !status.isClean();
+    const isSystemRepo = await isSystemRepoOrigin(dir);
+    let stashed = false;
+
+    if (hasChanges) {
+      if (isSystemRepo) {
+        // System repo: stash changes (including untracked) before pull
+        await git.stash(['push', '-u', '-m', 'agents-cli: auto-stash before pull']);
+        stashed = true;
+      } else {
+        // User's repo: commit changes before pull so we can merge
+        await git.add('-A');
+        await git.commit('Local changes before pull', { '--allow-empty': null });
+      }
+    }
+
     await git.fetch();
     await git.pull();
+
+    // Restore stashed changes
+    if (stashed) {
+      try {
+        await git.stash(['pop']);
+      } catch (stashErr) {
+        // Stash pop failed - likely conflicts
+        return {
+          success: true,
+          commit: (await git.log({ maxCount: 1 })).latest?.hash.slice(0, 8) || 'unknown',
+          error: `Pulled successfully but stash pop had conflicts. Run 'cd ~/.agents && git stash pop' to resolve.`,
+        };
+      }
+    }
+
     const log = await git.log({ maxCount: 1 });
     return {
       success: true,
       commit: log.latest?.hash.slice(0, 8) || 'unknown',
+      stashed,
     };
   } catch (err) {
     return { success: false, commit: '', error: (err as Error).message };

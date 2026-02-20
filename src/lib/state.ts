@@ -2,8 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as yaml from 'yaml';
-import type { Meta, RepoConfig, RepoName } from './types.js';
-import { REPO_PRIORITIES, DEFAULT_SYSTEM_REPO } from './types.js';
+import type { Meta } from './types.js';
 
 const HOME = os.homedir();
 const AGENTS_DIR = path.join(HOME, '.agents');
@@ -15,7 +14,6 @@ const MEMORY_DIR = path.join(AGENTS_DIR, 'memory');
 const INSTRUCTIONS_FILE = path.join(AGENTS_DIR, 'instructions.md');
 const MCP_CONFIG_FILE = path.join(AGENTS_DIR, 'mcp.json');
 const PACKAGES_DIR = path.join(AGENTS_DIR, 'packages');
-const REPOS_DIR = path.join(AGENTS_DIR, 'repos');
 const JOBS_DIR = path.join(AGENTS_DIR, 'jobs');
 const RUNS_DIR = path.join(AGENTS_DIR, 'runs');
 const DRIVES_DIR = path.join(AGENTS_DIR, 'drives');
@@ -36,10 +34,6 @@ export function getAgentsDir(): string {
 
 export function getPackagesDir(): string {
   return PACKAGES_DIR;
-}
-
-export function getReposDir(): string {
-  return REPOS_DIR;
 }
 
 export function getJobsDir(): string {
@@ -100,9 +94,6 @@ export function ensureAgentsDir(): void {
   }
   if (!fs.existsSync(PACKAGES_DIR)) {
     fs.mkdirSync(PACKAGES_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(REPOS_DIR)) {
-    fs.mkdirSync(REPOS_DIR, { recursive: true });
   }
   if (!fs.existsSync(JOBS_DIR)) {
     fs.mkdirSync(JOBS_DIR, { recursive: true });
@@ -195,9 +186,7 @@ export function ensureGitignore(): void {
 }
 
 export function createDefaultMeta(): Meta {
-  return {
-    repos: {},
-  };
+  return {};
 }
 
 export function readMeta(): Meta {
@@ -209,20 +198,7 @@ export function readMeta(): Meta {
     try {
       const content = fs.readFileSync(oldMetaFile, 'utf-8');
       const parsed = yaml.parse(content) as any;
-      const meta: Meta = { repos: {} };
-
-      // Migrate scopes -> repos
-      if (parsed.scopes) {
-        meta.repos = parsed.scopes;
-      } else if (parsed.repo) {
-        meta.repos.user = {
-          source: parsed.repo.source,
-          branch: parsed.repo.branch || 'main',
-          commit: parsed.repo.commit || 'unknown',
-          lastSync: parsed.repo.lastSync || new Date().toISOString(),
-          priority: REPO_PRIORITIES.user,
-        };
-      }
+      const meta: Meta = {};
 
       // Migrate versions.*.default -> agents.*
       if (parsed.versions) {
@@ -251,25 +227,9 @@ export function readMeta(): Meta {
   const oldStateFile = path.join(AGENTS_DIR, 'state.json');
   if (fs.existsSync(oldStateFile) && !fs.existsSync(META_FILE)) {
     try {
-      const oldContent = fs.readFileSync(oldStateFile, 'utf-8');
-      const oldState = JSON.parse(oldContent);
-      const meta: Meta = { repos: {} };
-
-      if (oldState.source) {
-        meta.repos.user = {
-          source: oldState.source,
-          branch: 'main',
-          commit: 'unknown',
-          lastSync: oldState.lastSync || new Date().toISOString(),
-          priority: REPO_PRIORITIES.user,
-        };
-      }
-
-      writeMeta(meta);
       fs.unlinkSync(oldStateFile);
-      return meta;
     } catch {
-      // Ignore migration errors
+      // Ignore cleanup errors
     }
   }
 
@@ -299,20 +259,6 @@ export function updateMeta(updates: Partial<Meta>): Meta {
   return newMeta;
 }
 
-export function getRepoLocalPath(source: string): string {
-  // Use 'default' for the system repo to keep paths clean
-  if (source === DEFAULT_SYSTEM_REPO) {
-    return path.join(REPOS_DIR, 'default');
-  }
-
-  const sanitized = source
-    .replace(/^gh:/, '')
-    .replace(/^https?:\/\/github\.com\//, '')
-    .replace(/\.git$/, '')
-    .replace(/\//g, '-');
-  return path.join(REPOS_DIR, sanitized);
-}
-
 export function getPackageLocalPath(source: string): string {
   const sanitized = source
     .replace(/^gh:/, '')
@@ -320,54 +266,6 @@ export function getPackageLocalPath(source: string): string {
     .replace(/\.git$/, '')
     .replace(/\//g, '-');
   return path.join(PACKAGES_DIR, sanitized);
-}
-
-// Repo management helpers
-
-export function getRepo(repoName: RepoName): RepoConfig | null {
-  const meta = readMeta();
-  return meta.repos[repoName] || null;
-}
-
-export function setRepo(repoName: RepoName, config: RepoConfig): void {
-  const meta = readMeta();
-  meta.repos[repoName] = config;
-  writeMeta(meta);
-}
-
-export function removeRepo(repoName: RepoName): boolean {
-  const meta = readMeta();
-  if (meta.repos[repoName]) {
-    delete meta.repos[repoName];
-    writeMeta(meta);
-    return true;
-  }
-  return false;
-}
-
-export function getReposByPriority(): Array<{ name: RepoName; config: RepoConfig }> {
-  const meta = readMeta();
-  return Object.entries(meta.repos)
-    .map(([name, config]) => ({ name, config }))
-    .sort((a, b) => a.config.priority - b.config.priority);
-}
-
-export function getHighestPriorityRepo(): { name: RepoName; config: RepoConfig } | null {
-  const repos = getReposByPriority();
-  return repos.length > 0 ? repos[repos.length - 1] : null;
-}
-
-export function getRepoPriority(repoName: RepoName): number {
-  if (repoName in REPO_PRIORITIES) {
-    return REPO_PRIORITIES[repoName as keyof typeof REPO_PRIORITIES];
-  }
-  // Custom repos get priority 20 + order added
-  const meta = readMeta();
-  const customRepos = Object.keys(meta.repos).filter(
-    (s) => !['system', 'user', 'project'].includes(s)
-  );
-  const index = customRepos.indexOf(repoName);
-  return index >= 0 ? 20 + index : 25;
 }
 
 // Version resource tracking helpers

@@ -20,8 +20,8 @@ const VERSION = packageJson.version;
 // Import command registrations
 import { registerPullCommand } from './commands/pull.js';
 import { registerPushCommand } from './commands/push.js';
-import { registerRepoCommands } from './commands/repo.js';
 import { registerStatusCommand } from './commands/status.js';
+import { registerViewCommand } from './commands/view.js';
 import { registerCommandsCommands } from './commands/commands.js';
 import { registerHooksCommands } from './commands/hooks.js';
 import { registerSkillsCommands } from './commands/skills.js';
@@ -56,7 +56,7 @@ Agents
   add <agent>[@version]           Install agent CLI
   remove <agent>[@version]        Remove agent CLI
   use <agent>@<version>           Set default version
-  list                            List installed versions
+  view [agent[@version]]          View versions or resources
 
 Resources
   memory                          Manage AGENTS.md, SOUL.md, etc.
@@ -75,7 +75,6 @@ Automation
   daemon                          Manage the scheduler daemon
 
 Env
-  status                          Show installed agents and sync status
   pull                            Sync from .agents repo
   push                            Push config to your .agents repo
 
@@ -207,6 +206,7 @@ program.hook('preAction', async () => {
 });
 
 // Register all commands
+registerViewCommand(program);
 registerStatusCommand(program);
 registerCommandsCommands(program);
 registerHooksCommands(program);
@@ -220,7 +220,6 @@ registerDaemonCommands(program);
 registerJobsCommands(program);
 registerPullCommand(program);
 registerPushCommand(program);
-registerRepoCommands(program);
 
 applyGlobalHelpConventions(program);
 

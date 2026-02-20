@@ -18,7 +18,7 @@ import {
 import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
 import { getEffectiveHome, getGlobalDefault, listInstalledVersions, getVersionHomePath } from '../lib/versions.js';
-import { ensureSource, getRepoLocalPath } from './repo.js';
+import { getAgentsDir } from '../lib/state.js';
 import { isPromptCancelled } from './utils.js';
 
 export function registerMcpCommands(program: Command): void {
@@ -235,8 +235,7 @@ export function registerMcpCommands(program: Command): void {
         process.exit(1);
       }
 
-      const source = await ensureSource();
-      const localPath = getRepoLocalPath(source);
+      const localPath = getAgentsDir();
       const manifest = readManifest(localPath) || createDefaultManifest();
 
       manifest.mcp = manifest.mcp || {};
@@ -407,8 +406,7 @@ export function registerMcpCommands(program: Command): void {
     .option('-a, --agents <list>', 'Comma-separated agents')
     .action(async (name: string | undefined, options) => {
       if (!name) {
-        const source = await ensureSource();
-        const localPath = getRepoLocalPath(source);
+        const localPath = getAgentsDir();
         const manifest = readManifest(localPath);
 
         if (!manifest?.mcp) {

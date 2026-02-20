@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.67
+
+**Unified view command**
+
+- New `agents view` command replaces `list` and `status`
+- `agents view` / `agents view claude` shows installed versions
+- `agents view claude@2.0.65` shows full resources (commands, skills, mcp, hooks, memory)
+- Old commands show deprecation warning but continue to work
+
 ## 1.5.48
 
 **Simplified repo structure**

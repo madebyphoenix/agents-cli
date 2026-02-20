@@ -8,11 +8,9 @@ import { select } from '@inquirer/prompts';
 import {
   AGENTS,
   ALL_AGENT_IDS,
-  getAllCliStates,
   getAccountEmail,
-  resolveAgentName,
-  formatAgentError,
 } from '../lib/agents.js';
+import { viewAction } from './view.js';
 import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
 import {
@@ -25,7 +23,6 @@ import {
   getGlobalDefault,
   setGlobalDefault,
   getVersionHomePath,
-  getVersionDir,
   syncResourcesToVersion,
   parseAgentSpec,
 } from '../lib/versions.js';
@@ -45,16 +42,6 @@ import {
 } from '../lib/shims.js';
 import { isPromptCancelled } from './utils.js';
 
-function compareVersions(a: string, b: string): number {
-  const partsA = a.split('.').map(Number);
-  const partsB = b.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if (partsA[i] > partsB[i]) return 1;
-    if (partsA[i] < partsB[i]) return -1;
-  }
-  return 0;
-}
-
 /**
  * Helper to get actual installed version for an agent.
  * Returns the latest installed version, or throws if none installed.
@@ -65,23 +52,6 @@ async function getInstalledVersionForAgent(agent: AgentId): Promise<string> {
     return versions[versions.length - 1];
   }
   throw new Error(`No versions of ${agent} installed`);
-}
-
-/**
- * Helper to get project version from current working directory.
- */
-function getProjectVersionFromCwd(agent: AgentId): string | null {
-  const manifestPath = path.join(process.cwd(), '.agents', 'agents.yaml');
-  if (!fs.existsSync(manifestPath)) {
-    return null;
-  }
-
-  try {
-    const manifest = readManifest(process.cwd());
-    return manifest?.agents?.[agent] || null;
-  } catch {
-    return null;
-  }
 }
 
 export function registerVersionsCommands(program: Command): void {
@@ -428,178 +398,12 @@ export function registerVersionsCommands(program: Command): void {
       }
     });
 
+  // Deprecated: use `agents view` instead
   program
     .command('list [agent]')
-    .description('List installed agent CLI versions. Use agent@version to filter to specific version.')
+    .description('List installed agent CLI versions')
     .action(async (agentArg?: string) => {
-      // Resolve agent filter before spinner so we can personalize the message
-      let filterAgentId: AgentId | undefined;
-      let requestedVersion: string | null = null;
-
-      if (agentArg) {
-        const parts = agentArg.split('@');
-        const agentName = parts[0];
-        requestedVersion = parts[1] || null;
-
-        filterAgentId = resolveAgentName(agentName) || undefined;
-        if (!filterAgentId) {
-          console.log(chalk.red(formatAgentError(agentName)));
-          process.exit(1);
-        }
-      }
-
-      const spinnerText = filterAgentId
-        ? `Checking ${AGENTS[filterAgentId].name} agents...`
-        : 'Checking installed agents...';
-      const spinner = ora({ text: spinnerText, isSilent: !process.stdout.isTTY }).start();
-      const cliStates = await getAllCliStates();
-      spinner.stop();
-
-      const agentsToShow = filterAgentId ? [filterAgentId] : ALL_AGENT_IDS;
-      const showPaths = !!filterAgentId; // Show paths when filtering to single agent
-
-      console.log(chalk.bold('Installed Agent CLIs\n'));
-
-      // Pre-fetch emails for all versions in parallel
-      const emailFetches: Promise<{ agentId: AgentId; version: string; email: string | null }>[] = [];
-      const globalEmailFetches: Promise<{ agentId: AgentId; email: string | null }>[] = [];
-      for (const agentId of agentsToShow) {
-        const versions = listInstalledVersions(agentId);
-        if (versions.length > 0) {
-          for (const ver of versions) {
-            emailFetches.push(
-              getAccountEmail(agentId, getVersionHomePath(agentId, ver)).then((email) => ({
-                agentId,
-                version: ver,
-                email,
-              }))
-            );
-          }
-        } else {
-          globalEmailFetches.push(
-            getAccountEmail(agentId).then((email) => ({ agentId, email }))
-          );
-        }
-      }
-      const emailResults = await Promise.all(emailFetches);
-      const globalEmailResults = await Promise.all(globalEmailFetches);
-
-      // Build lookup: agentId:version -> email
-      const listEmailMap = new Map<string, string | null>();
-      for (const { agentId, version, email } of emailResults) {
-        listEmailMap.set(`${agentId}:${version}`, email);
-      }
-      const globalListEmailMap = new Map<string, string | null>();
-      for (const { agentId, email } of globalEmailResults) {
-        globalListEmailMap.set(agentId, email);
-      }
-
-      // Separate version-managed from globally-installed agents
-      const versionManaged: AgentId[] = [];
-      const globallyInstalled: AgentId[] = [];
-
-      for (const agentId of agentsToShow) {
-        const versions = listInstalledVersions(agentId);
-        const cliState = cliStates[agentId];
-
-        if (versions.length > 0) {
-          versionManaged.push(agentId);
-        } else if (cliState?.installed) {
-          globallyInstalled.push(agentId);
-        }
-      }
-
-      // Show version-managed agents
-      if (versionManaged.length > 0) {
-        for (const agentId of versionManaged) {
-          const agent = AGENTS[agentId];
-          const versions = listInstalledVersions(agentId);
-          const globalDefault = getGlobalDefault(agentId);
-
-          console.log(`  ${chalk.bold(agent.name)}`);
-
-          // Sort versions with default first, then by semver descending
-          let sortedVersions = [...versions].sort((a, b) => {
-            if (a === globalDefault) return -1;
-            if (b === globalDefault) return 1;
-            return compareVersions(b, a); // descending for non-default
-          });
-
-          // Filter to specific version if requested
-          if (requestedVersion) {
-            sortedVersions = sortedVersions.filter((v) => v === requestedVersion);
-            if (sortedVersions.length === 0) {
-              console.log(chalk.gray(`    Version ${requestedVersion} not installed`));
-              console.log();
-              continue;
-            }
-          }
-          const maxVerLabel = Math.max(...sortedVersions.map((v) => (v === globalDefault ? `${v} (default)` : v).length));
-          for (const version of sortedVersions) {
-            const isDefault = version === globalDefault;
-            const base = isDefault ? `${version} (default)` : version;
-            const padded = base.padEnd(maxVerLabel);
-            const label = isDefault ? `${version}${chalk.green(' (default)')}${' '.repeat(maxVerLabel - base.length)}` : padded;
-            const vEmail = listEmailMap.get(`${agentId}:${version}`);
-            const vEmailStr = vEmail ? `  ${chalk.cyan(vEmail)}` : '';
-            console.log(`    ${label}${vEmailStr}`);
-            if (showPaths) {
-              const versionDir = getVersionDir(agentId, version);
-              console.log(chalk.gray(`      ${versionDir}`));
-            }
-          }
-
-          // Check for project override
-          const projectVersion = getProjectVersionFromCwd(agentId);
-          if (projectVersion && projectVersion !== globalDefault) {
-            console.log(chalk.cyan(`    -> ${projectVersion} (project)`));
-          }
-
-          console.log();
-        }
-      }
-
-      // Show globally installed (not managed) agents
-      if (globallyInstalled.length > 0) {
-        console.log(chalk.bold('Not Managed by Agents CLI\n'));
-
-        for (const agentId of globallyInstalled) {
-          const agent = AGENTS[agentId];
-          const cliState = cliStates[agentId];
-
-          console.log(`  ${chalk.bold(agent.name)}`);
-          const gEmail = globalListEmailMap.get(agentId);
-          const gEmailStr = gEmail ? `    ${chalk.cyan(gEmail)}` : '';
-          console.log(`    ${cliState?.version || 'installed'} ${chalk.gray('(global)')}${gEmailStr}`);
-          if (showPaths && cliState?.path) {
-            console.log(chalk.gray(`      ${cliState.path}`));
-          }
-          console.log();
-        }
-      }
-
-      // If filtering to a specific agent and not found
-      if (filterAgentId && versionManaged.length === 0 && globallyInstalled.length === 0) {
-        console.log(`  ${chalk.bold(AGENTS[filterAgentId].name)}: ${chalk.gray('not installed')}`);
-        console.log();
-      }
-
-      // No agents installed at all
-      if (versionManaged.length === 0 && globallyInstalled.length === 0 && !filterAgentId) {
-        console.log(chalk.gray('  No agent CLIs installed.'));
-        console.log(chalk.gray('  Run: agents add claude@latest'));
-        console.log();
-      }
-
-      // Show shims path status at the end (only for full list with managed versions)
-      if (versionManaged.length > 0 && !filterAgentId) {
-        const shimsDir = getShimsDir();
-        if (isShimsInPath()) {
-          console.log(chalk.gray(`Shims: ${shimsDir} (in PATH)`));
-        } else {
-          console.log(chalk.yellow(`Shims: ${shimsDir} (not in PATH)`));
-          console.log(chalk.gray('Add to PATH for automatic version switching'));
-        }
-      }
+      console.log(chalk.red('Deprecated: "agents list" is now "agents view"\n'));
+      await viewAction(agentArg);
     });
 }

@@ -105,17 +105,6 @@ export interface RepoInfo {
   lastSync: string;
 }
 
-// Built-in repos have fixed priorities
-// system: 0, user: 10, custom: 20+, project: 100 (always highest)
-export type BuiltinRepo = 'system' | 'user' | 'project';
-export type RepoName = BuiltinRepo | string;
-
-export const REPO_PRIORITIES: Record<BuiltinRepo, number> = {
-  system: 0,
-  user: 10,
-  project: 100,
-};
-
 export const DEFAULT_SYSTEM_REPO = 'gh:muqsitnawaz/.agents';
 
 // Registry types
@@ -215,15 +204,6 @@ export interface ResolvedPackage {
   skillEntry?: SkillEntry;
 }
 
-export interface RepoConfig {
-  source: string;
-  branch: string;
-  commit: string;
-  lastSync: string;
-  priority: number;
-  readonly?: boolean;
-}
-
 // Resource tracking per agent version
 export type ResourceType = 'commands' | 'skills' | 'hooks' | 'memory' | 'mcp' | 'permissions';
 
@@ -238,7 +218,6 @@ export interface VersionResources {
 
 export interface Meta {
   agents?: Partial<Record<AgentId, string>>;
-  repos: Record<RepoName, RepoConfig>;
   registries?: Record<RegistryType, Record<string, RegistryConfig>>;
   // Per-version resource tracking
   versions?: Partial<Record<AgentId, Record<string, VersionResources>>>;
