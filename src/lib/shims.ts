@@ -1,11 +1,119 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { confirm } from '@inquirer/prompts';
+import { confirm, select } from '@inquirer/prompts';
 import type { AgentId } from './types.js';
 import { getShimsDir, getVersionsDir, ensureAgentsDir } from './state.js';
 export { getShimsDir };
 import { AGENTS } from './agents.js';
+
+/**
+ * Strategy for handling file conflicts during config migration.
+ */
+export type ConflictStrategy = 'keep-dest' | 'overwrite' | 'ask-per-file';
+
+/**
+ * Information about conflicts found during config migration.
+ */
+export interface ConflictInfo {
+  agent: AgentId;
+  version: string;
+  conflicts: string[]; // filenames that exist in both src and dest
+}
+
+/**
+ * Detect conflicting files between source and destination directories.
+ * Returns list of filenames that exist in both locations (excluding symlinks in dest).
+ */
+export function detectConflicts(src: string, dest: string, prefix = ''): string[] {
+  const conflicts: string[] = [];
+
+  if (!fs.existsSync(src) || !fs.existsSync(dest)) {
+    return conflicts;
+  }
+
+  // Skip if dest is a symlink (managed resources)
+  try {
+    const destStat = fs.lstatSync(dest);
+    if (destStat.isSymbolicLink()) {
+      return conflicts;
+    }
+  } catch {
+    return conflicts;
+  }
+
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+
+    // Skip if dest entry is a symlink (managed resource)
+    try {
+      const entryDestStat = fs.lstatSync(destPath);
+      if (entryDestStat.isSymbolicLink()) {
+        continue;
+      }
+
+      if (entry.isDirectory()) {
+        // Recurse into subdirectories
+        conflicts.push(...detectConflicts(srcPath, destPath, relativePath));
+      } else {
+        // File exists in both - it's a conflict
+        conflicts.push(relativePath);
+      }
+    } catch {
+      // dest entry doesn't exist, not a conflict
+    }
+  }
+
+  return conflicts;
+}
+
+/**
+ * Prompt user for conflict resolution strategy.
+ */
+export async function promptConflictStrategy(
+  conflictInfos: ConflictInfo[]
+): Promise<ConflictStrategy | null> {
+  const totalConflicts = conflictInfos.reduce((sum, info) => sum + info.conflicts.length, 0);
+
+  if (totalConflicts === 0) {
+    return null; // No conflicts, no prompt needed
+  }
+
+  // Show what has conflicts
+  console.log('\nFound config conflicts during migration:');
+  for (const info of conflictInfos) {
+    const agentConfig = AGENTS[info.agent];
+    console.log(`  ${agentConfig.name}@${info.version}: ${info.conflicts.length} file(s)`);
+  }
+  console.log();
+
+  const strategy = await select<ConflictStrategy>({
+    message: 'How should conflicts be resolved?',
+    choices: [
+      {
+        value: 'keep-dest' as ConflictStrategy,
+        name: 'Keep version home files (recommended)',
+        description: 'Preserve existing files in version home - no data loss',
+      },
+      {
+        value: 'overwrite' as ConflictStrategy,
+        name: 'Use your current config',
+        description: 'Overwrite version home files with your current config',
+      },
+      {
+        value: 'ask-per-file' as ConflictStrategy,
+        name: 'Ask per file',
+        description: `Review each of the ${totalConflicts} conflicting file(s) individually`,
+      },
+    ],
+    default: 'keep-dest',
+  });
+
+  return strategy;
+}
 
 /**
  * Generate the shim script content for an agent.

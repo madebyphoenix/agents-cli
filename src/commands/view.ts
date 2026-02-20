@@ -273,19 +273,28 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
       relativePath = `memory/${resourceName}`;
     }
 
-    const isNew = syncStatus.new.some(f => f === relativePath || f.startsWith(relativePath + '/'));
-    const isStaged = syncStatus.staged.some(f => f === relativePath || f.startsWith(relativePath + '/'));
+    const matchesPath = (f: string) => f === relativePath || f.startsWith(relativePath + '/');
+
+    const isNew = syncStatus.new.some(matchesPath);
+    const isStaged = syncStatus.staged.some(matchesPath);
+    const isModified = syncStatus.modified.some(matchesPath);
+    const isDeleted = syncStatus.deleted.some(matchesPath);
+    const isSynced = syncStatus.synced.some(matchesPath);
 
     if (isNew || isStaged) {
       return 'new';
     }
-    if (syncStatus.modified.some(f => f === relativePath || f.startsWith(relativePath + '/'))) {
+    if (isModified) {
       return 'modified';
     }
-    if (syncStatus.deleted.some(f => f === relativePath || f.startsWith(relativePath + '/'))) {
+    if (isDeleted) {
       return 'deleted';
     }
-    return 'synced';
+    if (isSynced) {
+      return 'synced';
+    }
+    // Not in any array = local-only (untracked with no files)
+    return 'new';
   };
 
   // Collect resources for the specific version

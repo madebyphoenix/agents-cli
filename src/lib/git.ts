@@ -527,24 +527,46 @@ export async function getGitSyncStatus(dir: string, subdir?: string): Promise<Gi
       return file.startsWith(subdir + '/') || file === subdir;
     };
 
+    // Get all tracked files in the subdir
+    const trackedOutput = await git.raw(['ls-files', subdir || '.']);
+    const trackedFiles = new Set(trackedOutput.split('\n').filter(Boolean));
+
+    // Get untracked files in the subdir
+    const untrackedOutput = await git.raw(['ls-files', '--others', '--exclude-standard', subdir || '.']);
+    const untrackedFiles = untrackedOutput.split('\n').filter(Boolean);
+
     // Working tree changes (not staged)
+    const changedFiles = new Set<string>();
     for (const file of status.modified.filter(filterPath)) {
       result.modified.push(file);
-    }
-    for (const file of status.not_added.filter(filterPath)) {
-      result.new.push(file);
+      changedFiles.add(file);
     }
     for (const file of status.deleted.filter(filterPath)) {
       result.deleted.push(file);
+      changedFiles.add(file);
     }
 
     // Staged changes (in index, ready to commit)
     for (const file of status.created.filter(filterPath)) {
       result.staged.push(file);
+      changedFiles.add(file);
     }
     for (const file of status.staged.filter(filterPath)) {
       if (!result.staged.includes(file)) {
         result.staged.push(file);
+        changedFiles.add(file);
+      }
+    }
+
+    // Untracked files (new/local-only)
+    for (const file of untrackedFiles.filter(filterPath)) {
+      result.new.push(file);
+    }
+
+    // Synced = tracked and not changed
+    for (const file of trackedFiles) {
+      if (filterPath(file) && !changedFiles.has(file)) {
+        result.synced.push(file);
       }
     }
 
