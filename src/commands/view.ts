@@ -28,6 +28,7 @@ import {
 import { getAgentResources } from '../lib/resources.js';
 import { getAgentsDir } from '../lib/state.js';
 import { isGitRepo, getGitSyncStatus } from '../lib/git.js';
+import { getCentralMemoryFileName } from '../lib/memory.js';
 import { formatPath } from './utils.js';
 
 function compareVersions(a: string, b: string): number {
@@ -270,7 +271,9 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
     } else if (resourceType === 'hooks') {
       relativePath = `hooks/${resourceName}`;
     } else {
-      relativePath = `memory/${resourceName}`;
+      // Memory files: map agent-specific name (CLAUDE.md) back to canonical (AGENTS.md)
+      const centralName = getCentralMemoryFileName(agentId);
+      relativePath = `memory/${centralName}`;
     }
 
     const matchesPath = (f: string) => f === relativePath || f.startsWith(relativePath + '/');
@@ -298,12 +301,19 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
   };
 
   // Collect resources for the specific version
+  interface SkillError {
+    name: string;
+    path: string;
+    error: string;
+  }
+
   interface AgentResourceDisplay {
     agentId: AgentId;
     agentName: string;
     version: string | null;
     commands: ResourceWithSync[];
     skills: ResourceWithSync[];
+    skillErrors: SkillError[];
     mcp: ResourceWithSync[];
     memory: ResourceWithSync[];
     hooks: ResourceWithSync[];
@@ -327,6 +337,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
       ...r,
       syncState: getSyncState(r.name, 'skills', skillsSync),
     })),
+    skillErrors: resources.skillErrors,
     mcp: resources.mcp.map(r => ({ name: r.name, syncState: 'synced' as SyncState })),
     memory: resources.memory.map(r => ({
       ...r,
@@ -382,6 +393,16 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
   // 2. Resources
   renderSection('Commands', agentData.commands);
   renderSection('Skills', agentData.skills);
+
+  // Show skill parse errors if any
+  if (agentData.skillErrors.length > 0) {
+    console.log(`\n  ${chalk.red('Skill Errors')}:`);
+    for (const err of agentData.skillErrors) {
+      console.log(`    ${chalk.red(err.name.padEnd(20))} ${chalk.gray(err.error)}`);
+      console.log(`      ${chalk.gray(formatPath(err.path, cwd))}`);
+    }
+  }
+
   renderSection('MCP Servers', agentData.mcp);
   renderSection('Memory', agentData.memory);
   renderSection('Hooks', agentData.hooks);

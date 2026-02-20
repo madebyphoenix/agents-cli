@@ -6,7 +6,7 @@
 import type { AgentId } from './types.js';
 import { AGENTS, listInstalledMcpsWithScope } from './agents.js';
 import { listInstalledCommandsWithScope } from './commands.js';
-import { listInstalledSkillsWithScope } from './skills.js';
+import { listInstalledSkillsWithScope, type SkillParseError } from './skills.js';
 import { listInstalledHooksWithScope } from './hooks.js';
 import { listInstalledInstructionsWithScope } from './memory.js';
 import { getEffectiveHome } from './versions.js';
@@ -31,6 +31,7 @@ export interface AgentResources {
   agentId: AgentId;
   commands: ResourceEntry[];
   skills: SkillResourceEntry[];
+  skillErrors: SkillParseError[];
   mcp: McpResourceEntry[];
   memory: ResourceEntry[];
   hooks: ResourceEntry[];
@@ -69,7 +70,8 @@ export function getAgentResources(
 
   // Skills
   const skills: SkillResourceEntry[] = [];
-  for (const skill of listInstalledSkillsWithScope(agentId, cwd)) {
+  const skillErrors: SkillParseError[] = [];
+  for (const skill of listInstalledSkillsWithScope(agentId, cwd, { errors: skillErrors })) {
     if (shouldInclude(skill.scope)) {
       skills.push({
         name: skill.name,
@@ -115,6 +117,7 @@ export function getAgentResources(
     agentId,
     commands,
     skills,
+    skillErrors,
     mcp,
     memory,
     hooks,

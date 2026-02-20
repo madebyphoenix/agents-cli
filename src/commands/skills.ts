@@ -24,6 +24,8 @@ import {
   promoteSkillToUser,
   getSkillInfo,
   getSkillRules,
+  tryParseSkillMetadata,
+  type SkillParseError,
 } from '../lib/skills.js';
 import {
   listInstalledVersions,
@@ -80,7 +82,8 @@ export function registerSkillsCommands(program: Command): void {
         home: string
       ) => {
         const agent = AGENTS[agentId];
-        const skills = listInstalledSkillsWithScope(agentId, cwd, { home }).filter(
+        const errors: SkillParseError[] = [];
+        const skills = listInstalledSkillsWithScope(agentId, cwd, { home, errors }).filter(
           (s) => options.scope === 'all' || s.scope === options.scope
         );
 
@@ -115,6 +118,15 @@ export function registerSkillsCommands(program: Command): void {
             }
           }
         }
+
+        // Show skills with parse errors
+        if (errors.length > 0) {
+          console.log(`    ${chalk.red('Errors:')}`);
+          for (const err of errors) {
+            console.log(`      ${chalk.red(err.name.padEnd(20))} ${chalk.gray(err.error)}`);
+            if (showPaths) console.log(chalk.gray(`        ${err.path}`));
+          }
+        }
         console.log();
       };
 
@@ -133,10 +145,11 @@ export function registerSkillsCommands(program: Command): void {
           renderVersionSkills(agentId, defaultVer, true, home);
         } else {
           // No default set, show from effective home
-          const skills = listInstalledSkillsWithScope(agentId, cwd).filter(
+          const errors: SkillParseError[] = [];
+          const skills = listInstalledSkillsWithScope(agentId, cwd, { errors }).filter(
             (s) => options.scope === 'all' || s.scope === options.scope
           );
-          if (skills.length === 0) {
+          if (skills.length === 0 && errors.length === 0) {
             console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
           } else {
             console.log(`  ${chalk.bold(agent.name)}:`);
@@ -147,6 +160,12 @@ export function registerSkillsCommands(program: Command): void {
                 const desc = skill.metadata.description ? ` ${chalk.gray(skill.metadata.description)}` : '';
                 const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
                 console.log(`      ${chalk.cyan(skill.name.padEnd(20))}${desc}${ruleInfo}`);
+              }
+            }
+            if (errors.length > 0) {
+              console.log(`    ${chalk.red('Errors:')}`);
+              for (const err of errors) {
+                console.log(`      ${chalk.red(err.name.padEnd(20))} ${chalk.gray(err.error)}`);
               }
             }
           }
@@ -360,17 +379,26 @@ export function registerSkillsCommands(program: Command): void {
             const skillMdPath = path.join(localPath, 'SKILL.md');
             if (fs.existsSync(skillMdPath)) {
               const skillName = path.basename(localPath);
-              const { parseSkillMetadata, validateSkillMetadata, countSkillRules } = await import('../lib/skills.js');
-              const metadata = parseSkillMetadata(localPath);
-              const validation = validateSkillMetadata(metadata, skillName);
+              const { validateSkillMetadata, countSkillRules } = await import('../lib/skills.js');
+              const parseResult = tryParseSkillMetadata(localPath);
+              const validation = validateSkillMetadata(parseResult.metadata, skillName);
+
+              // Warn if YAML is invalid
+              if (parseResult.error) {
+                spinner.warn(`Skill '${skillName}' has invalid SKILL.md`);
+                console.log(chalk.yellow(`  ${parseResult.error}`));
+                console.log(chalk.gray('  The skill will be installed but may not appear in listings.\n'));
+              } else {
+                spinner.succeed('Using skill directory');
+              }
+
               discoveredSkills = [{
                 name: skillName,
                 path: localPath,
-                metadata: metadata || { name: skillName, description: '' },
+                metadata: parseResult.metadata || { name: skillName, description: '' },
                 ruleCount: countSkillRules(localPath),
                 validation,
               }];
-              spinner.succeed('Using skill directory');
             } else {
               discoveredSkills = discoverSkillsFromRepo(localPath);
               spinner.succeed('Using local path');
@@ -385,9 +413,13 @@ export function registerSkillsCommands(program: Command): void {
           }
 
           for (const skill of discoveredSkills) {
-            console.log(`\n  ${chalk.cyan(skill.name)}: ${skill.metadata.description || 'no description'}`);
+            const nameColor = skill.parseError ? chalk.yellow : chalk.cyan;
+            console.log(`\n  ${nameColor(skill.name)}: ${skill.metadata.description || 'no description'}`);
             if (skill.ruleCount > 0) {
               console.log(`    ${chalk.gray(`${skill.ruleCount} rules`)}`);
+            }
+            if (skill.parseError) {
+              console.log(`    ${chalk.yellow('Warning:')} ${chalk.gray(skill.parseError)}`);
             }
           }
 

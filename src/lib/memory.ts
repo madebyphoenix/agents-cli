@@ -21,6 +21,34 @@ export interface DiscoveredInstructions {
   filename: string;
 }
 
+/**
+ * Central memory filename constant.
+ * All agents map to this file in ~/.agents/memory/, renamed per-agent when synced.
+ */
+export const CENTRAL_MEMORY_FILENAME = 'AGENTS.md';
+
+/**
+ * Get the canonical central memory filename for an agent's instructionsFile.
+ * Central storage uses AGENTS.md, which gets renamed per-agent when syncing:
+ *   - Claude: AGENTS.md → CLAUDE.md
+ *   - Gemini: AGENTS.md → GEMINI.md
+ *   - Cursor: AGENTS.md → .cursorrules
+ *   - Codex/OpenCode: AGENTS.md → AGENTS.md (no rename)
+ */
+export function getCentralMemoryFileName(agentId: AgentId): string {
+  const agent = AGENTS[agentId];
+  const instrFile = agent.instructionsFile;
+
+  // If it contains a path separator, extract just the filename
+  const filename = instrFile.includes('/') ? path.basename(instrFile) : instrFile;
+
+  // If the agent's instructionsFile isn't AGENTS.md, it was renamed FROM AGENTS.md
+  if (filename !== CENTRAL_MEMORY_FILENAME) {
+    return CENTRAL_MEMORY_FILENAME;
+  }
+  return filename;
+}
+
 function normalizeContent(content: string): string {
   return content.replace(/\r\n/g, '\n').trim();
 }
