@@ -67,7 +67,9 @@ export function registerPermissionsCommands(program: Command): void {
           return;
         }
 
-        console.log(chalk.bold(`${AGENTS[agentId].name} Permissions (${options.scope}):\n`));
+        const defaultVer = getGlobalDefault(agentId);
+        const versionStr = defaultVer ? ` (${defaultVer})` : '';
+        console.log(chalk.bold(`${AGENTS[agentId].name}${versionStr} Permissions (${options.scope}):\n`));
 
         if (agentId === 'claude') {
           const claudePerms = perms as { permissions: { allow: string[]; deny: string[] } };

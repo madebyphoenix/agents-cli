@@ -72,10 +72,13 @@ export function registerCommandsCommands(program: Command): void {
       console.log(chalk.bold('Installed Commands\n'));
 
       for (const { agent, commands } of agentCommands) {
+        const defaultVer = getGlobalDefault(agent.id);
+        const versionStr = defaultVer ? chalk.gray(` (${defaultVer})`) : '';
+
         if (commands.length === 0) {
-          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
         } else {
-          console.log(`  ${chalk.bold(agent.name)}:`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
 
           const userCommands = commands.filter((c) => c.scope === 'user');
           const projectCommands = commands.filter((c) => c.scope === 'project');

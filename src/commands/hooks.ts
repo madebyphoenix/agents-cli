@@ -59,16 +59,19 @@ export function registerHooksCommands(program: Command): void {
       console.log(chalk.bold('Installed Hooks\n'));
 
       for (const { agent, hooks } of agentHooks) {
+        const defaultVer = getGlobalDefault(agent.id);
+        const versionStr = defaultVer ? chalk.gray(` (${defaultVer})`) : '';
+
         if (hooks === null) {
-          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('hooks not supported')}`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('hooks not supported')}`);
           console.log();
           continue;
         }
 
         if (hooks.length === 0) {
-          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
         } else {
-          console.log(`  ${chalk.bold(agent.name)}:`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
 
           const userHooks = hooks.filter((h) => h.scope === 'user');
           const projectHooks = hooks.filter((h) => h.scope === 'project');

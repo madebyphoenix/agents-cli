@@ -16,7 +16,7 @@ import {
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
-import { getEffectiveHome } from '../lib/versions.js';
+import { getEffectiveHome, getGlobalDefault } from '../lib/versions.js';
 import { ensureSource, getRepoLocalPath } from './repo.js';
 import { isPromptCancelled } from './utils.js';
 
@@ -77,20 +77,23 @@ export function registerMcpCommands(program: Command): void {
       console.log(chalk.bold('MCP Servers\n'));
 
       for (const { agent, mcps, notInstalled } of agentMcps) {
+        const defaultVer = getGlobalDefault(agent.id);
+        const versionStr = defaultVer ? chalk.gray(` (${defaultVer})`) : '';
+
         if (mcps === null && notInstalled) {
-          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('CLI not installed')}`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('CLI not installed')}`);
           continue;
         }
         if (mcps === null) {
-          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('mcp not supported')}`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('mcp not supported')}`);
           console.log();
           continue;
         }
 
         if (mcps.length === 0) {
-          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
         } else {
-          console.log(`  ${chalk.bold(agent.name)}:`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
 
           const userMcps = mcps.filter((m) => m.scope === 'user');
           const projectMcps = mcps.filter((m) => m.scope === 'project');

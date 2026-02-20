@@ -63,6 +63,9 @@ export function registerMemoryCommands(program: Command): void {
 
       for (const agentId of agents) {
         const agent = AGENTS[agentId];
+        const defaultVer = getGlobalDefault(agentId);
+        const versionStr = defaultVer ? chalk.gray(` (${defaultVer})`) : '';
+
         const installed = listInstalledInstructionsWithScope(agentId, cwd);
         const userInstr = installed.find((i) => i.scope === 'user');
         const projectInstr = installed.find((i) => i.scope === 'project');
@@ -71,11 +74,11 @@ export function registerMemoryCommands(program: Command): void {
         const hasProject = projectInstr?.exists;
 
         if (!hasUser && !hasProject) {
-          console.log(`  ${chalk.bold(agent.name)}:`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
           console.log(`    ${chalk.gray('User:')} ${chalk.gray('none')}`);
           console.log(`    ${chalk.gray('Project:')} ${chalk.gray('none')}`);
         } else {
-          console.log(`  ${chalk.bold(agent.name)}:`);
+          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
 
           if (hasUser) {
             console.log(`    ${chalk.gray('User:')}`);
