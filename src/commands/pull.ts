@@ -44,6 +44,8 @@ import {
   getBinaryPath,
   getVersionHomePath,
   syncResourcesToVersion,
+  getResourceDiff,
+  type ResourceDiff,
 } from '../lib/versions.js';
 import {
   createShim,
@@ -262,28 +264,114 @@ export function registerPullCommand(program: Command): void {
         }
 
         // Sync resources to version homes
-        console.log(chalk.bold('\nSyncing resources to versions...\n'));
-
         const cliStates = await getAllCliStates();
         const agentsToSync = agentFilter ? [agentFilter] : ALL_AGENT_IDS;
-        let synced = 0;
+
+        // Collect versions with their diffs
+        const versionDiffs: {
+          agentId: AgentId;
+          version: string;
+          label: string;
+          diff: ResourceDiff;
+        }[] = [];
 
         for (const agentId of agentsToSync) {
           if (!cliStates[agentId]?.installed && listInstalledVersions(agentId).length === 0) continue;
-
           const versions = listInstalledVersions(agentId);
-          // Sync to ALL installed versions, not just default
-          const targetVersions = versions;
+          const defaultVer = getGlobalDefault(agentId);
 
-          for (const ver of targetVersions) {
-            syncResourcesToVersion(agentId, ver);
-            console.log(`  ${chalk.cyan(AGENTS[agentId].name)}@${ver}`);
-            synced++;
+          for (const ver of versions) {
+            const isDefault = ver === defaultVer;
+            const diff = getResourceDiff(agentId, ver);
+            versionDiffs.push({
+              agentId,
+              version: ver,
+              label: `${AGENTS[agentId].name}@${ver}${isDefault ? ' (default)' : ''}`,
+              diff,
+            });
           }
         }
 
-        if (synced === 0) {
-          console.log(chalk.gray('  No versions to sync'));
+        if (versionDiffs.length === 0) {
+          console.log(chalk.gray('\nNo versions to sync'));
+        } else {
+          // Check if there are any changes
+          const hasAnyChanges = versionDiffs.some(v => v.diff.totalAdded > 0 || v.diff.totalDangling > 0);
+
+          if (!hasAnyChanges) {
+            console.log(chalk.gray('\nNo resource changes to sync'));
+          } else {
+            // Show diffs per version
+            console.log(chalk.bold('\nResource changes:\n'));
+
+            for (const { label, diff } of versionDiffs) {
+              if (diff.totalAdded === 0 && diff.totalDangling === 0) {
+                console.log(`  ${chalk.gray(label)}: ${chalk.gray('(no changes)')}`);
+                continue;
+              }
+
+              console.log(`  ${chalk.cyan(label)}:`);
+
+              // Show added items
+              const showAdded = (type: string, items: string[]) => {
+                for (const item of items.slice(0, 5)) {
+                  console.log(`    ${chalk.green('+')} ${type}/${item}`);
+                }
+                if (items.length > 5) {
+                  console.log(chalk.gray(`    ... and ${items.length - 5} more`));
+                }
+              };
+
+              if (diff.commands.added.length > 0) showAdded('commands', diff.commands.added);
+              if (diff.skills.added.length > 0) showAdded('skills', diff.skills.added);
+              if (diff.hooks.added.length > 0) showAdded('hooks', diff.hooks.added);
+              if (diff.memory.added.length > 0) showAdded('memory', diff.memory.added);
+
+              // Show dangling
+              const showDangling = (items: string[]) => {
+                for (const item of items) {
+                  console.log(`    ${chalk.red('-')} ${item} ${chalk.gray('(dangling)')}`);
+                }
+              };
+
+              if (diff.commands.dangling.length > 0) showDangling(diff.commands.dangling);
+              if (diff.skills.dangling.length > 0) showDangling(diff.skills.dangling);
+              if (diff.hooks.dangling.length > 0) showDangling(diff.hooks.dangling);
+              if (diff.memory.dangling.length > 0) showDangling(diff.memory.dangling);
+
+              console.log();
+            }
+
+            // Filter to versions with changes
+            const versionsWithChanges = versionDiffs.filter(v => v.diff.totalAdded > 0 || v.diff.totalDangling > 0);
+            let versionsToSync = versionsWithChanges;
+
+            // Interactive version selection (unless -y flag)
+            if (!options.yes && versionsWithChanges.length > 1) {
+              const selected = await checkbox({
+                message: 'Select versions to sync:',
+                choices: versionsWithChanges.map((v) => ({
+                  name: `${v.label} ${chalk.gray(`(${v.diff.totalAdded} new${v.diff.totalDangling > 0 ? `, ${v.diff.totalDangling} dangling` : ''})`)}`,
+                  value: v,
+                  checked: true,
+                })),
+              });
+              versionsToSync = selected;
+            }
+
+            if (versionsToSync.length === 0) {
+              console.log(chalk.yellow('No versions selected'));
+            } else {
+              console.log(chalk.bold('Syncing...\n'));
+              for (const { agentId, version, label, diff } of versionsToSync) {
+                syncResourcesToVersion(agentId, version);
+                const summary = [];
+                if (diff.totalAdded > 0) summary.push(`${diff.totalAdded} added`);
+                if (diff.totalDangling > 0) summary.push(`${diff.totalDangling} removed`);
+                console.log(`  ${chalk.green('✓')} ${label} ${chalk.gray(`(${summary.join(', ')})`)}`);
+              }
+            }
+          }
         }
 
         // Auto-add shims to PATH if not already there
