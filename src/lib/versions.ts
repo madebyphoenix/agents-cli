@@ -9,6 +9,7 @@ import type { AgentId } from './types.js';
 import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, clearVersionResources } from './state.js';
 import { AGENTS, getAccountEmail } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS } from './permissions.js';
+import { applyMcpToVersion } from './mcp.js';
 import { markdownToToml } from './convert.js';
 import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion } from './shims.js';
 
@@ -374,6 +375,7 @@ export interface SyncResult {
   hooks: boolean;
   memory: string[];
   permissions: boolean;
+  mcp: string[];
 }
 
 /**
@@ -388,7 +390,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string): SyncRes
   const agentDir = path.join(versionHome, `.${agent}`);
   fs.mkdirSync(agentDir, { recursive: true });
 
-  const result: SyncResult = { commands: false, skills: false, hooks: false, memory: [], permissions: false };
+  const result: SyncResult = { commands: false, skills: false, hooks: false, memory: [], permissions: false, mcp: [] };
 
   // Helper: remove a path (symlink or real) if it exists
   const removePath = (p: string) => {
@@ -478,6 +480,10 @@ export function syncResourcesToVersion(agent: AgentId, version: string): SyncRes
       result.permissions = permResult.success;
     }
   }
+
+  // Apply MCP servers (merge from ~/.agents/mcp/)
+  const mcpResult = applyMcpToVersion(agent, versionHome, true);
+  result.mcp = mcpResult.applied;
 
   return result;
 }

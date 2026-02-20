@@ -281,8 +281,20 @@ export function getConfigSymlinkVersion(agent: AgentId): string | null {
 /**
  * Copy directory contents with conflict prompts.
  * When a file exists in dest, backs it up and asks user whether to overwrite.
+ * Skips when dest is a symlink (managed resources that shouldn't be overwritten).
  */
 async function copyDirContents(src: string, dest: string): Promise<void> {
+  // If dest is a symlink, skip - these are managed resources (skills, commands, etc.)
+  // that link to central ~/.agents/ and shouldn't be overwritten with local copies
+  try {
+    const destStat = fs.lstatSync(dest);
+    if (destStat.isSymbolicLink()) {
+      return; // Skip - don't copy into symlinked directories
+    }
+  } catch {
+    // dest doesn't exist, that's fine
+  }
+
   if (!fs.existsSync(dest)) {
     fs.mkdirSync(dest, { recursive: true });
   }
@@ -291,6 +303,16 @@ async function copyDirContents(src: string, dest: string): Promise<void> {
   for (const entry of entries) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
+
+    // Skip if dest entry is a symlink (managed resource)
+    try {
+      const entryDestStat = fs.lstatSync(destPath);
+      if (entryDestStat.isSymbolicLink()) {
+        continue; // Skip - managed resource
+      }
+    } catch {
+      // dest entry doesn't exist, that's fine
+    }
 
     if (entry.isDirectory()) {
       await copyDirContents(srcPath, destPath);
