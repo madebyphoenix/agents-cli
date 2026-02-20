@@ -394,6 +394,12 @@ export async function cloneIntoExisting(
     const targetGit = simpleGit(targetDir);
     await targetGit.checkout('.');
 
+    // Configure git hooks path if .githooks directory exists
+    const githooksDir = path.join(targetDir, '.githooks');
+    if (fs.existsSync(githooksDir)) {
+      await targetGit.addConfig('core.hooksPath', '.githooks');
+    }
+
     const log = await targetGit.log({ maxCount: 1 });
 
     return {
@@ -466,6 +472,15 @@ export async function pullRepo(dir: string): Promise<{ success: boolean; commit:
 
     await git.fetch();
     await git.pull();
+
+    // Configure git hooks path if .githooks directory exists (handles repos cloned before hooks were added)
+    const githooksDir = path.join(dir, '.githooks');
+    if (fs.existsSync(githooksDir)) {
+      const currentHooksPath = await git.getConfig('core.hooksPath');
+      if (!currentHooksPath.value) {
+        await git.addConfig('core.hooksPath', '.githooks');
+      }
+    }
 
     // Restore stashed changes
     if (stashed) {
