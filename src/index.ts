@@ -1338,7 +1338,7 @@ commandsCmd
     spinner.stop();
     console.log(chalk.bold('Installed Commands\n'));
 
-    for (const { agent, commands } of agentCommands) {
+    agentCommands.forEach(({ agent, commands }, index) => {
       if (commands.length === 0) {
         console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
       } else {
@@ -1363,8 +1363,8 @@ commandsCmd
           }
         }
       }
-      console.log();
-    }
+      if (index < agentCommands.length - 1) console.log();
+    });
   });
 
 commandsCmd
@@ -1493,11 +1493,11 @@ hooksCmd
     spinner.stop();
     console.log(chalk.bold('Installed Hooks\n'));
 
-    for (const { agent, hooks } of agentHooks) {
+    agentHooks.forEach(({ agent, hooks }, index) => {
       if (hooks === null) {
         console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('hooks not supported')}`);
-        console.log();
-        continue;
+        if (index < agentHooks.length - 1) console.log();
+        return;
       }
 
       if (hooks.length === 0) {
@@ -1522,8 +1522,8 @@ hooksCmd
           }
         }
       }
-      console.log();
-    }
+      if (index < agentHooks.length - 1) console.log();
+    });
   });
 
 hooksCmd
@@ -1682,11 +1682,11 @@ skillsCmd
     spinner.stop();
     console.log(chalk.bold('Installed Agent Skills\n'));
 
-    for (const { agent, skills } of agentSkills) {
+    agentSkills.forEach(({ agent, skills }, index) => {
       if (skills === null) {
         console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('skills not supported')}`);
-        console.log();
-        continue;
+        if (index < agentSkills.length - 1) console.log();
+        return;
       }
 
       if (skills.length === 0) {
@@ -1715,8 +1715,8 @@ skillsCmd
           }
         }
       }
-      console.log();
-    }
+      if (index < agentSkills.length - 1) console.log();
+    });
   });
 
 skillsCmd
@@ -1944,7 +1944,7 @@ instructionsCmd
 
     console.log(chalk.bold('Installed Instructions\n'));
 
-    for (const agentId of agents) {
+    agents.forEach((agentId, index) => {
       const agent = AGENTS[agentId];
       const installed = listInstalledInstructionsWithScope(agentId, cwd);
       const userInstr = installed.find((i) => i.scope === 'user');
@@ -1956,8 +1956,8 @@ instructionsCmd
       console.log(`  ${chalk.bold(agent.name)}:`);
       console.log(`    ${chalk.gray('User:')} ${userStatus}`);
       console.log(`    ${chalk.gray('Project:')} ${projectStatus}`);
-      console.log();
-    }
+      if (index < agents.length - 1) console.log();
+    });
   });
 
 instructionsCmd
@@ -2138,15 +2138,15 @@ mcpCmd
     spinner.stop();
     console.log(chalk.bold('MCP Servers\n'));
 
-    for (const { agent, mcps, notInstalled } of agentMcps) {
+    agentMcps.forEach(({ agent, mcps, notInstalled }, index) => {
       if (mcps === null && notInstalled) {
         console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('CLI not installed')}`);
-        continue;
+        return;
       }
       if (mcps === null) {
         console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('mcp not supported')}`);
-        console.log();
-        continue;
+        if (index < agentMcps.length - 1) console.log();
+        return;
       }
 
       if (mcps.length === 0) {
@@ -2171,8 +2171,8 @@ mcpCmd
           }
         }
       }
-      console.log();
-    }
+      if (index < agentMcps.length - 1) console.log();
+    });
   });
 
 mcpCmd
@@ -2575,14 +2575,13 @@ repoCmd
     if (scopes.length === 0) {
       console.log(chalk.yellow('No scopes configured.'));
       console.log(chalk.gray('  Run: agents repo add <source>'));
-      console.log();
       return;
     }
 
     console.log(chalk.bold('Configured Scopes\n'));
     console.log(chalk.gray('  Scopes are applied in priority order (higher overrides lower)\n'));
 
-    for (const { name, config } of scopes) {
+    scopes.forEach(({ name, config }, index) => {
       const readonlyTag = config.readonly ? chalk.gray(' (readonly)') : '';
       console.log(`  ${chalk.bold(name)}${readonlyTag}`);
       console.log(`    Source:   ${config.source}`);
@@ -2590,8 +2589,8 @@ repoCmd
       console.log(`    Commit:   ${config.commit.substring(0, 8)}`);
       console.log(`    Priority: ${config.priority}`);
       console.log(`    Synced:   ${new Date(config.lastSync).toLocaleString()}`);
-      console.log();
-    }
+      if (index < scopes.length - 1) console.log();
+    });
   });
 
 repoCmd
@@ -2763,7 +2762,7 @@ registryCmd
 
     console.log(chalk.bold('Configured Registries\n'));
 
-    for (const type of types) {
+    types.forEach((type, index) => {
       console.log(chalk.bold(`  ${type.toUpperCase()}`));
 
       const registries = getRegistries(type);
@@ -2779,8 +2778,8 @@ registryCmd
           console.log(chalk.gray(`      ${config.url}`));
         }
       }
-      console.log();
-    }
+      if (index < types.length - 1) console.log();
+    });
   });
 
 registryCmd
@@ -3364,7 +3363,6 @@ jobsCmd
     }
 
     scheduler.stopAll();
-    console.log();
   });
 
 jobsCmd
@@ -3601,7 +3599,6 @@ driveCmd
         `  ${chalk.cyan(drive.name.padEnd(24))} ${desc.padEnd(40)} ${chalk.gray(proj)}`
       );
     }
-    console.log();
   });
 
 driveCmd
@@ -3642,7 +3639,6 @@ driveCmd
         console.log(chalk.gray(`\n  ... ${lines.length - 30} more lines`));
       }
     }
-    console.log();
   });
 
 driveCmd
