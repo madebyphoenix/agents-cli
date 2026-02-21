@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { confirm, select } from '@inquirer/prompts';
 import type { AgentId } from './types.js';
-import { getShimsDir, getVersionsDir, ensureAgentsDir } from './state.js';
+import { getShimsDir, getVersionsDir, getBackupsDir, ensureAgentsDir } from './state.js';
 export { getShimsDir };
 import { AGENTS } from './agents.js';
 
@@ -340,13 +340,13 @@ export function detectMigrationConflicts(agent: AgentId, version: string): Confl
  * @param version - The version to switch to
  * @param strategy - How to handle conflicts during migration (default: 'keep-dest')
  *
- * Returns: { success: boolean, migrated?: boolean, error?: string }
+ * Returns: { success: boolean, migrated?: boolean, backupPath?: string, error?: string }
  */
 export async function switchConfigSymlink(
   agent: AgentId,
   version: string,
   strategy: ConflictStrategy = 'keep-dest'
-): Promise<{ success: boolean; migrated?: boolean; error?: string }> {
+): Promise<{ success: boolean; migrated?: boolean; backupPath?: string; error?: string }> {
   const configPath = getAgentConfigPath(agent);
   const versionConfigPath = getVersionConfigPath(agent, version);
 
@@ -374,7 +374,8 @@ export async function switchConfigSymlink(
     } else if (stat.isDirectory()) {
       // Real directory exists - migrate it to this version's config
       // Move contents to version config, then create symlink
-      const tempPath = `${configPath}.backup.${Date.now()}`;
+      const timestamp = Date.now();
+      const tempPath = `${configPath}.backup.${timestamp}`;
       fs.renameSync(configPath, tempPath);
 
       try {
@@ -385,10 +386,14 @@ export async function switchConfigSymlink(
         // Create symlink
         fs.symlinkSync(versionConfigPath, configPath);
 
-        // Remove backup only on success
-        fs.rmSync(tempPath, { recursive: true, force: true });
+        // Preserve backup in ~/.agents/backups/{agent}/{timestamp}/
+        const backupsDir = getBackupsDir();
+        const agentBackupDir = path.join(backupsDir, agent);
+        const finalBackupPath = path.join(agentBackupDir, String(timestamp));
+        fs.mkdirSync(agentBackupDir, { recursive: true });
+        fs.renameSync(tempPath, finalBackupPath);
 
-        return { success: true, migrated: true };
+        return { success: true, migrated: true, backupPath: finalBackupPath };
       } catch (migrationErr) {
         // Rollback: restore original directory
         try {

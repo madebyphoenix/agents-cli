@@ -401,6 +401,9 @@ export function registerVersionsCommands(program: Command): void {
             console.log(chalk.yellow(`Warning: Could not update config symlink: ${symlinkResult.error}`));
           } else if (symlinkResult.migrated) {
             console.log(chalk.gray(`Migrated existing ${agentConfig.configDir} to version ${finalVersion}`));
+            if (symlinkResult.backupPath) {
+              console.log(chalk.gray(`Backup saved to: ${symlinkResult.backupPath}`));
+            }
           }
 
           const useEmail = await getAccountEmail(agentId, getVersionHomePath(agentId, finalVersion));

@@ -21,6 +21,7 @@ const VERSIONS_DIR = path.join(AGENTS_DIR, 'versions');
 const SHIMS_DIR = path.join(AGENTS_DIR, 'shims');
 const PERMISSIONS_DIR = path.join(AGENTS_DIR, 'permissions');
 const MCP_DIR = path.join(AGENTS_DIR, 'mcp');
+const BACKUPS_DIR = path.join(AGENTS_DIR, 'backups');
 
 const META_HEADER = `# agents-cli metadata
 # Auto-generated - do not edit manually
@@ -62,6 +63,10 @@ export function getPermissionsDir(): string {
 
 export function getMcpDir(): string {
   return MCP_DIR;
+}
+
+export function getBackupsDir(): string {
+  return BACKUPS_DIR;
 }
 
 export function getCommandsDir(): string {
