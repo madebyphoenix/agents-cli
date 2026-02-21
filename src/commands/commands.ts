@@ -22,7 +22,7 @@ import {
   uninstallCommand,
   listCentralCommands,
   listInstalledCommandsWithScope,
-  promoteCommandToUser,
+  getCommandInfo,
 } from '../lib/commands.js';
 import {
   listInstalledVersions,
@@ -432,33 +432,70 @@ export function registerCommandsCommands(program: Command): void {
     });
 
   commandsCmd
-    .command('push <name>')
-    .description('Promote a project command to user scope')
-    .option('-a, --agents <list>', 'Comma-separated agents to push for')
-    .action(async (name: string, options) => {
-      const cwd = process.cwd();
-      const agents = options.agents
-        ? (options.agents.split(',') as AgentId[])
-        : ALL_AGENT_IDS;
+    .command('view [name]')
+    .description('Show command details')
+    .action(async (name?: string) => {
+      // If no name provided, show interactive select
+      if (!name) {
+        const centralCommands = listCentralCommands();
+        if (centralCommands.length === 0) {
+          console.log(chalk.yellow('No commands installed'));
+          return;
+        }
 
-      const cliStates = await getAllCliStates();
-      let pushed = 0;
-      for (const agentId of agents) {
-        if (!cliStates[agentId]?.installed && listInstalledVersions(agentId).length === 0) continue;
-
-        const result = promoteCommandToUser(agentId, name, cwd);
-        if (result.success) {
-          console.log(`  ${chalk.green('+')} ${AGENTS[agentId].name}`);
-          pushed++;
-        } else if (result.error && !result.error.includes('not found')) {
-          console.log(`  ${chalk.red('x')} ${AGENTS[agentId].name}: ${result.error}`);
+        try {
+          const { select } = await import('@inquirer/prompts');
+          name = await select({
+            message: 'Select a command to view',
+            choices: centralCommands.map((cmd) => ({
+              value: cmd,
+              name: cmd,
+            })),
+          });
+        } catch (err) {
+          if (isPromptCancelled(err)) {
+            console.log(chalk.gray('Cancelled'));
+            return;
+          }
+          throw err;
         }
       }
 
-      if (pushed === 0) {
-        console.log(chalk.yellow(`Project command '${name}' not found for any agent`));
-      } else {
-        console.log(chalk.green(`\nPushed to user scope for ${pushed} agents.`));
+      const command = getCommandInfo(name);
+      if (!command) {
+        console.log(chalk.yellow(`Command '${name}' not found`));
+        return;
+      }
+
+      const { renderMarkdown } = await import('../lib/markdown.js');
+
+      // Build header
+      console.log(chalk.bold(`\n${command.name}`));
+      if (command.description) {
+        console.log(`${command.description}`);
+      }
+      console.log(chalk.gray(`Path: ${command.path}\n`));
+
+      // Render markdown content
+      if (command.content) {
+        const rendered = renderMarkdown(command.content);
+        const contentLines = command.content.split('\n');
+
+        // Pipe through less for scrolling if content is large
+        if (contentLines.length > 40) {
+          const { spawnSync } = await import('child_process');
+          const less = spawnSync('less', ['-R'], {
+            input: rendered,
+            stdio: ['pipe', 'inherit', 'inherit'],
+          });
+
+          // Fallback to direct output if less fails
+          if (less.status !== 0) {
+            console.log(rendered);
+          }
+        } else {
+          console.log(rendered);
+        }
       }
     });
 }

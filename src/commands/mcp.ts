@@ -12,7 +12,6 @@ import {
   formatAgentError,
   registerMcp,
   unregisterMcp,
-  promoteMcpToUser,
   listInstalledMcpsWithScope,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
@@ -370,34 +369,70 @@ export function registerMcpCommands(program: Command): void {
     });
 
   mcpCmd
-    .command('push <name>')
-    .description('Promote a project MCP server to user scope')
-    .option('-a, --agents <list>', 'Comma-separated agents to push for')
-    .action(async (name: string, options) => {
+    .command('view [name]')
+    .description('Show MCP server details')
+    .action(async (name?: string) => {
       const cwd = process.cwd();
-      const agents = options.agents
-        ? (options.agents.split(',') as AgentId[])
-        : MCP_CAPABLE_AGENTS;
-
       const cliStates = await getAllCliStates();
-      let pushed = 0;
-      for (const agentId of agents) {
-        if (!cliStates[agentId]?.installed) continue;
 
-        const result = await promoteMcpToUser(agentId, name, cwd, { home: getEffectiveHome(agentId) });
-        if (result.success) {
-          console.log(`  ${chalk.green('+')} ${AGENTS[agentId].name}`);
-          pushed++;
-        } else if (result.error && !result.error.includes('not found')) {
-          console.log(`  ${chalk.red('x')} ${AGENTS[agentId].name}: ${result.error}`);
+      // Gather all unique MCPs across agents
+      const mcpMap = new Map<string, { name: string; agents: string[]; command?: string; scope: string }>();
+      for (const agentId of MCP_CAPABLE_AGENTS) {
+        if (!cliStates[agentId]?.installed) continue;
+        const mcps = listInstalledMcpsWithScope(agentId, cwd, { home: getEffectiveHome(agentId) });
+        for (const mcp of mcps) {
+          const existing = mcpMap.get(mcp.name);
+          if (existing) {
+            existing.agents.push(AGENTS[agentId].name);
+          } else {
+            mcpMap.set(mcp.name, {
+              name: mcp.name,
+              agents: [AGENTS[agentId].name],
+              command: mcp.command,
+              scope: mcp.scope,
+            });
+          }
         }
       }
 
-      if (pushed === 0) {
-        console.log(chalk.yellow(`Project MCP '${name}' not found for any agent`));
-      } else {
-        console.log(chalk.green(`\nPushed to user scope for ${pushed} agents.`));
+      if (mcpMap.size === 0) {
+        console.log(chalk.yellow('No MCP servers configured'));
+        return;
       }
+
+      // If no name provided, show interactive select
+      if (!name) {
+        try {
+          const { select } = await import('@inquirer/prompts');
+          name = await select({
+            message: 'Select an MCP server to view',
+            choices: Array.from(mcpMap.values()).map((mcp) => ({
+              value: mcp.name,
+              name: `${mcp.name} (${mcp.agents.join(', ')})`,
+            })),
+          });
+        } catch (err) {
+          if (isPromptCancelled(err)) {
+            console.log(chalk.gray('Cancelled'));
+            return;
+          }
+          throw err;
+        }
+      }
+
+      const mcp = mcpMap.get(name);
+      if (!mcp) {
+        console.log(chalk.yellow(`MCP server '${name}' not found`));
+        return;
+      }
+
+      console.log(chalk.bold(`\n${mcp.name}\n`));
+      console.log(`  Scope: ${mcp.scope}`);
+      console.log(`  Agents: ${mcp.agents.join(', ')}`);
+      if (mcp.command) {
+        console.log(`  Command: ${chalk.cyan(mcp.command)}`);
+      }
+      console.log();
     });
 
   mcpCmd

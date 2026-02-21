@@ -20,7 +20,6 @@ import {
   installInstructionsCentrally,
   uninstallInstructions,
   listInstalledInstructionsWithScope,
-  promoteInstructionsToUser,
   instructionsExists,
   getInstructionsContent,
   listCentralMemory,
@@ -352,7 +351,6 @@ export function registerMemoryCommands(program: Command): void {
 
   memoryCmd
     .command('view [agent]')
-    .alias('show')
     .description('Show memory content for an agent. Use agent@version for specific version.')
     .option('-s, --scope <scope>', 'Scope: user or project', 'user')
     .action(async (agentArg?: string, options?: { scope?: string }) => {
@@ -384,6 +382,33 @@ export function registerMemoryCommands(program: Command): void {
 
       const scope = (options?.scope || 'user') as 'user' | 'project';
 
+      // Helper to format and display content
+      const displayContent = async (content: string, title: string, memPath: string) => {
+        const { renderMarkdown } = await import('../lib/markdown.js');
+
+        console.log(chalk.bold(`\n${title}`));
+        console.log(chalk.gray(`Path: ${memPath}\n`));
+
+        const rendered = renderMarkdown(content);
+        const contentLines = content.split('\n');
+
+        // Pipe through less for scrolling if content is large
+        if (contentLines.length > 40) {
+          const { spawnSync } = await import('child_process');
+          const less = spawnSync('less', ['-R'], {
+            input: rendered,
+            stdio: ['pipe', 'inherit', 'inherit'],
+          });
+
+          // Fallback to direct output if less fails
+          if (less.status !== 0) {
+            console.log(rendered);
+          }
+        } else {
+          console.log(rendered);
+        }
+      };
+
       // Handle version-specific view
       if (requestedVersion && scope === 'user') {
         const installedVersions = listInstalledVersions(agentId);
@@ -399,8 +424,7 @@ export function registerMemoryCommands(program: Command): void {
           return;
         }
         const content = fs.readFileSync(memPath, 'utf-8');
-        console.log(chalk.bold(`\n${AGENTS[agentId].name}@${requestedVersion} Memory (${scope}):\n`));
-        console.log(content);
+        await displayContent(content, `${AGENTS[agentId].name}@${requestedVersion} Memory (${scope})`, memPath);
         return;
       }
 
@@ -411,54 +435,12 @@ export function registerMemoryCommands(program: Command): void {
         return;
       }
 
-      console.log(chalk.bold(`\n${AGENTS[agentId].name} Memory (${scope}):\n`));
-      console.log(content);
-    });
+      // Get the path for display
+      const installed = listInstalledInstructionsWithScope(agentId, cwd);
+      const instr = installed.find((i) => i.scope === scope);
+      const memPath = instr?.path || '';
 
-  memoryCmd
-    .command('push <agent>')
-    .description('Promote project memory to user scope. Use agent@version for specific version.')
-    .action((agentArg: string) => {
-      const cwd = process.cwd();
-      const parts = agentArg.split('@');
-      const agentName = parts[0];
-      const requestedVersion = parts[1] || null;
-
-      const agentId = resolveAgentName(agentName);
-      if (!agentId) {
-        console.log(chalk.red(formatAgentError(agentName)));
-        process.exit(1);
-      }
-
-      // Handle version-specific push
-      if (requestedVersion) {
-        const installedVersions = listInstalledVersions(agentId);
-        if (!installedVersions.includes(requestedVersion)) {
-          console.log(chalk.red(`Version ${requestedVersion} not installed for ${AGENTS[agentId].name}`));
-          console.log(chalk.gray(`Installed versions: ${installedVersions.join(', ') || 'none'}`));
-          process.exit(1);
-        }
-        const home = getVersionHomePath(agentId, requestedVersion);
-        const agent = AGENTS[agentId];
-        const projectPath = path.join(cwd, `.${agentId}`, agent.instructionsFile);
-        const userPath = path.join(home, `.${agentId}`, agent.instructionsFile);
-
-        if (!fs.existsSync(projectPath)) {
-          console.log(chalk.red(`No project memory found for ${agent.name}`));
-          process.exit(1);
-        }
-        fs.mkdirSync(path.dirname(userPath), { recursive: true });
-        fs.copyFileSync(projectPath, userPath);
-        console.log(chalk.green(`Pushed ${agent.instructionsFile} to ${agent.name}@${requestedVersion} user scope`));
-        return;
-      }
-
-      const result = promoteInstructionsToUser(agentId, cwd);
-      if (result.success) {
-        console.log(chalk.green(`Pushed ${AGENTS[agentId].instructionsFile} to user scope`));
-      } else {
-        console.log(chalk.red(result.error || 'Failed to push memory'));
-      }
+      await displayContent(content, `${AGENTS[agentId].name} Memory (${scope})`, memPath);
     });
 
   memoryCmd
@@ -502,5 +484,14 @@ export function registerMemoryCommands(program: Command): void {
       } else {
         console.log(chalk.yellow(`No memory file found for ${AGENTS[agentId].name}`));
       }
+    });
+
+  // Deprecated alias for 'view'
+  memoryCmd
+    .command('show [agent]', { hidden: true })
+    .action(async (agentArg?: string) => {
+      console.log(chalk.yellow('Deprecated: Use "agents memory view" instead of "agents memory show"\n'));
+      // Re-execute view command logic
+      await memoryCmd.commands.find((c) => c.name() === 'view')?.parseAsync(['view', ...(agentArg ? [agentArg] : [])], { from: 'user' });
     });
 }

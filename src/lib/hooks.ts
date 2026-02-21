@@ -333,30 +333,37 @@ export async function removeHook(
   return { removed, errors };
 }
 
-export function promoteHookToUser(
-  agentId: AgentId,
-  name: string,
-  cwd: string = process.cwd()
-): { success: boolean; error?: string } {
-  const agent = AGENTS[agentId];
-  if (!agent.supportsHooks) {
-    return { success: false, error: 'Agent does not support hooks' };
+/**
+ * Get detailed info about a hook from central storage.
+ */
+export function getHookInfo(name: string): {
+  name: string;
+  path: string;
+  content: string;
+} | null {
+  const centralDir = getCentralHooksDir();
+  const hookPath = path.join(centralDir, name);
+
+  if (!fs.existsSync(hookPath)) {
+    return null;
   }
 
-  const projectDir = getProjectHooksDir(agentId, cwd);
-  const hooks = listHookEntriesFromDir(projectDir);
-  const hook = hooks.find((h) => h.name === name);
-  if (!hook) {
-    return { success: false, error: `Project hook '${name}' not found` };
+  // Read hook content - it could be a file or directory
+  let content = '';
+  const stat = fs.statSync(hookPath);
+  if (stat.isFile()) {
+    content = fs.readFileSync(hookPath, 'utf-8');
+  } else if (stat.isDirectory()) {
+    // For directory hooks, list the files
+    const files = fs.readdirSync(hookPath);
+    content = `Directory hook containing:\n${files.map((f) => `  - ${f}`).join('\n')}`;
   }
 
-  try {
-    const userDir = getHooksDir(agentId);
-    copyHook(hook, userDir);
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: (err as Error).message };
-  }
+  return {
+    name,
+    path: hookPath,
+    content,
+  };
 }
 
 export function discoverHooksFromRepo(repoPath: string): string[] {

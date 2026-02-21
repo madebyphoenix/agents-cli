@@ -20,7 +20,6 @@ import {
 import {
   getAgentsDir,
   ensureAgentsDir,
-  ensureGitignore,
   readMeta,
   updateMeta,
 } from '../lib/state.js';
@@ -89,7 +88,6 @@ export function registerPullCommand(program: Command): void {
 
       const agentsDir = getAgentsDir();
       ensureAgentsDir();
-      ensureGitignore();
 
       // Handle --upstream: pull from upstream remote
       if (options.upstream) {

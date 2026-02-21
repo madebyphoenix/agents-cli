@@ -137,7 +137,8 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       const versions = listInstalledVersions(agentId);
       const globalDefault = getGlobalDefault(agentId);
 
-      console.log(`  ${chalk.bold(agent.name)}`);
+      const noDefaultLabel = !globalDefault ? chalk.yellow(' (no default)') : '';
+      console.log(`  ${chalk.bold(agent.name)}${noDefaultLabel}`);
 
       // Sort versions with default first, then by semver descending
       const sortedVersions = [...versions].sort((a, b) => {
@@ -175,14 +176,25 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
   if (globallyInstalled.length > 0) {
     console.log(chalk.bold('Not Managed by Agents CLI\n'));
 
+    // Calculate max version label width for alignment
+    const globalMaxVerLabel = Math.max(
+      ...globallyInstalled.map((agentId) => {
+        const cliState = cliStates[agentId];
+        return `${cliState?.version || 'installed'} (global)`.length;
+      })
+    );
+
     for (const agentId of globallyInstalled) {
       const agent = AGENTS[agentId];
       const cliState = cliStates[agentId];
 
       console.log(`  ${chalk.bold(agent.name)}`);
       const gEmail = globalListEmailMap.get(agentId);
-      const gEmailStr = gEmail ? `    ${chalk.cyan(gEmail)}` : '';
-      console.log(`    ${cliState?.version || 'installed'} ${chalk.gray('(global)')}${gEmailStr}`);
+      const verLabel = `${cliState?.version || 'installed'} ${chalk.gray('(global)')}`;
+      const verLabelLen = `${cliState?.version || 'installed'} (global)`.length;
+      const padding = ' '.repeat(Math.max(0, globalMaxVerLabel - verLabelLen));
+      const gEmailStr = gEmail ? `  ${chalk.cyan(gEmail)}` : '';
+      console.log(`    ${verLabel}${padding}${gEmailStr}`);
       if (showPaths && cliState?.path) {
         console.log(chalk.gray(`      ${cliState.path}`));
       }

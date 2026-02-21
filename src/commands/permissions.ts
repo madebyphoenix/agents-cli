@@ -39,7 +39,6 @@ import { isPromptCancelled } from './utils.js';
 export function registerPermissionsCommands(program: Command): void {
   const permissionsCmd = program
     .command('permissions')
-    .alias('perms')
     .description('Manage agent permissions');
 
   permissionsCmd
@@ -620,4 +619,84 @@ export function registerPermissionsCommands(program: Command): void {
         }
       }
     });
+
+  permissionsCmd
+    .command('view [name]')
+    .description('Show permission set details')
+    .action(async (name?: string) => {
+      const installedSets = listInstalledPermissions();
+      if (installedSets.length === 0) {
+        console.log(chalk.yellow('No permission sets installed'));
+        return;
+      }
+
+      // If no name provided, show interactive select
+      if (!name) {
+        try {
+          const { select } = await import('@inquirer/prompts');
+          name = await select({
+            message: 'Select a permission set to view',
+            choices: installedSets.map((perm) => ({
+              value: perm.name,
+              name: perm.set.description
+                ? `${perm.name} - ${perm.set.description}`
+                : perm.name,
+            })),
+          });
+        } catch (err) {
+          if (isPromptCancelled(err)) {
+            console.log(chalk.gray('Cancelled'));
+            return;
+          }
+          throw err;
+        }
+      }
+
+      const perm = installedSets.find((p) => p.name === name);
+      if (!perm) {
+        console.log(chalk.yellow(`Permission set '${name}' not found`));
+        return;
+      }
+
+      // Build output
+      const lines: string[] = [];
+      lines.push(chalk.bold(`\n${perm.name}\n`));
+      if (perm.set.description) {
+        lines.push(`  ${perm.set.description}`);
+      }
+      lines.push('');
+
+      if (perm.set.allow.length > 0) {
+        lines.push(chalk.green('  Allow rules:'));
+        for (const rule of perm.set.allow) {
+          lines.push(`    ${chalk.cyan(rule)}`);
+        }
+      }
+
+      if (perm.set.deny && perm.set.deny.length > 0) {
+        lines.push(chalk.red('\n  Deny rules:'));
+        for (const rule of perm.set.deny) {
+          lines.push(`    ${chalk.yellow(rule)}`);
+        }
+      }
+      lines.push('');
+
+      const output = lines.join('\n');
+
+      // Pipe through less for scrolling (q to quit)
+      const { spawnSync } = await import('child_process');
+      const less = spawnSync('less', ['-R'], {
+        input: output,
+        stdio: ['pipe', 'inherit', 'inherit'],
+      });
+
+      // Fallback to direct output if less fails
+      if (less.status !== 0) {
+        console.log(output);
+      }
+    });
+
+  // Deprecated alias handler for 'perms'
+  // Note: This needs to be registered at the program level, not as a subcommand
+  // The actual deprecation message is shown in index.ts
 }

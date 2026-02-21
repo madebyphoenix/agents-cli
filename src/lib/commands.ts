@@ -369,37 +369,6 @@ function getCommandDescription(filePath: string): string | undefined {
 }
 
 /**
- * Copy a project-scoped command to user scope.
- */
-export function promoteCommandToUser(
-  agentId: AgentId,
-  commandName: string,
-  cwd: string = process.cwd()
-): { success: boolean; error?: string } {
-  const agent = AGENTS[agentId];
-  const ext = agent.format === 'toml' ? '.toml' : '.md';
-
-  const projectDir = getProjectCommandsDir(agentId, cwd);
-  const sourcePath = path.join(projectDir, `${commandName}${ext}`);
-
-  if (!fs.existsSync(sourcePath)) {
-    return { success: false, error: `Project command '${commandName}' not found` };
-  }
-
-  const home = getEffectiveHome(agentId);
-  const commandsDir = path.join(home, `.${agentId}`, agent.commandsSubdir);
-  fs.mkdirSync(commandsDir, { recursive: true });
-  const targetPath = path.join(commandsDir, `${commandName}${ext}`);
-
-  try {
-    fs.copyFileSync(sourcePath, targetPath);
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: (err as Error).message };
-  }
-}
-
-/**
  * Install a command to central ~/.agents/commands/ directory.
  * Shims will symlink this to per-agent directories for synced agents.
  */
@@ -453,4 +422,31 @@ export function listCentralCommands(): string[] {
     .readdirSync(centralDir)
     .filter((f) => f.endsWith('.md'))
     .map((f) => f.replace('.md', ''));
+}
+
+/**
+ * Get detailed info about a command from central storage.
+ */
+export function getCommandInfo(name: string): {
+  name: string;
+  description: string;
+  path: string;
+  content: string;
+} | null {
+  const centralDir = getCommandsDir();
+  const cmdPath = path.join(centralDir, `${name}.md`);
+
+  if (!fs.existsSync(cmdPath)) {
+    return null;
+  }
+
+  const content = fs.readFileSync(cmdPath, 'utf-8');
+  const metadata = parseCommandMetadata(cmdPath);
+
+  return {
+    name,
+    description: metadata?.description || '',
+    path: cmdPath,
+    content,
+  };
 }

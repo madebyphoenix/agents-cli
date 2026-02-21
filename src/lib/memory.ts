@@ -252,35 +252,6 @@ export function listInstalledInstructionsWithScope(
   return results;
 }
 
-export function promoteInstructionsToUser(
-  agentId: AgentId,
-  cwd: string = process.cwd()
-): { success: boolean; error?: string } {
-  const agent = AGENTS[agentId];
-  // Check root-level first, then subdirectory
-  const rootPath = path.join(cwd, agent.instructionsFile);
-  const subPath = path.join(cwd, `.${agentId}`, agent.instructionsFile);
-  const projectPath = fs.existsSync(rootPath) ? rootPath : subPath;
-
-  if (!fs.existsSync(projectPath)) {
-    return { success: false, error: `Project instructions not found at ${projectPath}` };
-  }
-
-  const configDir = getUserConfigDir(agentId);
-  if (!fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
-  }
-
-  const targetPath = path.join(configDir, agent.instructionsFile);
-
-  try {
-    fs.copyFileSync(projectPath, targetPath);
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: (err as Error).message };
-  }
-}
-
 export function getInstructionsContent(agentId: AgentId, scope: InstructionsScope = 'user', cwd: string = process.cwd()): string | null {
   const instructionsPath = getInstructionsPath(agentId, scope, cwd);
   if (!fs.existsSync(instructionsPath)) {

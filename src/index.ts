@@ -206,6 +206,20 @@ registerHooksCommands(program);
 registerSkillsCommands(program);
 registerMemoryCommands(program);
 registerPermissionsCommands(program);
+
+// Deprecated 'perms' alias for 'permissions'
+program
+  .command('perms', { hidden: true })
+  .allowUnknownOption()
+  .allowExcessArguments()
+  .action(async (opts, cmd) => {
+    console.log(chalk.yellow('Deprecated: Use "agents permissions" instead of "agents perms"\n'));
+    // Re-parse with 'permissions' command
+    const args = process.argv.slice(2);
+    args[0] = 'permissions';
+    await program.parseAsync(['node', 'agents', ...args]);
+  });
+
 registerMcpCommands(program);
 registerVersionsCommands(program);
 registerPackagesCommands(program);

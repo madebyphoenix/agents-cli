@@ -19,8 +19,8 @@ import {
   installHooksCentrally,
   listCentralHooks,
   listInstalledHooksWithScope,
-  promoteHookToUser,
   removeHook,
+  getHookInfo,
 } from '../lib/hooks.js';
 import {
   listInstalledVersions,
@@ -429,30 +429,67 @@ export function registerHooksCommands(program: Command): void {
     });
 
   hooksCmd
-    .command('push <name>')
-    .description('Promote a project hook to user scope')
-    .option('-a, --agents <list>', 'Comma-separated agents to push for')
-    .action((name: string, options) => {
-      const cwd = process.cwd();
-      const agents = options.agents
-        ? (options.agents.split(',') as AgentId[])
-        : (Array.from(HOOKS_CAPABLE_AGENTS) as AgentId[]);
+    .command('view [name]')
+    .description('Show hook details')
+    .action(async (name?: string) => {
+      const centralHooks = listCentralHooks();
+      if (centralHooks.length === 0) {
+        console.log(chalk.yellow('No hooks installed'));
+        return;
+      }
 
-      let pushed = 0;
-      for (const agentId of agents) {
-        const result = promoteHookToUser(agentId, name, cwd);
-        if (result.success) {
-          console.log(`  ${AGENTS[agentId].name}`);
-          pushed++;
-        } else if (result.error && !result.error.includes('not found')) {
-          console.log(`  ${AGENTS[agentId].name}: ${result.error}`);
+      // If no name provided, show interactive select
+      if (!name) {
+        try {
+          const { select } = await import('@inquirer/prompts');
+          name = await select({
+            message: 'Select a hook to view',
+            choices: centralHooks.map((hook) => ({
+              value: hook.name,
+              name: hook.name,
+            })),
+          });
+        } catch (err) {
+          if (isPromptCancelled(err)) {
+            console.log(chalk.gray('Cancelled'));
+            return;
+          }
+          throw err;
         }
       }
 
-      if (pushed === 0) {
-        console.log(chalk.yellow(`Project hook '${name}' not found for any agent`));
-      } else {
-        console.log(chalk.green(`\nPushed to user scope for ${pushed} agents.`));
+      const hook = getHookInfo(name);
+      if (!hook) {
+        console.log(chalk.yellow(`Hook '${name}' not found`));
+        return;
+      }
+
+      // Build header
+      console.log(chalk.bold(`\n${hook.name}`));
+      console.log(chalk.gray(`Path: ${hook.path}\n`));
+
+      // Show content (hooks are usually shell scripts, not markdown - just show with syntax highlighting placeholder)
+      if (hook.content) {
+        const contentLines = hook.content.split('\n');
+
+        // For shell scripts, just display with line numbers
+        const output = contentLines.map((line, i) => `  ${chalk.gray(String(i + 1).padStart(3))}  ${line}`).join('\n');
+
+        // Pipe through less for scrolling if content is large
+        if (contentLines.length > 40) {
+          const { spawnSync } = await import('child_process');
+          const less = spawnSync('less', ['-R'], {
+            input: output,
+            stdio: ['pipe', 'inherit', 'inherit'],
+          });
+
+          // Fallback to direct output if less fails
+          if (less.status !== 0) {
+            console.log(output);
+          }
+        } else {
+          console.log(output);
+        }
       }
     });
 }

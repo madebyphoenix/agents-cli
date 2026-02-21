@@ -711,36 +711,6 @@ export function listInstalledMcpsWithScope(
   return results;
 }
 
-/**
- * Copy a project-scoped MCP to user scope.
- * Pass options.home to write to a version-managed agent's home directory.
- */
-export async function promoteMcpToUser(
-  agentId: AgentId,
-  mcpName: string,
-  cwd: string = process.cwd(),
-  options?: { home?: string; binary?: string }
-): Promise<{ success: boolean; error?: string }> {
-  const projectConfigPath = getProjectMcpConfigPath(agentId, cwd);
-  const projectMcps = parseMcpConfig(agentId, projectConfigPath);
-
-  if (!projectMcps[mcpName]) {
-    return { success: false, error: `Project MCP '${mcpName}' not found` };
-  }
-
-  const mcpConfig = projectMcps[mcpName];
-  const command = mcpConfig.command || (mcpConfig.args ? mcpConfig.args.join(' ') : '');
-
-  if (!command) {
-    return { success: false, error: 'Cannot determine MCP command' };
-  }
-
-  return registerMcp(agentId, mcpName, command, 'user', 'stdio', {
-    home: options?.home,
-    binary: options?.binary,
-  });
-}
-
 // Agent name aliases for flexible input
 export const AGENT_NAME_ALIASES: Record<string, AgentId> = {
   claude: 'claude',

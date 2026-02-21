@@ -2,7 +2,7 @@ import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 
-import { getAgentsDir, ensureAgentsDir, ensureGitignore } from '../lib/state.js';
+import { getAgentsDir, ensureAgentsDir } from '../lib/state.js';
 import {
   isGitRepo,
   isSystemRepoOrigin,
@@ -23,7 +23,6 @@ export function registerForkCommand(program: Command): void {
       try {
         const agentsDir = getAgentsDir();
         ensureAgentsDir();
-        ensureGitignore();
 
         // Check if ~/.agents/ is a git repo
         if (!isGitRepo(agentsDir)) {

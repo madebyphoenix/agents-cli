@@ -514,34 +514,6 @@ export function listInstalledSkillsWithScope(
   return results;
 }
 
-export function promoteSkillToUser(
-  agentId: AgentId,
-  skillName: string,
-  cwd: string = process.cwd()
-): { success: boolean; error?: string } {
-  const projectSkillsDir = getProjectSkillsDir(agentId, cwd);
-  const projectSkillPath = path.join(projectSkillsDir, skillName);
-
-  if (!fs.existsSync(projectSkillPath)) {
-    return { success: false, error: `Project skill '${skillName}' not found` };
-  }
-
-  ensureSkillsDir(agentId);
-  const userSkillPath = path.join(getAgentSkillsDir(agentId), skillName);
-
-  // Check if already exists
-  if (fs.existsSync(userSkillPath)) {
-    return { success: false, error: `User skill '${skillName}' already exists` };
-  }
-
-  try {
-    fs.cpSync(projectSkillPath, userSkillPath, { recursive: true });
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: `Failed to copy skill: ${(err as Error).message}` };
-  }
-}
-
 export function getSkillInfo(skillName: string): DiscoveredSkill | null {
   const centralPath = path.join(getSkillsDir(), skillName);
   if (!fs.existsSync(centralPath)) {

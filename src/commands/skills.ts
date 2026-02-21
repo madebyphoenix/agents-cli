@@ -21,7 +21,6 @@ import {
   uninstallSkill,
   listInstalledSkills,
   listInstalledSkillsWithScope,
-  promoteSkillToUser,
   getSkillInfo,
   getSkillRules,
   tryParseSkillMetadata,
@@ -553,39 +552,8 @@ export function registerSkillsCommands(program: Command): void {
     });
 
   skillsCmd
-    .command('push <name>')
-    .description('Promote a project skill to user scope')
-    .option('-a, --agents <list>', 'Comma-separated agents to push for')
-    .action((name: string, options) => {
-      const cwd = process.cwd();
-      const agents = options.agents
-        ? (options.agents.split(',') as AgentId[])
-        : SKILLS_CAPABLE_AGENTS;
-
-      let pushed = 0;
-      for (const agentId of agents) {
-        if (!AGENTS[agentId].capabilities.skills) continue;
-
-        const result = promoteSkillToUser(agentId, name, cwd);
-        if (result.success) {
-          console.log(`  ${chalk.green('+')} ${AGENTS[agentId].name}`);
-          pushed++;
-        } else if (result.error && !result.error.includes('not found')) {
-          console.log(`  ${chalk.red('x')} ${AGENTS[agentId].name}: ${result.error}`);
-        }
-      }
-
-      if (pushed === 0) {
-        console.log(chalk.yellow(`Project skill '${name}' not found for any agent`));
-      } else {
-        console.log(chalk.green(`\nPushed to user scope for ${pushed} agents.`));
-      }
-    });
-
-  skillsCmd
     .command('view [name]')
-    .alias('info')
-    .description('Show installed skill details')
+    .description('Show skill details')
     .action(async (name?: string) => {
       // If no name provided, show interactive select
       if (!name) {
@@ -680,5 +648,14 @@ export function registerSkillsCommands(program: Command): void {
       if (less.status !== 0) {
         console.log(output);
       }
+    });
+
+  // Deprecated alias for 'view'
+  skillsCmd
+    .command('info [name]', { hidden: true })
+    .action(async (name?: string) => {
+      console.log(chalk.yellow('Deprecated: Use "agents skills view" instead of "agents skills info"\n'));
+      // Re-execute view command logic
+      await skillsCmd.commands.find((c) => c.name() === 'view')?.parseAsync(['view', ...(name ? [name] : [])], { from: 'user' });
     });
 }
