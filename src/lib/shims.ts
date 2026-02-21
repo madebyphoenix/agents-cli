@@ -127,11 +127,14 @@ export async function promptConflictStrategy(
 /**
  * Generate the shim script content for an agent.
  *
- * The shim resolves the version (project manifest -> global default) and execs
- * the appropriate binary. Config isolation is handled via symlinks:
- * ~/.{agent} -> ~/.agents/versions/{agent}/{version}/home/.{agent}/
+ * The shim resolves the version in order:
+ * 1. .agents-version in cwd (walk up to root)
+ * 2. ~/.agents/meta.yaml default
  *
- * The symlink is updated by `agents use` when switching versions.
+ * If version is specified but not installed, auto-installs it.
+ *
+ * Config isolation is handled via symlinks:
+ * ~/.{agent} -> ~/.agents/versions/{agent}/{version}/home/.{agent}/
  */
 function generateShimScript(agent: AgentId): string {
   const agentConfig = AGENTS[agent];
@@ -145,19 +148,61 @@ AGENTS_DIR="$HOME/.agents"
 AGENT="${agent}"
 CLI_COMMAND="${cliCommand}"
 
-# Resolve version from global config only
-resolve_version() {
-  local global_config="$AGENTS_DIR/agents.yaml"
-  if [ -f "$global_config" ]; then
+# Find .agents-version walking up from cwd
+find_project_version() {
+  local dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/.agents-version" ]; then
+      # Parse YAML - handle both "agent: version" and "agent:\\n  - version"
+      local version
+      version=$(awk -v agent="$AGENT" '
+        $0 ~ "^" agent ":" {
+          # Check if value is on same line
+          if (match($0, /:[[:space:]]+[0-9]/)) {
+            gsub(/.*:[[:space:]]*["'"'"']?|["'"'"']?[[:space:]]*$/, "")
+            print
+            exit
+          }
+          # Value might be on next line (array format)
+          getline
+          if (/^[[:space:]]+-[[:space:]]/) {
+            gsub(/^[[:space:]]+-[[:space:]]*["'"'"']?|["'"'"']?[[:space:]]*$/, "")
+            print
+            exit
+          }
+        }
+      ' "$dir/.agents-version")
+      if [ -n "$version" ]; then
+        echo "$version"
+        return 0
+      fi
+    fi
+    dir=$(dirname "$dir")
+  done
+  return 1
+}
+
+# Resolve version from meta.yaml (user default)
+resolve_meta_version() {
+  local meta="$AGENTS_DIR/meta.yaml"
+  if [ -f "$meta" ]; then
     awk -v agent="$AGENT" '
-      /^agents:/ { in_agents=1; next }
-      in_agents && /^[^ ]/ { in_agents=0 }
-      in_agents && $0 ~ "^  " agent ":" { gsub(/.*:[[:space:]]*["'"'"']?|["'"'"']?[[:space:]]*$/, ""); print; exit }
-    ' "$global_config"
+      /^versions:/ { in_versions=1; next }
+      in_versions && /^[^ ]/ { in_versions=0 }
+      in_versions && $0 ~ "^  " agent ":" { in_agent=1; next }
+      in_agent && /^  [^ ]/ { in_agent=0 }
+      in_agent && /default:/ { gsub(/.*:[[:space:]]*["'"'"']?|["'"'"']?[[:space:]]*$/, ""); print; exit }
+    ' "$meta"
   fi
 }
 
-VERSION=$(resolve_version)
+# Try project version first, then meta default
+VERSION=$(find_project_version)
+VERSION_SOURCE="project"
+if [ -z "$VERSION" ]; then
+  VERSION=$(resolve_meta_version)
+  VERSION_SOURCE="default"
+fi
 
 if [ -z "$VERSION" ]; then
   echo "agents: no version of $AGENT configured" >&2
@@ -168,10 +213,41 @@ fi
 VERSION_DIR="$AGENTS_DIR/versions/$AGENT/$VERSION"
 BINARY="$VERSION_DIR/node_modules/.bin/$CLI_COMMAND"
 
+# Auto-install if not present
 if [ ! -x "$BINARY" ]; then
-  echo "agents: $AGENT@$VERSION not installed" >&2
-  echo "Run: agents add $AGENT@$VERSION" >&2
-  exit 1
+  if [ "$VERSION_SOURCE" = "project" ]; then
+    echo "agents: $AGENT@$VERSION required by .agents-version but not installed" >&2
+
+    # Spinner animation
+    spin() {
+      local pid=$1
+      local chars="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+      local i=0
+      while kill -0 "$pid" 2>/dev/null; do
+        printf "\\r  %s Installing $AGENT@$VERSION..." "\${chars:i++%\${#chars}:1}" >&2
+        sleep 0.1
+      done
+      printf "\\r" >&2
+    }
+
+    # Run install in background with spinner
+    agents add "$AGENT@$VERSION" --yes >/dev/null 2>&1 &
+    install_pid=$!
+    spin $install_pid
+    wait $install_pid
+    install_status=$?
+
+    if [ $install_status -eq 0 ]; then
+      echo "  ✔ Installed $AGENT@$VERSION" >&2
+    else
+      echo "  ✗ Failed to install $AGENT@$VERSION" >&2
+      exit 1
+    fi
+  else
+    echo "agents: $AGENT@$VERSION not installed" >&2
+    echo "Run: agents add $AGENT@$VERSION" >&2
+    exit 1
+  fi
 fi
 
 exec "$BINARY" "$@"

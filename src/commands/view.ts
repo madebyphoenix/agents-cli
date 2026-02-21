@@ -132,6 +132,17 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
 
   // Show version-managed agents
   if (versionManaged.length > 0) {
+    // Calculate global max version label width across all agents
+    let globalMaxVerLabel = 0;
+    for (const agentId of versionManaged) {
+      const versions = listInstalledVersions(agentId);
+      const globalDefault = getGlobalDefault(agentId);
+      for (const v of versions) {
+        const label = v === globalDefault ? `${v} (default)` : v;
+        globalMaxVerLabel = Math.max(globalMaxVerLabel, label.length);
+      }
+    }
+
     for (const agentId of versionManaged) {
       const agent = AGENTS[agentId];
       const versions = listInstalledVersions(agentId);
@@ -147,12 +158,11 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
         return compareVersions(b, a);
       });
 
-      const maxVerLabel = Math.max(...sortedVersions.map((v) => (v === globalDefault ? `${v} (default)` : v).length));
       for (const version of sortedVersions) {
         const isDefault = version === globalDefault;
         const base = isDefault ? `${version} (default)` : version;
-        const padded = base.padEnd(maxVerLabel);
-        const label = isDefault ? `${version}${chalk.green(' (default)')}${' '.repeat(maxVerLabel - base.length)}` : padded;
+        const padded = base.padEnd(globalMaxVerLabel);
+        const label = isDefault ? `${version}${chalk.green(' (default)')}${' '.repeat(globalMaxVerLabel - base.length)}` : padded;
         const vEmail = listEmailMap.get(`${agentId}:${version}`);
         const vEmailStr = vEmail ? `  ${chalk.cyan(vEmail)}` : '';
         console.log(`    ${label}${vEmailStr}`);

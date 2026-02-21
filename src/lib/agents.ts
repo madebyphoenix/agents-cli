@@ -53,7 +53,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   },
   gemini: {
     id: 'gemini',
-    name: 'Gemini CLI',
+    name: 'Gemini',
     cliCommand: 'gemini',
     npmPackage: '@google/gemini-cli',
     configDir: path.join(HOME, '.gemini'),
