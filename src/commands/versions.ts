@@ -44,6 +44,8 @@ import {
   switchConfigSymlink,
 } from '../lib/shims.js';
 import { isPromptCancelled } from './utils.js';
+import { tryAutoPull } from '../lib/git.js';
+import { getAgentsDir } from '../lib/state.js';
 
 /**
  * Helper to get actual installed version for an agent.
@@ -303,6 +305,13 @@ export function registerVersionsCommands(program: Command): void {
     .option('-p, --project', 'Set in project manifest instead of global default')
     .action(async (agentArg: string, versionArg: string | undefined, options) => {
       try {
+        // Auto-pull ~/.agents if it's a git repo with remote (silent on success)
+        const agentsDir = getAgentsDir();
+        const pullResult = await tryAutoPull(agentsDir);
+        if (pullResult.pulled) {
+          console.log(chalk.gray('Synced ~/.agents from remote'));
+        }
+
         // Support both "claude 2.0.65" and "claude@2.0.65" formats
         let agent: string;
         let version: string | undefined;

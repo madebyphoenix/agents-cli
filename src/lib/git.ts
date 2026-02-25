@@ -663,3 +663,55 @@ export async function pullFromUpstream(dir: string): Promise<{ success: boolean;
     return { success: false, commit: '', error: (err as Error).message };
   }
 }
+
+/**
+ * Try to auto-pull a git repo if it's clean and has a remote.
+ * Uses --ff-only for safety (fails if diverged instead of creating merge commits).
+ * Returns silently on success, returns error message on failure.
+ */
+export async function tryAutoPull(dir: string): Promise<{ pulled: boolean; error?: string }> {
+  // Must be a git repo
+  if (!isGitRepo(dir)) {
+    return { pulled: false };
+  }
+
+  try {
+    const git = simpleGit(dir);
+
+    // Must have origin remote
+    const remotes = await git.getRemotes(true);
+    const origin = remotes.find(r => r.name === 'origin');
+    if (!origin?.refs?.fetch) {
+      return { pulled: false };
+    }
+
+    // Must be clean (no uncommitted changes)
+    const status = await git.status();
+    if (!status.isClean()) {
+      return { pulled: false, error: 'Has local changes' };
+    }
+
+    // Fetch and try fast-forward pull
+    await git.fetch('origin');
+
+    // Check if we're behind
+    const localRef = await git.revparse(['HEAD']);
+    const trackingBranch = status.tracking;
+    if (!trackingBranch) {
+      return { pulled: false };
+    }
+
+    const remoteRef = await git.revparse([trackingBranch]).catch(() => null);
+    if (!remoteRef || localRef === remoteRef) {
+      // Already up to date
+      return { pulled: false };
+    }
+
+    // Try fast-forward only pull
+    await git.pull(['--ff-only']);
+
+    return { pulled: true };
+  } catch (err) {
+    return { pulled: false, error: (err as Error).message };
+  }
+}
