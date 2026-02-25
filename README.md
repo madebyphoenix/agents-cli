@@ -95,7 +95,9 @@ Repo structure:
   skills/                  # Skills (SKILL.md + rules/)
   hooks/                   # Hook scripts
   memory/                  # Memory files (*.md)
-  permissions/             # Permission sets (*.yml)
+  mcp/                     # MCP server configs (*.yaml)
+  permissions/
+    groups/                # Permission groups (*.yaml)
 ```
 
 Resources exist at two scopes:
@@ -105,7 +107,7 @@ Resources exist at two scopes:
 | **User** | `~/.{agent}/` | Available everywhere |
 | **Project** | `./.{agent}/` | Committed to a specific repo |
 
-Promote project-scope resources to user-scope with `push` subcommands (`agents commands push`, `agents skills push`, etc.).
+Use `add` subcommands to install resources from repos or local paths (`agents commands add`, `agents skills add`, etc.).
 
 ## Package Management
 
@@ -154,7 +156,49 @@ agents mcp register                # Register all servers with agent CLIs
 agents mcp remove myserver         # Remove from all agents
 ```
 
-During `agents pull`, MCP servers defined in the repo are automatically registered with each agent that supports them.
+MCP servers are stored as YAML in `~/.agents/mcp/`:
+
+```yaml
+# ~/.agents/mcp/Swarm.yaml
+name: Swarm
+transport: stdio
+command: npx
+args:
+  - -y
+  - '@swarmify/agents-mcp@latest'
+```
+
+During `agents use` or `agents pull`, you select which MCPs to sync to each agent version.
+
+## Permissions
+
+Permissions are organized into groups in `~/.agents/permissions/groups/`. Each group contains related permission rules:
+
+```
+permissions/groups/
+  00-header.yaml      # Metadata
+  01-core.yaml        # Core shell utilities
+  02-node.yaml        # Node.js ecosystem (60 rules)
+  03-python.yaml      # Python ecosystem (47 rules)
+  04-go.yaml          # Go ecosystem
+  ...
+  20-webfetch-dev.yaml    # WebFetch for dev docs
+  30-paths.yaml           # File system paths
+  99-deny.yaml            # Explicit denials
+```
+
+During `agents use`, you can select which groups to sync:
+
+```
+? Which resources from ~/.agents/ would you like to sync?
+  Commands (21 available), Skills (7 available), MCPs (1 available),
+  Permissions (19 groups, 3132 rules)
+```
+
+Permission groups are combined and applied to each agent's native format:
+- **Claude**: `~/.claude/settings.json` (`permissions.allow/deny`)
+- **Codex**: `~/.codex/config.toml` (`approval_policy`, `sandbox_mode`)
+- **OpenCode**: `~/.opencode/opencode.jsonc` (`permission.bash`)
 
 ## Skills & Commands
 
@@ -165,8 +209,8 @@ Slash commands are markdown (or TOML for Gemini) files that appear in the agent'
 ```bash
 agents commands list               # List installed commands
 agents commands add <source>       # Install from a repo or local path
+agents commands view <name>        # Show command contents
 agents commands remove <name>      # Remove a command
-agents commands push <name>        # Promote project -> user scope
 ```
 
 Commands in `commands/` are distributed to every agent. Markdown commands are auto-converted to TOML when installed for Gemini.
@@ -177,15 +221,14 @@ Skills bundle a `SKILL.md` file with optional `rules/` for deeper agent guidance
 
 ```bash
 agents skills list                 # List installed skills
-agents skills add <source>        # Install from a repo or local path
-agents skills view <name>         # Show skill contents
-agents skills remove <name>       # Remove a skill
-agents skills push <name>         # Promote project -> user scope
+agents skills add <source>         # Install from a repo or local path
+agents skills view <name>          # Show skill contents
+agents skills remove <name>        # Remove a skill
 ```
 
-## Jobs & Sandboxing
+## Cron Jobs & Sandboxing
 
-Schedule agents to run autonomously on cron. Define a job in YAML, and the daemon handles execution.
+Schedule agents to run autonomously on cron. Define a job in YAML or inline, and the daemon handles execution.
 
 ```yaml
 name: daily-pr-digest
@@ -193,10 +236,14 @@ schedule: "0 9 * * 1-5"
 agent: claude
 mode: plan
 timeout: 15m
+timezone: America/Los_Angeles
 prompt: |
   Today is {date}. Review all PRs I merged since 5 PM yesterday
   across every repo in ~/src/. Summarize what shipped, flag
   anything that looks risky, and write the digest to the report.
+
+variables:
+  repo_path: ~/src
 
 allow:
   tools: [bash, read, glob, grep]
@@ -207,17 +254,52 @@ config:
 ```
 
 ```bash
-agents jobs add job.yaml           # Register a job
-agents jobs run my-job             # Run immediately in foreground
+# Add jobs from YAML or inline
+agents cron add job.yaml                                    # From YAML file
+agents cron add my-job -s "0 9 * * *" -a claude -p "..."    # Inline with flags
+agents cron add reminder --at "14:30" -a claude -p "..."    # One-shot job
+
+# Manage jobs (all commands show picker when name omitted)
+agents cron list                   # Show all jobs and status
+agents cron view                   # View job config (interactive picker)
+agents cron edit                   # Edit in $EDITOR (interactive picker)
+agents cron remove                 # Remove a job (interactive picker)
+
+# Run and monitor
+agents cron run                    # Run immediately (interactive picker)
+agents cron runs                   # Show execution history
+agents cron logs                   # Show output from latest run
+agents cron report                 # Show report from latest run
+
+# Enable/disable
+agents cron pause                  # Pause a job (shows only enabled jobs)
+agents cron resume                 # Resume a job (shows only paused jobs)
+
+# Daemon
 agents daemon start                # Start the cron scheduler
-agents jobs list                   # Show all jobs and status
-agents jobs logs my-job            # Show output from latest run
-agents jobs report my-job          # Show report from latest run
-agents jobs enable my-job          # Enable a disabled job
-agents jobs disable my-job         # Disable without removing
+agents daemon stop                 # Stop the daemon
+agents daemon status               # Check daemon status
 ```
 
-Template variables available in `prompt`: `{day}`, `{date}`, `{time}`, `{job_name}`, `{last_report}`.
+Template variables: `{day}`, `{date}`, `{time}`, `{job_name}`, `{last_report}`, plus custom `variables`.
+
+## Unified Execution
+
+Run any agent with a consistent interface using `agents exec`:
+
+```bash
+agents exec claude "Review this PR"              # Default mode (plan)
+agents exec codex "Fix the bug" --mode edit      # Edit mode
+agents exec gemini "Analyze code" --effort fast  # Fast model
+agents exec claude@2.0.0 "Task" --cwd ./project  # Specific version + cwd
+```
+
+Options:
+- `--mode <plan|edit>` - Read-only analysis or allow edits
+- `--effort <fast|default|detailed>` - Model selection (maps to haiku/sonnet/opus, etc.)
+- `--model <model>` - Override model directly
+- `--cwd <dir>` - Working directory
+- `--add-dir <dir>` - Add directory access (Claude only, repeatable)
 
 ### Sandbox Isolation
 
@@ -242,13 +324,13 @@ The agent cannot access `~/.ssh`, `~/.aws`, `~/.gitconfig`, API keys in env vars
 
 ## Compatibility
 
-| Agent | Commands | MCP | Hooks | Skills | Memory | Jobs |
-|-------|----------|-----|-------|--------|-------------|------|
-| Claude | yes | yes | yes | yes | yes | yes |
-| Codex | yes | yes | -- | yes | yes | yes |
-| Gemini CLI | yes | yes | yes | yes | yes | yes |
-| Cursor | yes | yes | -- | yes | yes | -- |
-| OpenCode | yes | yes | -- | yes | yes | -- |
+| Agent | Commands | MCP | Hooks | Skills | Memory | Permissions | Jobs |
+|-------|----------|-----|-------|--------|--------|-------------|------|
+| Claude | yes | yes | yes | yes | yes | yes | yes |
+| Codex | yes | yes | -- | yes | yes | yes | yes |
+| Gemini CLI | yes | yes | yes | yes | yes | -- | yes |
+| Cursor | yes | yes | -- | yes | yes | -- | -- |
+| OpenCode | yes | yes | -- | yes | yes | yes | -- |
 
 ## All Commands
 
@@ -269,14 +351,16 @@ Packages
   install <identifier>            Install mcp:<name>, skill:<name>, or gh:<user/repo>
 
 Resources
-  memory list|view|diff|push|remove
-  commands list|add|remove|push
-  mcp list|add|remove|register|push
-  skills list|add|view|remove|push
-  hooks list|add|remove|push
+  memory list|view|remove
+  commands list|add|remove|view
+  mcp list|add|remove|register|view
+  skills list|add|view|remove
+  hooks list|add|remove|view
+  permissions list|add|remove|view
 
 Automation
-  jobs list|add|run|logs|report|enable|disable
+  exec <agent> <prompt>           Run agent with unified interface
+  cron list|add|view|edit|remove|run|runs|logs|report|pause|resume
   daemon start|stop|status|logs
 
 Sources

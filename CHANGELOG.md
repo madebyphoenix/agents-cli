@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.5.82
+
+**MCP & Permission improvements**
+
+- MCP configs now stored as YAML in `~/.agents/mcp/` (was JSON)
+- Permissions now use groups from `~/.agents/permissions/groups/`
+- Resource selection shows proper counts: "Permissions (19 groups, 3132 rules)"
+- When selecting "specific" permissions, shows individual groups with rule counts
+- Added MCP support for cursor and opencode agents
+- Removed `agents` filter from MCP configs - selection tracked in agents.yaml
+- Added capability checks for MCPs (consistent with hooks/permissions)
+
+## 1.5.81
+
+**Cron jobs & unified execution**
+
+- Renamed `jobs` command to `cron` (`jobs` still works with deprecation warning)
+- New `agents exec <agent> <prompt>` for unified agent execution across all CLIs
+- Inline job creation: `agents cron add my-job --schedule "..." --agent claude --prompt "..."`
+- One-shot jobs with `--at`: `agents cron add reminder --at "14:30" -a claude -p "..."`
+- New `agents cron edit [name]` opens job in `$EDITOR`
+- Timezone support: `--timezone America/Los_Angeles`
+- Custom variables in prompts: define `variables:` block, use `{var_name}` in prompt
+- Interactive pickers for all cron subcommands when name is omitted
+- Smart filtering: `resume` shows only paused jobs, `pause` shows only enabled jobs
+- Effort-based model mapping: `--effort fast|default|detailed` maps to agent-specific models
+
+**Resource command cleanup**
+
+- Added `view` command to commands, mcp, hooks, and permissions
+- Removed `push` commands from all resources (commands, skills, mcp, memory, hooks)
+- Deprecated `perms` alias for `permissions` (shows warning but still works)
+- Deprecated `info` alias for `skills view`, `show` alias for `memory view`
+
 ## 1.5.68
 
 - Upgrade prompt now shows on ALL command flows (--version, --help, bare `agents`)

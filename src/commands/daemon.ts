@@ -10,7 +10,7 @@ import {
   readDaemonLog,
   runDaemon,
 } from '../lib/daemon.js';
-import { listJobs as listAllJobs } from '../lib/jobs.js';
+import { listJobs as listAllJobs } from '../lib/cron.js';
 import { JobScheduler } from '../lib/scheduler.js';
 
 export function registerDaemonCommands(program: Command): void {

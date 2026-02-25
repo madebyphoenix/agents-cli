@@ -53,10 +53,6 @@ import {
   addShimsToPath,
   getPathSetupInstructions,
   switchConfigSymlink,
-  detectMigrationConflicts,
-  promptConflictStrategy,
-  type ConflictStrategy,
-  type ConflictInfo,
 } from '../lib/shims.js';
 import { select } from '@inquirer/prompts';
 import { isPromptCancelled } from './utils.js';
@@ -423,31 +419,15 @@ export function registerPullCommand(program: Command): void {
             }
           }
 
-          // Phase 2: Detect conflicts for all selected versions
-          const allConflicts: ConflictInfo[] = [];
-          for (const { agentId, version } of selectedVersions) {
-            const conflictInfo = detectMigrationConflicts(agentId, version);
-            if (conflictInfo && conflictInfo.conflicts.length > 0) {
-              allConflicts.push(conflictInfo);
-            }
-          }
-
-          // Phase 3: Prompt for strategy ONCE if any conflicts exist
-          let strategy: ConflictStrategy = 'keep-dest';
-          if (allConflicts.length > 0) {
-            const chosenStrategy = await promptConflictStrategy(allConflicts);
-            if (chosenStrategy) {
-              strategy = chosenStrategy;
-            }
-          }
-
-          // Phase 4: Apply migrations with the chosen strategy
+          // Apply migrations for all selected versions
           for (const { agentId, version } of selectedVersions) {
             const agent = AGENTS[agentId];
             setGlobalDefault(agentId, version);
-            const symlinkResult = await switchConfigSymlink(agentId, version, strategy);
+            const symlinkResult = await switchConfigSymlink(agentId, version);
             if (!symlinkResult.success) {
               console.log(chalk.yellow(`Warning: ${symlinkResult.error}`));
+            } else if (symlinkResult.backupPath) {
+              console.log(chalk.gray(`Backed up existing config to: ${symlinkResult.backupPath}`));
             }
             console.log(chalk.green(`Set ${agent.name}@${version} as default`));
           }

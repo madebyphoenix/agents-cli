@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import type { JobConfig } from './jobs.js';
-import { getJobsDir } from './state.js';
+import type { JobConfig } from './cron.js';
+import { getCronDir } from './state.js';
 
 const REAL_HOME = os.homedir();
 
@@ -58,7 +58,7 @@ export function buildSpawnEnv(overlayHome: string, extraEnv?: Record<string, str
 }
 
 export function getJobHomePath(name: string): string {
-  return path.join(getJobsDir(), name, 'home');
+  return path.join(getCronDir(), name, 'home');
 }
 
 export function prepareJobHome(config: JobConfig): string {

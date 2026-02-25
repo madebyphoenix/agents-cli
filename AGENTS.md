@@ -14,6 +14,8 @@ agents-cli manages AI coding agent CLIs (Claude, Codex, Gemini, Cursor, OpenCode
 - `skills/` - Agent skills (git-tracked)
 - `hooks/` - Event hooks (git-tracked)
 - `memory/` - Memory/instruction files (git-tracked)
+- `mcp/` - MCP server configs as YAML (git-tracked)
+- `permissions/groups/` - Permission groups as YAML (git-tracked)
 - `versions/` - Installed CLI versions (local-only, .gitignore'd)
 - `shims/` - Version switching scripts (local-only, .gitignore'd)
 

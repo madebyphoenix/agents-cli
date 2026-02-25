@@ -18,9 +18,9 @@ import {
   discoverJobsFromRepo,
   jobExists,
   getRunDir,
-} from '../src/lib/jobs.js';
-import { getJobsDir, getRunsDir } from '../src/lib/state.js';
-import type { JobConfig, RunMeta } from '../src/lib/jobs.js';
+} from '../src/lib/cron.js';
+import { getCronDir, getRunsDir } from '../src/lib/state.js';
+import type { JobConfig, RunMeta } from '../src/lib/cron.js';
 
 const PREFIX = '_test_jobs_';
 
@@ -39,7 +39,7 @@ function makeConfig(overrides: Partial<JobConfig> = {}): JobConfig {
 }
 
 function cleanupTestJobs() {
-  const jobsDir = getJobsDir();
+  const jobsDir = getCronDir();
   const runsDir = getRunsDir();
   try {
     const fs = require('fs');
@@ -347,19 +347,19 @@ describe('discoverJobsFromRepo', () => {
     rmSync(repoDir, { recursive: true, force: true });
   });
 
-  it('discovers yaml files in jobs/ directory', () => {
-    const jobsDir = join(repoDir, 'jobs');
-    mkdirSync(jobsDir, { recursive: true });
-    writeFileSync(join(jobsDir, 'my-job.yml'), 'name: my-job\n');
-    writeFileSync(join(jobsDir, 'other.yaml'), 'name: other\n');
-    writeFileSync(join(jobsDir, 'readme.md'), 'not a job');
+  it('discovers yaml files in cron/ directory', () => {
+    const cronDir = join(repoDir, 'cron');
+    mkdirSync(cronDir, { recursive: true });
+    writeFileSync(join(cronDir, 'my-job.yml'), 'name: my-job\n');
+    writeFileSync(join(cronDir, 'other.yaml'), 'name: other\n');
+    writeFileSync(join(cronDir, 'readme.md'), 'not a job');
 
     const discovered = discoverJobsFromRepo(repoDir);
     const names = discovered.map((d) => d.name).sort();
     expect(names).toEqual(['my-job', 'other']);
   });
 
-  it('returns empty array for repo without jobs/', () => {
+  it('returns empty array for repo without cron/', () => {
     mkdirSync(repoDir, { recursive: true });
     expect(discoverJobsFromRepo(repoDir)).toEqual([]);
   });

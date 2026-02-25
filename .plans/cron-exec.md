@@ -369,7 +369,7 @@ opencode run \
 | default | sonnet-4-5 | gpt-5.2-codex | flash | glm-4.7 | sonnet-4-5 |
 | detailed | opus-4-5 | gpt-5.1-codex-max | pro | glm-4.7 | opus-4-5 |
 
-Store mapping in `~/.agents/config.yaml` (new file) for user customization.
+Model mappings are hardcoded in `src/lib/exec.ts`. Use `--model` flag to override.
 
 ### Additional Flags
 
@@ -408,66 +408,11 @@ agents exec claude "task" --timeout 30m
 
 ---
 
-## Part 3: Config File (`~/.agents/config.yaml`)
-
-New central config for exec/cron settings:
-
-```yaml
-# ~/.agents/config.yaml
-
-# Effort → Model mapping (user-customizable)
-models:
-  claude:
-    fast: claude-haiku-4-5-20251001
-    default: claude-sonnet-4-5
-    detailed: claude-opus-4-5
-  codex:
-    fast: gpt-4o-mini
-    default: gpt-5.2-codex
-    detailed: gpt-5.1-codex-max
-  gemini:
-    fast: gemini-3-flash-preview
-    default: gemini-3-flash-preview
-    detailed: gemini-3-pro-preview
-  opencode:
-    fast: zai-coding-plan/glm-4.7-flash
-    default: zai-coding-plan/glm-4.7
-    detailed: zai-coding-plan/glm-4.7
-  openclaw:
-    fast: claude-haiku-4-5-20251001
-    default: claude-sonnet-4-5
-    detailed: claude-opus-4-5
-  cursor:
-    fast: composer-1
-    default: composer-1
-    detailed: composer-1
-
-# Default exec settings
-defaults:
-  mode: plan
-  effort: default
-  timeout: 30m
-
-# Cron daemon settings
-daemon:
-  log_retention_days: 7
-  max_concurrent_jobs: 3
-```
-
-### Config Precedence
-
-1. CLI flags (`--model`, `--effort`) - highest priority
-2. `~/.agents/config.yaml` - user customization
-3. Built-in defaults - fallback
-
----
-
 ## File Structure (Final)
 
 ```
 ~/.agents/
   agents.yaml           # Existing: default versions, registries
-  config.yaml           # NEW: exec/cron settings, model mapping
 
   cron/                 # RENAMED from jobs/
     daily-review.yml
@@ -498,15 +443,10 @@ daemon:
 
 2. **Add `exec` command**
    - New `src/commands/exec.ts`
-   - New `src/lib/exec.ts`
+   - New `src/lib/exec.ts` (includes hardcoded model mappings)
    - Uses existing shim infrastructure
 
-3. **Add `config.yaml`**
-   - New file for user settings
-   - Default model mappings
-   - Merged with `agents.yaml` at runtime
-
-4. **Cron improvements**
+3. **Cron improvements**
    - Add inline `cron add` with flags
    - Add `pause`/`resume`/`remove`/`view`/`runs`
    - Add timezone support
@@ -523,10 +463,9 @@ daemon:
 4. Add deprecation alias for `agents jobs`
 
 ### Phase 2: Exec Command
-1. Create `src/lib/exec.ts` with command building
+1. Create `src/lib/exec.ts` with command building + hardcoded model mappings
 2. Create `src/commands/exec.ts`
-3. Add `~/.agents/config.yaml` for model mapping
-4. Test with all agents
+3. Test with all agents
 
 ### Phase 3: Enhanced Cron
 1. Inline `cron add` with flags

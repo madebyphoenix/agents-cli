@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import * as fs from 'fs';
 import * as path from 'path';
-import { select } from '@inquirer/prompts';
+import { select, confirm } from '@inquirer/prompts';
 
 import {
   AGENTS,
@@ -13,6 +13,7 @@ import {
 import { viewAction } from './view.js';
 import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
+import { getVersionResources } from '../lib/state.js';
 import {
   installVersion,
   removeVersion,
@@ -25,6 +26,8 @@ import {
   getVersionHomePath,
   syncResourcesToVersion,
   parseAgentSpec,
+  promptResourceSelection,
+  type ResourceSelection,
 } from '../lib/versions.js';
 import {
   createShim,
@@ -35,13 +38,6 @@ import {
   getPathSetupInstructions,
   addShimsToPath,
   switchConfigSymlink,
-  getConfigSymlinkVersion,
-  compareVersionResources,
-  hasResourceDiff,
-  copyResourcesToVersion,
-  detectMigrationConflicts,
-  promptConflictStrategy,
-  type ConflictStrategy,
 } from '../lib/shims.js';
 import { isPromptCancelled } from './utils.js';
 
@@ -115,9 +111,33 @@ export function registerVersionsCommands(program: Command): void {
               console.log(chalk.gray(`  Created shim: ${getShimsDir()}/${agentConfig.cliCommand}`));
             }
 
-            // Sync central resources to the new version
             const installedVersion = result.installedVersion || version;
-            const syncResult = syncResourcesToVersion(agent, installedVersion);
+
+            // Check if we have saved resource selections for this version
+            const existingResources = getVersionResources(agent, installedVersion);
+            let selection: ResourceSelection | undefined;
+
+            if (!existingResources) {
+              // No saved selection - prompt user
+              try {
+                const userSelection = await promptResourceSelection(agent);
+                if (userSelection) {
+                  selection = userSelection;
+                }
+              } catch (err) {
+                if (isPromptCancelled(err)) {
+                  console.log(chalk.gray('Skipped resource selection'));
+                } else {
+                  throw err;
+                }
+              }
+            } else {
+              // Use saved selection
+              console.log(chalk.gray('  Using saved resource selection'));
+            }
+
+            // Sync resources (with selection if provided, otherwise uses saved or syncs all)
+            const syncResult = syncResourcesToVersion(agent, installedVersion, selection);
             const synced: string[] = [];
             if (syncResult.commands) synced.push('commands');
             if (syncResult.skills) synced.push('skills');
@@ -126,12 +146,35 @@ export function registerVersionsCommands(program: Command): void {
             if (syncResult.permissions) synced.push('permissions');
 
             if (synced.length > 0) {
-              console.log(chalk.gray(`  Synced: ${synced.join(', ')}`));
+              console.log(chalk.green(`  Synced: ${synced.join(', ')}`));
             }
 
-            // Hint if no default is set
-            if (!getGlobalDefault(agent)) {
-              console.log(chalk.yellow(`  No default set. Run: agents use ${agent}@${result.installedVersion}`));
+            // Prompt to set as default
+            const currentDefault = getGlobalDefault(agent);
+            if (!currentDefault) {
+              try {
+                const setAsDefault = await confirm({
+                  message: `Set ${agentConfig.name}@${installedVersion} as default?`,
+                  default: true,
+                });
+
+                if (setAsDefault) {
+                  setGlobalDefault(agent, installedVersion);
+                  const symlinkResult = await switchConfigSymlink(agent, installedVersion);
+                  if (symlinkResult.success) {
+                    console.log(chalk.green(`  Set as default`));
+                    if (symlinkResult.backupPath) {
+                      console.log(chalk.gray(`  Backed up existing config to: ${symlinkResult.backupPath}`));
+                    }
+                  }
+                }
+              } catch (err) {
+                if (isPromptCancelled(err)) {
+                  console.log(chalk.gray('Skipped setting default'));
+                } else {
+                  throw err;
+                }
+              }
             }
 
             // Auto-add shims to PATH if not already there
@@ -331,51 +374,34 @@ export function registerVersionsCommands(program: Command): void {
           const projEmailStr = projEmail ? chalk.cyan(` (${projEmail})`) : '';
           console.log(chalk.green(`Set ${agentConfig.name}@${finalVersion} for this project`) + projEmailStr);
         } else {
-          // Check if switching versions will lose access to resources
-          const currentVersion = getConfigSymlinkVersion(agentId);
+          // Check if we have saved resource selections for the target version
+          const existingResources = getVersionResources(agentId, finalVersion);
 
-          if (currentVersion && currentVersion !== finalVersion) {
-            const diff = compareVersionResources(agentId, currentVersion, finalVersion);
+          if (!existingResources) {
+            // No saved selection - prompt user to select resources
+            console.log(chalk.yellow(`\n${agentConfig.name}@${finalVersion} has no synced resources.`));
 
-            if (hasResourceDiff(diff)) {
-              console.log(chalk.yellow(`\nYou'll lose access to these resources (exist in ${currentVersion}, not in ${finalVersion}):`));
+            try {
+              const userSelection = await promptResourceSelection(agentId);
+              if (userSelection && Object.keys(userSelection).length > 0) {
+                const syncResult = syncResourcesToVersion(agentId, finalVersion, userSelection);
+                const synced: string[] = [];
+                if (syncResult.commands) synced.push('commands');
+                if (syncResult.skills) synced.push('skills');
+                if (syncResult.hooks) synced.push('hooks');
+                if (syncResult.memory.length > 0) synced.push('memory');
+                if (syncResult.permissions) synced.push('permissions');
 
-              if (diff.commands.length > 0) {
-                console.log(`  Commands:  ${diff.commands.join(', ')}`);
+                if (synced.length > 0) {
+                  console.log(chalk.green(`Synced: ${synced.join(', ')}`));
+                }
               }
-              if (diff.skills.length > 0) {
-                console.log(`  Skills:    ${diff.skills.join(', ')}`);
-              }
-              if (diff.hooks.length > 0) {
-                console.log(`  Hooks:     ${diff.hooks.join(', ')}`);
-              }
-              if (diff.memory.length > 0) {
-                const memStr = diff.memory.map(m => `${m.file} (${m.currentLines} lines -> ${m.targetLines} lines)`).join(', ');
-                console.log(`  Memory:    ${memStr}`);
-              }
-              if (diff.mcp.length > 0) {
-                console.log(`  MCP:       ${diff.mcp.join(', ')}`);
-              }
-
-              console.log('');
-
-              const action = await select({
-                message: 'How do you want to proceed?',
-                choices: [
-                  { name: 'Copy to target version, then switch (recommended)', value: 'copy' },
-                  { name: 'Switch without copying', value: 'switch' },
-                  { name: 'Cancel', value: 'cancel' },
-                ],
-              });
-
-              if (action === 'cancel') {
-                console.log(chalk.gray('Cancelled'));
+            } catch (err) {
+              if (isPromptCancelled(err)) {
+                console.log(chalk.gray('No changes made'));
                 return;
-              }
-
-              if (action === 'copy') {
-                copyResourcesToVersion(agentId, currentVersion, finalVersion, diff);
-                console.log(chalk.gray(`Copied resources from ${currentVersion} to ${finalVersion}`));
+              } else {
+                throw err;
               }
             }
           }
@@ -383,27 +409,16 @@ export function registerVersionsCommands(program: Command): void {
           // Set global default
           setGlobalDefault(agentId, finalVersion);
 
-          // Detect migration conflicts before switching
-          const conflictInfo = detectMigrationConflicts(agentId, finalVersion);
-          let strategy: ConflictStrategy = 'keep-dest';
-
-          if (conflictInfo && conflictInfo.conflicts.length > 0) {
-            // Prompt for strategy
-            const chosenStrategy = await promptConflictStrategy([conflictInfo]);
-            if (chosenStrategy) {
-              strategy = chosenStrategy;
-            }
-          }
+          // Regenerate shim so it uses the latest script format
+          createShim(agentId);
 
           // Switch config symlink (e.g., ~/.claude -> version's config)
-          const symlinkResult = await switchConfigSymlink(agentId, finalVersion, strategy);
+          // No conflict prompts - just backup existing config if needed
+          const symlinkResult = await switchConfigSymlink(agentId, finalVersion);
           if (!symlinkResult.success) {
             console.log(chalk.yellow(`Warning: Could not update config symlink: ${symlinkResult.error}`));
-          } else if (symlinkResult.migrated) {
-            console.log(chalk.gray(`Migrated existing ${agentConfig.configDir} to version ${finalVersion}`));
-            if (symlinkResult.backupPath) {
-              console.log(chalk.gray(`Backup saved to: ${symlinkResult.backupPath}`));
-            }
+          } else if (symlinkResult.backupPath) {
+            console.log(chalk.gray(`Backed up existing config to: ${symlinkResult.backupPath}`));
           }
 
           const useEmail = await getAccountEmail(agentId, getVersionHomePath(agentId, finalVersion));

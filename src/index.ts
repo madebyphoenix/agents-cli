@@ -32,7 +32,8 @@ import { registerMcpCommands } from './commands/mcp.js';
 import { registerVersionsCommands } from './commands/versions.js';
 import { registerPackagesCommands } from './commands/packages.js';
 import { registerDaemonCommands } from './commands/daemon.js';
-import { registerJobsCommands } from './commands/jobs.js';
+import { registerCronCommands } from './commands/cron.js';
+import { registerExecCommand } from './commands/exec.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -72,7 +73,7 @@ Packages
   install <pkg>                   Install mcp:name or skill:user/repo
 
 Automation
-  jobs                            Manage scheduled jobs
+  cron                            Manage scheduled jobs
   daemon                          Manage the scheduler daemon
 
 Env
@@ -224,7 +225,21 @@ registerMcpCommands(program);
 registerVersionsCommands(program);
 registerPackagesCommands(program);
 registerDaemonCommands(program);
-registerJobsCommands(program);
+registerCronCommands(program);
+registerExecCommand(program);
+
+// Deprecated 'jobs' alias for 'cron'
+program
+  .command('jobs', { hidden: true })
+  .allowUnknownOption()
+  .allowExcessArguments()
+  .action(async () => {
+    console.log(chalk.yellow('Deprecated: Use "agents cron" instead of "agents jobs"\n'));
+    const args = process.argv.slice(2);
+    args[0] = 'cron';
+    await program.parseAsync(['node', 'agents', ...args]);
+  });
+
 registerPullCommand(program);
 registerPushCommand(program);
 registerForkCommand(program);

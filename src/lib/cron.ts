@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
-import { getJobsDir, getRunsDir, ensureAgentsDir } from './state.js';
+import { getCronDir, getRunsDir, ensureAgentsDir } from './state.js';
 import type { AgentId } from './types.js';
 
 export interface JobAllowConfig {
@@ -19,6 +19,8 @@ export interface JobConfig {
   timeout: string;
   enabled: boolean;
   prompt: string;
+  timezone?: string;
+  variables?: Record<string, string>;
   allow?: JobAllowConfig;
   config?: Record<string, unknown>;
   version?: string;
@@ -44,7 +46,7 @@ const JOB_DEFAULTS: Partial<JobConfig> = {
 
 export function listJobs(): JobConfig[] {
   ensureAgentsDir();
-  const jobsDir = getJobsDir();
+  const jobsDir = getCronDir();
   if (!fs.existsSync(jobsDir)) return [];
 
   const files = fs.readdirSync(jobsDir).filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'));
@@ -58,7 +60,7 @@ export function listJobs(): JobConfig[] {
 
 export function readJob(name: string): JobConfig | null {
   ensureAgentsDir();
-  const jobsDir = getJobsDir();
+  const jobsDir = getCronDir();
   for (const ext of ['.yml', '.yaml']) {
     const filePath = path.join(jobsDir, name + ext);
     if (fs.existsSync(filePath)) {
@@ -86,7 +88,7 @@ function readJobFile(filePath: string): JobConfig | null {
 
 export function writeJob(config: JobConfig): void {
   ensureAgentsDir();
-  const jobsDir = getJobsDir();
+  const jobsDir = getCronDir();
   const filePath = path.join(jobsDir, config.name + '.yml');
 
   const output: Record<string, unknown> = { ...config };
@@ -99,7 +101,7 @@ export function writeJob(config: JobConfig): void {
 }
 
 export function deleteJob(name: string): boolean {
-  const jobsDir = getJobsDir();
+  const jobsDir = getCronDir();
   for (const ext of ['.yml', '.yaml']) {
     const filePath = path.join(jobsDir, name + ext);
     if (fs.existsSync(filePath)) {
@@ -154,11 +156,21 @@ export function resolveJobPrompt(config: JobConfig): string {
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
   let prompt = config.prompt;
+
+  // Built-in variables
   prompt = prompt.replace(/\{day\}/g, days[now.getDay()]);
   prompt = prompt.replace(/\{date\}/g, now.toISOString().split('T')[0]);
   prompt = prompt.replace(/\{time\}/g, now.toTimeString().split(' ')[0]);
   prompt = prompt.replace(/\{job_name\}/g, config.name);
 
+  // User-defined variables
+  if (config.variables) {
+    for (const [key, value] of Object.entries(config.variables)) {
+      prompt = prompt.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+    }
+  }
+
+  // Last report (special handling)
   const latestRun = getLatestRun(config.name);
   if (latestRun) {
     const reportPath = path.join(getRunsDir(), config.name, latestRun.runId, 'report.md');
@@ -230,7 +242,7 @@ export function getRunDir(jobName: string, runId: string): string {
 }
 
 export function discoverJobsFromRepo(repoPath: string): Array<{ name: string; path: string }> {
-  const jobsPath = path.join(repoPath, 'jobs');
+  const jobsPath = path.join(repoPath, 'cron');
   if (!fs.existsSync(jobsPath)) return [];
 
   return fs.readdirSync(jobsPath)
@@ -243,6 +255,68 @@ export function discoverJobsFromRepo(repoPath: string): Array<{ name: string; pa
 
 export function jobExists(name: string): boolean {
   return readJob(name) !== null;
+}
+
+export function getJobPath(name: string): string | null {
+  const jobsDir = getCronDir();
+  for (const ext of ['.yml', '.yaml']) {
+    const filePath = path.join(jobsDir, name + ext);
+    if (fs.existsSync(filePath)) {
+      return filePath;
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse an "at" time string into a one-shot cron expression.
+ * Supports formats like:
+ * - "9:00" or "09:00" - today at 9:00 AM (or tomorrow if past)
+ * - "14:30" - today at 2:30 PM
+ * - "2026-02-24 09:00" - specific date and time
+ * Returns null if invalid format.
+ */
+export function parseAtTime(atTime: string): { schedule: string; runOnce: boolean } | null {
+  // Try parsing as "HH:MM" format
+  const timeMatch = atTime.match(/^(\d{1,2}):(\d{2})$/);
+  if (timeMatch) {
+    const hour = parseInt(timeMatch[1], 10);
+    const minute = parseInt(timeMatch[2], 10);
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+
+    const now = new Date();
+    let targetDate = new Date();
+    targetDate.setHours(hour, minute, 0, 0);
+
+    // If the time has already passed today, schedule for tomorrow
+    if (targetDate <= now) {
+      targetDate.setDate(targetDate.getDate() + 1);
+    }
+
+    const day = targetDate.getDate();
+    const month = targetDate.getMonth() + 1;
+    // Cron format: minute hour day month *
+    return { schedule: `${minute} ${hour} ${day} ${month} *`, runOnce: true };
+  }
+
+  // Try parsing as "YYYY-MM-DD HH:MM" format
+  const dateTimeMatch = atTime.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})$/);
+  if (dateTimeMatch) {
+    const year = parseInt(dateTimeMatch[1], 10);
+    const month = parseInt(dateTimeMatch[2], 10);
+    const day = parseInt(dateTimeMatch[3], 10);
+    const hour = parseInt(dateTimeMatch[4], 10);
+    const minute = parseInt(dateTimeMatch[5], 10);
+
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+
+    // Note: croner doesn't support year, so we just use month/day
+    // The job will fire on that date each year unless removed
+    return { schedule: `${minute} ${hour} ${day} ${month} *`, runOnce: true };
+  }
+
+  return null;
 }
 
 export function jobContentMatches(name: string, sourcePath: string): boolean {

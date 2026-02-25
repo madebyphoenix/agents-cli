@@ -8,6 +8,31 @@ export { getShimsDir };
 import { AGENTS } from './agents.js';
 
 /**
+ * Files and directories to always skip during conflict detection and migration.
+ * These are never user config that should be migrated.
+ */
+const MIGRATION_IGNORE_LIST = new Set([
+  'node_modules',
+  '.git',
+  'bun.lock',
+  'bun.lockb',
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  '.DS_Store',
+  'Thumbs.db',
+]);
+
+/**
+ * Check if a file/directory should be ignored during migration.
+ */
+function shouldIgnore(name: string): boolean {
+  if (MIGRATION_IGNORE_LIST.has(name)) return true;
+  if (name.endsWith('.backup')) return true;
+  return false;
+}
+
+/**
  * Strategy for handling file conflicts during config migration.
  */
 export type ConflictStrategy = 'keep-dest' | 'overwrite' | 'ask-per-file';
@@ -44,6 +69,11 @@ export function detectConflicts(src: string, dest: string, prefix = ''): string[
 
   const entries = fs.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
+    // Skip files/directories that should never be migrated
+    if (shouldIgnore(entry.name)) {
+      continue;
+    }
+
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
@@ -129,14 +159,14 @@ export async function promptConflictStrategy(
  *
  * The shim resolves the version in order:
  * 1. .agents-version in cwd (walk up to root)
- * 2. ~/.agents/meta.yaml default
+ * 2. ~/.agents/agents.yaml default
  *
  * If version is specified but not installed, auto-installs it.
  *
  * Config isolation is handled via symlinks:
  * ~/.{agent} -> ~/.agents/versions/{agent}/{version}/home/.{agent}/
  */
-function generateShimScript(agent: AgentId): string {
+export function generateShimScript(agent: AgentId): string {
   const agentConfig = AGENTS[agent];
   const cliCommand = agentConfig.cliCommand;
 
@@ -182,25 +212,23 @@ find_project_version() {
   return 1
 }
 
-# Resolve version from meta.yaml (user default)
-resolve_meta_version() {
-  local meta="$AGENTS_DIR/meta.yaml"
+# Resolve version from agents.yaml (user default)
+resolve_default_version() {
+  local meta="$AGENTS_DIR/agents.yaml"
   if [ -f "$meta" ]; then
     awk -v agent="$AGENT" '
-      /^versions:/ { in_versions=1; next }
-      in_versions && /^[^ ]/ { in_versions=0 }
-      in_versions && $0 ~ "^  " agent ":" { in_agent=1; next }
-      in_agent && /^  [^ ]/ { in_agent=0 }
-      in_agent && /default:/ { gsub(/.*:[[:space:]]*["'"'"']?|["'"'"']?[[:space:]]*$/, ""); print; exit }
+      /^agents:/ { in_agents=1; next }
+      in_agents && /^[^ ]/ { in_agents=0 }
+      in_agents && $0 ~ "^  " agent ":" { gsub(/.*:[[:space:]]*["'"'"']?|["'"'"']?[[:space:]]*$/, ""); print; exit }
     ' "$meta"
   fi
 }
 
-# Try project version first, then meta default
+# Try project version first, then global default
 VERSION=$(find_project_version)
 VERSION_SOURCE="project"
 if [ -z "$VERSION" ]; then
-  VERSION=$(resolve_meta_version)
+  VERSION=$(resolve_default_version)
   VERSION_SOURCE="default"
 fi
 
@@ -412,17 +440,18 @@ export function detectMigrationConflicts(agent: AgentId, version: string): Confl
  * Switch the agent's config symlink to point to a specific version.
  * e.g., ~/.claude -> ~/.agents/versions/claude/2.0.65/home/.claude/
  *
+ * If a real directory exists at the config path, it will be backed up
+ * to ~/.agents/backups/{agent}/{timestamp}/ and replaced with a symlink.
+ *
  * @param agent - The agent ID
  * @param version - The version to switch to
- * @param strategy - How to handle conflicts during migration (default: 'keep-dest')
  *
- * Returns: { success: boolean, migrated?: boolean, backupPath?: string, error?: string }
+ * Returns: { success: boolean, backupPath?: string, error?: string }
  */
 export async function switchConfigSymlink(
   agent: AgentId,
-  version: string,
-  strategy: ConflictStrategy = 'keep-dest'
-): Promise<{ success: boolean; migrated?: boolean; backupPath?: string; error?: string }> {
+  version: string
+): Promise<{ success: boolean; backupPath?: string; error?: string }> {
   const configPath = getAgentConfigPath(agent);
   const versionConfigPath = getVersionConfigPath(agent, version);
 
@@ -448,44 +477,20 @@ export async function switchConfigSymlink(
       fs.symlinkSync(versionConfigPath, configPath);
       return { success: true };
     } else if (stat.isDirectory()) {
-      // Real directory exists - migrate it to this version's config
-      // Move contents to version config, then create symlink
+      // Real directory exists - backup and replace with symlink
       const timestamp = Date.now();
-      const tempPath = `${configPath}.backup.${timestamp}`;
-      fs.renameSync(configPath, tempPath);
 
-      try {
-        // Copy contents from backup to version config using the specified strategy
-        const context: CopyContext = { agent, version };
-        await copyDirContents(tempPath, versionConfigPath, strategy, context);
+      // Move to backup location
+      const backupsDir = getBackupsDir();
+      const agentBackupDir = path.join(backupsDir, agent);
+      const finalBackupPath = path.join(agentBackupDir, String(timestamp));
+      fs.mkdirSync(agentBackupDir, { recursive: true });
+      fs.renameSync(configPath, finalBackupPath);
 
-        // Create symlink
-        fs.symlinkSync(versionConfigPath, configPath);
+      // Create symlink
+      fs.symlinkSync(versionConfigPath, configPath);
 
-        // Preserve backup in ~/.agents/backups/{agent}/{timestamp}/
-        const backupsDir = getBackupsDir();
-        const agentBackupDir = path.join(backupsDir, agent);
-        const finalBackupPath = path.join(agentBackupDir, String(timestamp));
-        fs.mkdirSync(agentBackupDir, { recursive: true });
-        fs.renameSync(tempPath, finalBackupPath);
-
-        return { success: true, migrated: true, backupPath: finalBackupPath };
-      } catch (migrationErr) {
-        // Rollback: restore original directory
-        try {
-          if (fs.existsSync(configPath)) {
-            fs.unlinkSync(configPath); // Remove partial symlink if created
-          }
-          fs.renameSync(tempPath, configPath);
-        } catch {
-          // Rollback failed - backup remains at tempPath
-          return {
-            success: false,
-            error: `Migration failed and rollback failed. Original config at: ${tempPath}`,
-          };
-        }
-        return { success: false, error: `Migration failed: ${(migrationErr as Error).message}` };
-      }
+      return { success: true, backupPath: finalBackupPath };
     } else {
       return { success: false, error: `${configPath} exists but is not a directory or symlink` };
     }
@@ -560,6 +565,11 @@ async function copyDirContents(
 
   const entries = fs.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
+    // Skip files/directories that should never be migrated
+    if (shouldIgnore(entry.name)) {
+      continue;
+    }
+
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
 

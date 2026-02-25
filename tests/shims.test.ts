@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { generateShimScript } from '../src/lib/shims.js';
 
 // We need to mock the versions directory, so we'll test the logic directly
 // by creating temp directories that mimic the version structure
@@ -317,5 +318,36 @@ describe('shims - hasResourceDiff', () => {
     expect(hasDiff({ ...emptyDiff, hooks: ['pre.sh'] })).toBe(true);
     expect(hasDiff({ ...emptyDiff, memory: [{ file: 'CLAUDE.md' }] })).toBe(true);
     expect(hasDiff({ ...emptyDiff, mcp: ['github'] })).toBe(true);
+  });
+});
+
+describe('shims - generateShimScript', () => {
+  test('reads agents.yaml not meta.yaml', () => {
+    const script = generateShimScript('claude');
+    expect(script).toContain('agents.yaml');
+    expect(script).not.toContain('meta.yaml');
+  });
+
+  test('parses flat agents format', () => {
+    const script = generateShimScript('claude');
+    // Should look for ^agents: section, not ^versions:
+    expect(script).toContain('^agents:');
+    expect(script).not.toContain('^versions:');
+    // Should not look for nested default: key
+    expect(script).not.toContain('default:');
+  });
+
+  test('includes agent name and CLI command', () => {
+    const script = generateShimScript('claude');
+    expect(script).toContain('AGENT="claude"');
+    expect(script).toContain('CLI_COMMAND="claude"');
+    expect(script).toContain('#!/bin/bash');
+  });
+
+  test('generates correct script for codex agent', () => {
+    const script = generateShimScript('codex');
+    expect(script).toContain('AGENT="codex"');
+    expect(script).toContain('agents.yaml');
+    expect(script).not.toContain('meta.yaml');
   });
 });

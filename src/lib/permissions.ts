@@ -97,6 +97,110 @@ export function discoverPermissionsFromRepo(repoPath: string): Array<{ name: str
 }
 
 /**
+ * Permission group info with rule count.
+ */
+export interface PermissionGroupInfo {
+  name: string;        // e.g., "02-node"
+  ruleCount: number;   // number of allow rules in this group
+  path: string;        // full path to the group file
+}
+
+/**
+ * Discover permission groups from ~/.agents/permissions/groups/.
+ * Returns groups with their rule counts.
+ */
+export function discoverPermissionGroups(): PermissionGroupInfo[] {
+  const groupsDir = path.join(getPermissionsDir(), 'groups');
+
+  if (!fs.existsSync(groupsDir)) {
+    return [];
+  }
+
+  const groups: PermissionGroupInfo[] = [];
+
+  try {
+    const entries = fs.readdirSync(groupsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith('.yml') && !entry.name.endsWith('.yaml')) continue;
+
+      const filePath = path.join(groupsDir, entry.name);
+      const name = entry.name.replace(/\.(yaml|yml)$/, '');
+
+      // Count rules in this group
+      let ruleCount = 0;
+      try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        // Count lines that look like permission entries (start with - " after optional whitespace)
+        const matches = content.match(/^\s*-\s*"/gm);
+        ruleCount = matches ? matches.length : 0;
+      } catch {
+        // Skip files we can't read
+      }
+
+      groups.push({ name, ruleCount, path: filePath });
+    }
+  } catch {
+    // Skip inaccessible directory
+  }
+
+  // Sort by name (which sorts by numeric prefix)
+  return groups.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Get total rule count across all permission groups.
+ */
+export function getTotalPermissionRuleCount(): number {
+  const groups = discoverPermissionGroups();
+  return groups.reduce((sum, g) => sum + g.ruleCount, 0);
+}
+
+/**
+ * Build a PermissionSet from selected groups.
+ * Concatenates allow/deny rules from each group.
+ */
+export function buildPermissionsFromGroups(groupNames: string[]): PermissionSet {
+  const groupsDir = path.join(getPermissionsDir(), 'groups');
+  const allAllow: string[] = [];
+  const allDeny: string[] = [];
+
+  for (const groupName of groupNames) {
+    // Try both .yaml and .yml extensions
+    let filePath = path.join(groupsDir, `${groupName}.yaml`);
+    if (!fs.existsSync(filePath)) {
+      filePath = path.join(groupsDir, `${groupName}.yml`);
+    }
+    if (!fs.existsSync(filePath)) {
+      continue;
+    }
+
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const parsed = yaml.parse(content);
+
+      if (parsed && typeof parsed === 'object') {
+        if (Array.isArray(parsed.allow)) {
+          allAllow.push(...parsed.allow);
+        }
+        if (Array.isArray(parsed.deny)) {
+          allDeny.push(...parsed.deny);
+        }
+      }
+    } catch {
+      // Skip files we can't parse
+    }
+  }
+
+  return {
+    name: 'built',
+    description: `Built from groups: ${groupNames.join(', ')}`,
+    allow: allAllow,
+    deny: allDeny.length > 0 ? allDeny : undefined,
+  };
+}
+
+/**
  * List installed permission sets from central storage.
  */
 export function listInstalledPermissions(): InstalledPermission[] {

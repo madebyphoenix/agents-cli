@@ -14,7 +14,7 @@ const MEMORY_DIR = path.join(AGENTS_DIR, 'memory');
 const INSTRUCTIONS_FILE = path.join(AGENTS_DIR, 'instructions.md');
 const MCP_CONFIG_FILE = path.join(AGENTS_DIR, 'mcp.json');
 const PACKAGES_DIR = path.join(AGENTS_DIR, 'packages');
-const JOBS_DIR = path.join(AGENTS_DIR, 'jobs');
+const CRON_DIR = path.join(AGENTS_DIR, 'cron');
 const RUNS_DIR = path.join(AGENTS_DIR, 'runs');
 const DRIVES_DIR = path.join(AGENTS_DIR, 'drives');
 const VERSIONS_DIR = path.join(AGENTS_DIR, 'versions');
@@ -37,8 +37,8 @@ export function getPackagesDir(): string {
   return PACKAGES_DIR;
 }
 
-export function getJobsDir(): string {
-  return JOBS_DIR;
+export function getCronDir(): string {
+  return CRON_DIR;
 }
 
 export function getRunsDir(): string {
@@ -100,8 +100,8 @@ export function ensureAgentsDir(): void {
   if (!fs.existsSync(PACKAGES_DIR)) {
     fs.mkdirSync(PACKAGES_DIR, { recursive: true });
   }
-  if (!fs.existsSync(JOBS_DIR)) {
-    fs.mkdirSync(JOBS_DIR, { recursive: true });
+  if (!fs.existsSync(CRON_DIR)) {
+    fs.mkdirSync(CRON_DIR, { recursive: true });
   }
   if (!fs.existsSync(RUNS_DIR)) {
     fs.mkdirSync(RUNS_DIR, { recursive: true });
@@ -165,19 +165,11 @@ export function readMeta(): Meta {
       }
 
       writeMeta(meta);
+      // Remove old meta.yaml to prevent stale reads by shims
+      try { fs.unlinkSync(oldMetaFile); } catch {}
       return meta;
     } catch {
       // Ignore migration errors
-    }
-  }
-
-  // Migration: check for old state.json
-  const oldStateFile = path.join(AGENTS_DIR, 'state.json');
-  if (fs.existsSync(oldStateFile) && !fs.existsSync(META_FILE)) {
-    try {
-      fs.unlinkSync(oldStateFile);
-    } catch {
-      // Ignore cleanup errors
     }
   }
 

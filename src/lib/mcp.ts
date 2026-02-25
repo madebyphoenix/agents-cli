@@ -28,8 +28,6 @@ export interface McpYamlConfig {
   env?: Record<string, string>;
   // For http transport
   url?: string;
-  // Optional: limit to specific agents (default: all MCP-capable)
-  agents?: AgentId[];
 }
 
 export interface InstalledMcpServer {
@@ -104,34 +102,34 @@ export function listMcpServerConfigs(): InstalledMcpServer[] {
 }
 
 /**
- * Get MCP servers that should be applied to a specific agent.
+ * Get MCP servers by name.
+ * If names is provided, returns only those servers.
+ * Otherwise returns all servers.
  */
-export function getMcpServersForAgent(agentId: AgentId): InstalledMcpServer[] {
-  if (!MCP_CAPABLE_AGENTS.includes(agentId)) {
-    return [];
-  }
-
+export function getMcpServersByName(names?: string[]): InstalledMcpServer[] {
   const allServers = listMcpServerConfigs();
-  return allServers.filter((server) => {
-    // If agents is specified, check if this agent is in the list
-    if (server.config.agents && server.config.agents.length > 0) {
-      return server.config.agents.includes(agentId);
-    }
-    // Otherwise, apply to all MCP-capable agents
-    return true;
-  });
+  if (!names || names.length === 0) {
+    return allServers;
+  }
+  return allServers.filter((server) => names.includes(server.name));
 }
 
 /**
  * Apply MCP servers to a version's config file.
  * Merges new servers with existing ones (doesn't overwrite).
+ * If mcpNames is provided, only applies those servers.
  */
 export function applyMcpToVersion(
   agentId: AgentId,
   versionHome: string,
-  merge: boolean = true
+  merge: boolean = true,
+  mcpNames?: string[]
 ): { success: boolean; applied: string[]; error?: string } {
-  const servers = getMcpServersForAgent(agentId);
+  if (!MCP_CAPABLE_AGENTS.includes(agentId)) {
+    return { success: true, applied: [] };
+  }
+
+  const servers = getMcpServersByName(mcpNames);
   if (servers.length === 0) {
     return { success: true, applied: [] };
   }
@@ -250,7 +248,86 @@ export function applyMcpToVersion(
       return { success: true, applied };
     }
 
-    // For other agents, skip MCP application
+    if (agentId === 'cursor') {
+      // Cursor stores MCPs in mcp.json under mcpServers
+      const configPath = path.join(configDir, 'mcp.json');
+      let config: Record<string, unknown> = {};
+      if (fs.existsSync(configPath)) {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      }
+
+      if (!config.mcpServers || typeof config.mcpServers !== 'object') {
+        config.mcpServers = {};
+      }
+
+      const mcpServers = config.mcpServers as Record<string, unknown>;
+      for (const server of servers) {
+        if (merge && mcpServers[server.name]) {
+          continue;
+        }
+
+        if (server.config.transport === 'stdio') {
+          mcpServers[server.name] = {
+            command: server.config.command,
+            args: server.config.args || [],
+            env: server.config.env || {},
+          };
+        } else {
+          mcpServers[server.name] = {
+            url: server.config.url,
+          };
+        }
+        applied.push(server.name);
+      }
+
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+      return { success: true, applied };
+    }
+
+    if (agentId === 'opencode') {
+      // OpenCode stores MCPs in opencode.jsonc under mcp
+      // Format: mcp.{name}: { type: 'local'|'remote', command: string[] } or { type: 'remote', url: string }
+      const configPath = path.join(configDir, 'opencode.jsonc');
+      let config: Record<string, unknown> = {};
+      if (fs.existsSync(configPath)) {
+        const content = fs.readFileSync(configPath, 'utf-8');
+        // Strip JSONC comments
+        const jsonContent = content.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+        config = JSON.parse(jsonContent);
+      }
+
+      if (!config.mcp || typeof config.mcp !== 'object') {
+        config.mcp = {};
+      }
+
+      const mcpServers = config.mcp as Record<string, unknown>;
+      for (const server of servers) {
+        if (merge && mcpServers[server.name]) {
+          continue;
+        }
+
+        if (server.config.transport === 'stdio') {
+          // OpenCode uses command as array
+          const commandArray = [server.config.command, ...(server.config.args || [])];
+          mcpServers[server.name] = {
+            type: 'local',
+            command: commandArray,
+            ...(server.config.env && { env: server.config.env }),
+          };
+        } else {
+          mcpServers[server.name] = {
+            type: 'remote',
+            url: server.config.url,
+          };
+        }
+        applied.push(server.name);
+      }
+
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+      return { success: true, applied };
+    }
+
+    // For other agents (openclaw), skip MCP application
     return { success: true, applied: [] };
   } catch (err) {
     return { success: false, applied, error: (err as Error).message };

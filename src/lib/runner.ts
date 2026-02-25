@@ -2,13 +2,13 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import type { JobConfig, RunMeta } from './jobs.js';
+import type { JobConfig, RunMeta } from './cron.js';
 import {
   resolveJobPrompt,
   parseTimeout,
   writeRunMeta,
   getRunDir,
-} from './jobs.js';
+} from './cron.js';
 import { getRunsDir } from './state.js';
 import type { AgentId } from './types.js';
 import { prepareJobHome, buildSpawnEnv } from './sandbox.js';
