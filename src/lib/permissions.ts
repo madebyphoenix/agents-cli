@@ -159,6 +159,9 @@ export function getTotalPermissionRuleCount(): number {
 /**
  * Build a PermissionSet from selected groups.
  * Concatenates allow/deny rules from each group.
+ *
+ * Uses line-by-line regex extraction instead of YAML parsing because
+ * permission files often contain unescaped nested quotes that break YAML.
  */
 export function buildPermissionsFromGroups(groupNames: string[]): PermissionSet {
   const groupsDir = path.join(getPermissionsDir(), 'groups');
@@ -177,18 +180,27 @@ export function buildPermissionsFromGroups(groupNames: string[]): PermissionSet 
 
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      const parsed = yaml.parse(content);
 
-      if (parsed && typeof parsed === 'object') {
-        if (Array.isArray(parsed.allow)) {
-          allAllow.push(...parsed.allow);
-        }
-        if (Array.isArray(parsed.deny)) {
-          allDeny.push(...parsed.deny);
+      // Extract rules using line-by-line regex (more robust than YAML parsing)
+      // Matches lines like: - "Bash(git *)" or   - "WebFetch(domain:example.com)"
+      // Handles nested quotes that break YAML parsers
+      const lines = content.split('\n');
+      for (const line of lines) {
+        // Match: optional whitespace, dash, whitespace, quote, content, quote
+        // Use greedy match to capture everything between first and last quote
+        const match = line.match(/^\s*-\s*"(.+)"$/);
+        if (match) {
+          const rule = match[1];
+          // 99-deny group rules go to deny, others to allow
+          if (groupName === '99-deny' || groupName.includes('-deny')) {
+            allDeny.push(rule);
+          } else {
+            allAllow.push(rule);
+          }
         }
       }
     } catch {
-      // Skip files we can't parse
+      // Skip files we can't read
     }
   }
 

@@ -13,7 +13,6 @@ import {
 import { viewAction } from './view.js';
 import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
-import { getVersionResources } from '../lib/state.js';
 import {
   installVersion,
   removeVersion,
@@ -27,6 +26,11 @@ import {
   syncResourcesToVersion,
   parseAgentSpec,
   promptResourceSelection,
+  promptNewResourceSelection,
+  getAvailableResources,
+  getActuallySyncedResources,
+  getNewResources,
+  hasNewResources,
   type ResourceSelection,
 } from '../lib/versions.js';
 import {
@@ -113,40 +117,57 @@ export function registerVersionsCommands(program: Command): void {
 
             const installedVersion = result.installedVersion || version;
 
-            // Check if we have saved resource selections for this version
-            const existingResources = getVersionResources(agent, installedVersion);
+            // Smart resource detection: compare available vs ACTUALLY synced (source of truth: files)
+            const available = getAvailableResources();
+            const actuallySynced = getActuallySyncedResources(agent, installedVersion);
+            const newResources = getNewResources(available, actuallySynced);
+
+            const hasAnySynced = actuallySynced.commands.length > 0 ||
+              actuallySynced.skills.length > 0 ||
+              actuallySynced.hooks.length > 0 ||
+              actuallySynced.memory.length > 0 ||
+              actuallySynced.mcp.length > 0 ||
+              actuallySynced.permissions.length > 0;
+
             let selection: ResourceSelection | undefined;
 
-            if (!existingResources) {
-              // No saved selection - prompt user
-              try {
+            try {
+              if (!hasAnySynced) {
+                // Nothing synced yet - prompt for ALL resources
                 const userSelection = await promptResourceSelection(agent);
                 if (userSelection) {
                   selection = userSelection;
                 }
-              } catch (err) {
-                if (isPromptCancelled(err)) {
-                  console.log(chalk.gray('Skipped resource selection'));
-                } else {
-                  throw err;
+              } else if (hasNewResources(newResources)) {
+                // Some synced, but NEW resources available - prompt for new only
+                const userSelection = await promptNewResourceSelection(agent, newResources);
+                if (userSelection) {
+                  selection = userSelection;
                 }
               }
-            } else {
-              // Use saved selection
-              console.log(chalk.gray('  Using saved resource selection'));
+              // else: everything already synced, no prompt needed
+            } catch (err) {
+              if (isPromptCancelled(err)) {
+                console.log(chalk.gray('Skipped resource selection'));
+              } else {
+                throw err;
+              }
             }
 
-            // Sync resources (with selection if provided, otherwise uses saved or syncs all)
-            const syncResult = syncResourcesToVersion(agent, installedVersion, selection);
-            const synced: string[] = [];
-            if (syncResult.commands) synced.push('commands');
-            if (syncResult.skills) synced.push('skills');
-            if (syncResult.hooks) synced.push('hooks');
-            if (syncResult.memory.length > 0) synced.push('memory');
-            if (syncResult.permissions) synced.push('permissions');
+            // Sync resources if user made a selection
+            if (selection && Object.keys(selection).length > 0) {
+              const syncResult = syncResourcesToVersion(agent, installedVersion, selection);
+              const synced: string[] = [];
+              if (syncResult.commands) synced.push('commands');
+              if (syncResult.skills) synced.push('skills');
+              if (syncResult.hooks) synced.push('hooks');
+              if (syncResult.memory.length > 0) synced.push('memory');
+              if (syncResult.permissions) synced.push('permissions');
+              if (syncResult.mcp.length > 0) synced.push('mcp');
 
-            if (synced.length > 0) {
-              console.log(chalk.green(`  Synced: ${synced.join(', ')}`));
+              if (synced.length > 0) {
+                console.log(chalk.green(`  Synced: ${synced.join(', ')}`));
+              }
             }
 
             // Prompt to set as default
@@ -374,35 +395,63 @@ export function registerVersionsCommands(program: Command): void {
           const projEmailStr = projEmail ? chalk.cyan(` (${projEmail})`) : '';
           console.log(chalk.green(`Set ${agentConfig.name}@${finalVersion} for this project`) + projEmailStr);
         } else {
-          // Check if we have saved resource selections for the target version
-          const existingResources = getVersionResources(agentId, finalVersion);
+          // Smart resource detection: compare available vs ACTUALLY synced (source of truth: files, not tracking)
+          const available = getAvailableResources();
+          const actuallySynced = getActuallySyncedResources(agentId, finalVersion);
+          const newResources = getNewResources(available, actuallySynced);
 
-          if (!existingResources) {
-            // No saved selection - prompt user to select resources
-            console.log(chalk.yellow(`\n${agentConfig.name}@${finalVersion} has no synced resources.`));
+          // Check if anything is actually synced (source of truth: actual files)
+          const hasAnySynced = actuallySynced.commands.length > 0 ||
+            actuallySynced.skills.length > 0 ||
+            actuallySynced.hooks.length > 0 ||
+            actuallySynced.memory.length > 0 ||
+            actuallySynced.mcp.length > 0 ||
+            actuallySynced.permissions.length > 0;
 
-            try {
+          try {
+            if (!hasAnySynced) {
+              // First time: prompt for ALL resources
+              console.log(chalk.yellow(`\n${agentConfig.name}@${finalVersion} has no synced resources.`));
               const userSelection = await promptResourceSelection(agentId);
               if (userSelection && Object.keys(userSelection).length > 0) {
                 const syncResult = syncResourcesToVersion(agentId, finalVersion, userSelection);
-                const synced: string[] = [];
-                if (syncResult.commands) synced.push('commands');
-                if (syncResult.skills) synced.push('skills');
-                if (syncResult.hooks) synced.push('hooks');
-                if (syncResult.memory.length > 0) synced.push('memory');
-                if (syncResult.permissions) synced.push('permissions');
+                const syncedTypes: string[] = [];
+                if (syncResult.commands) syncedTypes.push('commands');
+                if (syncResult.skills) syncedTypes.push('skills');
+                if (syncResult.hooks) syncedTypes.push('hooks');
+                if (syncResult.memory.length > 0) syncedTypes.push('memory');
+                if (syncResult.permissions) syncedTypes.push('permissions');
+                if (syncResult.mcp.length > 0) syncedTypes.push('mcp');
 
-                if (synced.length > 0) {
-                  console.log(chalk.green(`Synced: ${synced.join(', ')}`));
+                if (syncedTypes.length > 0) {
+                  console.log(chalk.green(`Synced: ${syncedTypes.join(', ')}`));
                 }
               }
-            } catch (err) {
-              if (isPromptCancelled(err)) {
-                console.log(chalk.gray('No changes made'));
-                return;
-              } else {
-                throw err;
+            } else if (hasNewResources(newResources)) {
+              // Has synced before, but NEW items available
+              const userSelection = await promptNewResourceSelection(agentId, newResources);
+              if (userSelection && Object.keys(userSelection).length > 0) {
+                const syncResult = syncResourcesToVersion(agentId, finalVersion, userSelection);
+                const syncedTypes: string[] = [];
+                if (syncResult.commands) syncedTypes.push('commands');
+                if (syncResult.skills) syncedTypes.push('skills');
+                if (syncResult.hooks) syncedTypes.push('hooks');
+                if (syncResult.memory.length > 0) syncedTypes.push('memory');
+                if (syncResult.permissions) syncedTypes.push('permissions');
+                if (syncResult.mcp.length > 0) syncedTypes.push('mcp');
+
+                if (syncedTypes.length > 0) {
+                  console.log(chalk.green(`Synced: ${syncedTypes.join(', ')}`));
+                }
               }
+            }
+            // else: everything already synced, no prompt needed
+          } catch (err) {
+            if (isPromptCancelled(err)) {
+              console.log(chalk.gray('No changes made'));
+              return;
+            } else {
+              throw err;
             }
           }
 

@@ -9,7 +9,7 @@ import type { AgentId, VersionResources } from './types.js';
 import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir } from './state.js';
 import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups } from './permissions.js';
-import { applyMcpToVersion } from './mcp.js';
+import { installMcpServers } from './mcp.js';
 import { markdownToToml } from './convert.js';
 import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion } from './shims.js';
 
@@ -104,6 +104,295 @@ export function getAvailableResources(): AvailableResources {
   }
 
   return result;
+}
+
+/**
+ * Get what's ACTUALLY synced to a version by inspecting the version home.
+ * This is the source of truth - not the tracking in agents.yaml.
+ */
+export function getActuallySyncedResources(agent: AgentId, version: string): AvailableResources {
+  const agentConfig = AGENTS[agent];
+  const versionHome = path.join(getVersionsDir(), agent, version, 'home');
+  const configDir = path.join(versionHome, `.${agent}`);
+
+  const result: AvailableResources = {
+    commands: [],
+    skills: [],
+    hooks: [],
+    memory: [],
+    mcp: [],
+    permissions: [],
+  };
+
+  // Commands - check what files exist in version home
+  const commandsDir = path.join(configDir, agentConfig.commandsSubdir);
+  if (fs.existsSync(commandsDir)) {
+    const ext = agentConfig.format === 'toml' ? '.toml' : '.md';
+    result.commands = fs.readdirSync(commandsDir)
+      .filter(f => f.endsWith(ext))
+      .map(f => f.replace(new RegExp(`\\${ext}$`), ''));
+  }
+
+  // Skills - check what directories exist
+  const skillsDir = path.join(configDir, 'skills');
+  if (fs.existsSync(skillsDir)) {
+    result.skills = fs.readdirSync(skillsDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && !d.name.startsWith('.'))
+      .map(d => d.name);
+  }
+
+  // Hooks - check what files exist
+  const hooksDir = path.join(configDir, 'hooks');
+  if (fs.existsSync(hooksDir)) {
+    result.hooks = fs.readdirSync(hooksDir)
+      .filter(f => !f.startsWith('.'));
+  }
+
+  // Memory - check if agent-specific memory file exists
+  const memoryFile = path.join(configDir, agentConfig.instructionsFile);
+  if (fs.existsSync(memoryFile)) {
+    // Check which source files this could have come from
+    const memoryDir = getMemoryDir();
+    if (fs.existsSync(memoryDir)) {
+      result.memory = fs.readdirSync(memoryDir)
+        .filter(f => f.endsWith('.md'))
+        .map(f => f.replace(/\.md$/, ''));
+    }
+  }
+
+  // MCP - check both settings.json and .claude.json for mcpServers
+  // Claude/Codex store MCPs in .claude.json, others use settings.json
+  const settingsPath = path.join(configDir, 'settings.json');
+  const claudeJsonPath = path.join(versionHome, '.claude.json');
+
+  // Check .claude.json first (for Claude/Codex)
+  if (fs.existsSync(claudeJsonPath)) {
+    try {
+      const claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8'));
+      if (claudeJson.mcpServers && typeof claudeJson.mcpServers === 'object') {
+        result.mcp = Object.keys(claudeJson.mcpServers);
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  // Also check settings.json (for other agents or fallback)
+  if (result.mcp.length === 0 && fs.existsSync(settingsPath)) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      if (settings.mcpServers && typeof settings.mcpServers === 'object') {
+        result.mcp = Object.keys(settings.mcpServers);
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  // Permissions - check settings.json permissions.allow and deny
+  if (PERMISSIONS_CAPABLE_AGENTS.includes(agent) && fs.existsSync(settingsPath)) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      const allowRules = settings.permissions?.allow || [];
+      const denyRules = settings.permissions?.deny || [];
+
+      if (allowRules.length > 0 || denyRules.length > 0) {
+        // Permissions were applied - figure out which groups by matching rules
+        const permGroups = discoverPermissionGroups();
+        const appliedGroups: string[] = [];
+
+        for (const group of permGroups) {
+          const groupSet = buildPermissionsFromGroups([group.name]);
+
+          // Empty groups (like header files) are considered synced if ANY permissions are applied
+          if (groupSet.allow.length === 0 && (!groupSet.deny || groupSet.deny.length === 0)) {
+            appliedGroups.push(group.name);
+            continue;
+          }
+
+          // Check if ANY rule from this group is in allow OR deny lists
+          const hasAllowRule = groupSet.allow.some(rule => allowRules.includes(rule));
+          const hasDenyRule = groupSet.deny?.some(rule => denyRules.includes(rule)) || false;
+
+          if (hasAllowRule || hasDenyRule) {
+            appliedGroups.push(group.name);
+          }
+        }
+        result.permissions = appliedGroups;
+      }
+      // If both arrays empty, permissions is empty array (nothing synced)
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Compare available resources with what's ACTUALLY synced to version home.
+ * Returns only NEW resources that haven't been synced yet.
+ * Source of truth: the actual files/config, NOT agents.yaml tracking.
+ */
+export function getNewResources(
+  available: AvailableResources,
+  actuallySynced: AvailableResources
+): AvailableResources {
+  return {
+    commands: available.commands.filter(c => !actuallySynced.commands.includes(c)),
+    skills: available.skills.filter(s => !actuallySynced.skills.includes(s)),
+    hooks: available.hooks.filter(h => !actuallySynced.hooks.includes(h)),
+    memory: available.memory.filter(m => !actuallySynced.memory.includes(m)),
+    mcp: available.mcp.filter(m => !actuallySynced.mcp.includes(m)),
+    permissions: available.permissions.filter(p => !actuallySynced.permissions.includes(p)),
+  };
+}
+
+/**
+ * Check if there are any new resources to sync.
+ */
+export function hasNewResources(diff: AvailableResources): boolean {
+  return (
+    diff.commands.length > 0 ||
+    diff.skills.length > 0 ||
+    diff.hooks.length > 0 ||
+    diff.memory.length > 0 ||
+    diff.mcp.length > 0 ||
+    diff.permissions.length > 0
+  );
+}
+
+/**
+ * Build a summary string of new resources.
+ * E.g., "2 commands, 5 permission groups"
+ */
+function buildNewResourcesSummary(newResources: AvailableResources, agent: AgentId): string {
+  const agentConfig = AGENTS[agent];
+  const parts: string[] = [];
+
+  if (newResources.commands.length > 0) {
+    parts.push(`${newResources.commands.length} command${newResources.commands.length === 1 ? '' : 's'}`);
+  }
+  if (newResources.skills.length > 0) {
+    parts.push(`${newResources.skills.length} skill${newResources.skills.length === 1 ? '' : 's'}`);
+  }
+  if (newResources.hooks.length > 0 && agentConfig.supportsHooks) {
+    parts.push(`${newResources.hooks.length} hook${newResources.hooks.length === 1 ? '' : 's'}`);
+  }
+  if (newResources.memory.length > 0) {
+    parts.push(`${newResources.memory.length} memory file${newResources.memory.length === 1 ? '' : 's'}`);
+  }
+  if (newResources.mcp.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) {
+    parts.push(`${newResources.mcp.length} MCP${newResources.mcp.length === 1 ? '' : 's'}`);
+  }
+  if (newResources.permissions.length > 0 && PERMISSIONS_CAPABLE_AGENTS.includes(agent)) {
+    parts.push(`${newResources.permissions.length} permission group${newResources.permissions.length === 1 ? '' : 's'}`);
+  }
+
+  return parts.join(', ');
+}
+
+/**
+ * Prompt user to select which NEW resources to sync.
+ * Only shows resources that haven't been synced yet.
+ */
+export async function promptNewResourceSelection(
+  agent: AgentId,
+  newResources: AvailableResources
+): Promise<ResourceSelection | null> {
+  const agentConfig = AGENTS[agent];
+  const selection: ResourceSelection = {};
+
+  // Get permission group info for display
+  const permissionGroups = discoverPermissionGroups();
+  const newPermissionGroups = permissionGroups.filter(g => newResources.permissions.includes(g.name));
+  const totalNewPermissionRules = newPermissionGroups.reduce((sum, g) => sum + g.ruleCount, 0);
+
+  // Build the summary
+  const summary = buildNewResourcesSummary(newResources, agent);
+  console.log(chalk.cyan(`\nNew resources available:`));
+  console.log(chalk.gray(`  ${summary}`));
+
+  // Ask how to handle new resources
+  const action = await select<'all' | 'specific' | 'skip'>({
+    message: 'Sync new resources?',
+    choices: [
+      { value: 'all', name: 'Yes, sync all new' },
+      { value: 'specific', name: 'Select specific items' },
+      { value: 'skip', name: 'Skip' },
+    ],
+    default: 'all',
+  });
+
+  if (action === 'skip') {
+    return null;
+  }
+
+  if (action === 'all') {
+    // Sync all new resources
+    if (newResources.commands.length > 0) selection.commands = newResources.commands;
+    if (newResources.skills.length > 0) selection.skills = newResources.skills;
+    if (newResources.hooks.length > 0 && agentConfig.supportsHooks) selection.hooks = newResources.hooks;
+    if (newResources.memory.length > 0) selection.memory = newResources.memory;
+    if (newResources.mcp.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) selection.mcp = newResources.mcp;
+    if (newResources.permissions.length > 0 && PERMISSIONS_CAPABLE_AGENTS.includes(agent)) selection.permissions = newResources.permissions;
+    return selection;
+  }
+
+  // Select specific items for each category
+  if (newResources.commands.length > 0) {
+    const selected = await checkbox({
+      message: 'Select new commands to sync:',
+      choices: newResources.commands.map(c => ({ name: c, value: c, checked: true })),
+    });
+    if (selected.length > 0) selection.commands = selected;
+  }
+
+  if (newResources.skills.length > 0) {
+    const selected = await checkbox({
+      message: 'Select new skills to sync:',
+      choices: newResources.skills.map(s => ({ name: s, value: s, checked: true })),
+    });
+    if (selected.length > 0) selection.skills = selected;
+  }
+
+  if (newResources.hooks.length > 0 && agentConfig.supportsHooks) {
+    const selected = await checkbox({
+      message: 'Select new hooks to sync:',
+      choices: newResources.hooks.map(h => ({ name: h, value: h, checked: true })),
+    });
+    if (selected.length > 0) selection.hooks = selected;
+  }
+
+  if (newResources.memory.length > 0) {
+    const selected = await checkbox({
+      message: 'Select new memory files to sync:',
+      choices: newResources.memory.map(m => ({ name: m, value: m, checked: true })),
+    });
+    if (selected.length > 0) selection.memory = selected;
+  }
+
+  if (newResources.mcp.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) {
+    const selected = await checkbox({
+      message: 'Select new MCPs to sync:',
+      choices: newResources.mcp.map(m => ({ name: m, value: m, checked: true })),
+    });
+    if (selected.length > 0) selection.mcp = selected;
+  }
+
+  if (newResources.permissions.length > 0 && PERMISSIONS_CAPABLE_AGENTS.includes(agent)) {
+    const selected = await checkbox({
+      message: 'Select new permission groups to sync:',
+      choices: newPermissionGroups.map(g => ({
+        name: `${g.name} (${g.ruleCount} rules)`,
+        value: g.name,
+        checked: true,
+      })),
+    });
+    if (selected.length > 0) selection.permissions = selected;
+  }
+
+  return selection;
 }
 
 /**
@@ -906,13 +1195,15 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     }
   }
 
-  // Apply MCP servers (if agent supports them)
+  // Install MCP servers (if agent supports them)
+  // For Claude/Codex: uses CLI commands (claude mcp add, codex mcp add)
+  // For others: edits config files directly
   const mcpToSync = selection
     ? resolveSelection(selection.mcp, available.mcp)
     : (MCP_CAPABLE_AGENTS.includes(agent) ? available.mcp : []);
 
   if (mcpToSync.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) {
-    const mcpResult = applyMcpToVersion(agent, versionHome, true, mcpToSync);
+    const mcpResult = installMcpServers(agent, version, mcpToSync);
     result.mcp = mcpResult.applied;
     if (mcpResult.applied.length > 0) {
       recordVersionResources(agent, version, 'mcp', mcpResult.applied);
