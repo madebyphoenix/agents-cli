@@ -628,12 +628,16 @@ export function getGlobalDefault(agent: AgentId): string | null {
 /**
  * Set the global default version for an agent.
  */
-export function setGlobalDefault(agent: AgentId, version: string): void {
+export function setGlobalDefault(agent: AgentId, version: string | undefined): void {
   const meta = readMeta();
   if (!meta.agents) {
     meta.agents = {};
   }
-  meta.agents[agent] = version;
+  if (version === undefined) {
+    delete meta.agents[agent];
+  } else {
+    meta.agents[agent] = version;
+  }
   writeMeta(meta);
 }
 
@@ -1203,7 +1207,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     : (MCP_CAPABLE_AGENTS.includes(agent) ? available.mcp : []);
 
   if (mcpToSync.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) {
-    const mcpResult = installMcpServers(agent, version, mcpToSync);
+    const mcpResult = installMcpServers(agent, version, versionHome, mcpToSync);
     result.mcp = mcpResult.applied;
     if (mcpResult.applied.length > 0) {
       recordVersionResources(agent, version, 'mcp', mcpResult.applied);

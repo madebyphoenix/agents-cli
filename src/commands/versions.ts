@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import * as fs from 'fs';
 import * as path from 'path';
-import { select, confirm } from '@inquirer/prompts';
+import { select, confirm, checkbox } from '@inquirer/prompts';
 
 import {
   AGENTS,
@@ -259,14 +259,59 @@ export function registerVersionsCommands(program: Command): void {
         const agentConfig = AGENTS[agent];
 
         if (version === 'latest' || !spec.includes('@')) {
-          // Remove all versions
+          // Show picker for which versions to remove
           const versions = listInstalledVersions(agent);
           if (versions.length === 0) {
             console.log(chalk.gray(`No versions of ${agentConfig.name} installed`));
-          } else {
-            const count = removeAllVersions(agent);
-            removeShim(agent);
-            console.log(chalk.green(`Removed ${count} version(s) of ${agentConfig.name}`));
+            continue;
+          }
+
+          const globalDefault = getGlobalDefault(agent);
+
+          // Sort versions with default first
+          const sortedVersions = [...versions].sort((a, b) => {
+            if (a === globalDefault) return -1;
+            if (b === globalDefault) return 1;
+            return 0;
+          });
+
+          try {
+            const toRemove = await checkbox({
+              message: `Select ${agentConfig.name} versions to remove:`,
+              choices: sortedVersions.map((v) => ({
+                name: v === globalDefault ? `${v} ${chalk.green('(default)')}` : v,
+                value: v,
+                checked: false, // All unchecked by default
+              })),
+            });
+
+            if (toRemove.length === 0) {
+              console.log(chalk.gray('No versions selected'));
+              continue;
+            }
+
+            for (const v of toRemove) {
+              removeVersion(agent, v);
+              console.log(chalk.green(`Removed ${agentConfig.name}@${v}`));
+            }
+
+            // Check if default was removed
+            if (globalDefault && toRemove.includes(globalDefault)) {
+              setGlobalDefault(agent, undefined);
+              console.log(chalk.yellow(`Default version removed. Run: agents use ${agent}@<version> to set a new default`));
+            }
+
+            // Remove shim if no versions left
+            const remaining = listInstalledVersions(agent);
+            if (remaining.length === 0) {
+              removeShim(agent);
+            }
+          } catch (err) {
+            if (isPromptCancelled(err)) {
+              console.log(chalk.gray('Cancelled'));
+              continue;
+            }
+            throw err;
           }
         } else {
           // Remove specific version
@@ -352,18 +397,25 @@ export function registerVersionsCommands(program: Command): void {
 
           const globalDefault = getGlobalDefault(agentId);
 
+          // Sort versions with default first
+          const sortedVersions = [...versions].sort((a, b) => {
+            if (a === globalDefault) return -1;
+            if (b === globalDefault) return 1;
+            return 0;
+          });
+
           // Pre-fetch emails for picker labels
           const pickerEmails = await Promise.all(
-            versions.map((v) =>
+            sortedVersions.map((v) =>
               getAccountEmail(agentId, getVersionHomePath(agentId, v)).then((email) => ({ v, email }))
             )
           );
           const pickerEmailMap = new Map(pickerEmails.map((e) => [e.v, e.email]));
 
-          const maxLabelLen = Math.max(...versions.map((v) => (v === globalDefault ? `${v} (default)` : v).length));
+          const maxLabelLen = Math.max(...sortedVersions.map((v) => (v === globalDefault ? `${v} (default)` : v).length));
           selectedVersion = await select({
             message: `Select ${agentConfig.name} version:`,
-            choices: versions.map((v) => {
+            choices: sortedVersions.map((v) => {
               let label = v === globalDefault ? `${v}${chalk.green(' (default)')}` : v;
               const padLen = maxLabelLen - (v === globalDefault ? `${v} (default)` : v).length;
               if (padLen > 0) label += ' '.repeat(padLen);

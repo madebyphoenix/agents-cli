@@ -20,6 +20,12 @@ import {
   getVersionHomePath,
   getVersionDir,
   resolveVersion,
+  getAvailableResources,
+  getActuallySyncedResources,
+  getNewResources,
+  hasNewResources,
+  promptNewResourceSelection,
+  syncResourcesToVersion,
 } from '../lib/versions.js';
 import {
   getShimsDir,
@@ -29,7 +35,7 @@ import { getAgentResources } from '../lib/resources.js';
 import { getAgentsDir } from '../lib/state.js';
 import { isGitRepo, getGitSyncStatus } from '../lib/git.js';
 import { getCentralMemoryFileName } from '../lib/memory.js';
-import { formatPath } from './utils.js';
+import { formatPath, isPromptCancelled } from './utils.js';
 
 function compareVersions(a: string, b: string): number {
   const partsA = a.split('.').map(Number);
@@ -235,6 +241,39 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       console.log(chalk.gray('Add to PATH for automatic version switching'));
     }
   }
+
+  // Check for new resources when viewing a specific agent
+  if (filterAgentId && versionManaged.length > 0) {
+    const defaultVersion = getGlobalDefault(filterAgentId);
+    if (defaultVersion) {
+      const available = getAvailableResources();
+      const synced = getActuallySyncedResources(filterAgentId, defaultVersion);
+      const newResources = getNewResources(available, synced);
+
+      if (hasNewResources(newResources)) {
+        try {
+          const selection = await promptNewResourceSelection(filterAgentId, newResources);
+          if (selection && Object.keys(selection).length > 0) {
+            const result = syncResourcesToVersion(filterAgentId, defaultVersion, selection);
+            const synced: string[] = [];
+            if (result.commands) synced.push('commands');
+            if (result.skills) synced.push('skills');
+            if (result.hooks) synced.push('hooks');
+            if (result.memory.length > 0) synced.push('memory');
+            if (result.permissions) synced.push('permissions');
+            if (result.mcp.length > 0) synced.push('mcp');
+
+            if (synced.length > 0) {
+              console.log(chalk.green(`\nSynced to ${AGENTS[filterAgentId].name}@${defaultVersion}: ${synced.join(', ')}`));
+            }
+          }
+        } catch (err) {
+          if (isPromptCancelled(err)) return;
+          throw err;
+        }
+      }
+    }
+  }
 }
 
 /**
@@ -434,8 +473,6 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
     console.log();
     console.log(chalk.gray('Legend:'), chalk.green('Tracked'), chalk.blue('Local-only'), chalk.yellow('Modified'), chalk.red('Deleted'));
   }
-
-  console.log('');
 }
 
 /**

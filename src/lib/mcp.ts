@@ -120,7 +120,9 @@ export function getMcpServersByName(names?: string[]): InstalledMcpServer[] {
  * Install MCP server using Claude CLI.
  * Uses: claude mcp add --scope user --transport <type> <name> [--env K=V]... -- <cmd> [args...]
  */
-function installMcpViaClaude(binaryPath: string, server: InstalledMcpServer): void {
+function installMcpViaClaude(binaryPath: string, server: InstalledMcpServer, versionHome: string): void {
+  const execEnv = { ...process.env, HOME: versionHome };
+
   if (server.config.transport === 'stdio') {
     // Build env args
     const envArgs: string[] = [];
@@ -143,12 +145,14 @@ function installMcpViaClaude(binaryPath: string, server: InstalledMcpServer): vo
     execSync(`"${binaryPath}" ${args.map(a => a.includes(' ') ? `"${a}"` : a).join(' ')}`, {
       stdio: 'pipe',
       timeout: 30000,
+      env: execEnv,
     });
   } else {
     // claude mcp add --scope user --transport http <name> <url>
     execSync(`"${binaryPath}" mcp add --scope user --transport http "${server.name}" "${server.config.url}"`, {
       stdio: 'pipe',
       timeout: 30000,
+      env: execEnv,
     });
   }
 }
@@ -157,7 +161,7 @@ function installMcpViaClaude(binaryPath: string, server: InstalledMcpServer): vo
  * Install MCP server using Codex CLI.
  * Uses: codex mcp add <name> -- <cmd> [args...]
  */
-function installMcpViaCodex(binaryPath: string, server: InstalledMcpServer): void {
+function installMcpViaCodex(binaryPath: string, server: InstalledMcpServer, versionHome: string): void {
   if (server.config.transport === 'stdio') {
     // codex mcp add <name> -- <cmd> [args...]
     const args = [
@@ -170,6 +174,7 @@ function installMcpViaCodex(binaryPath: string, server: InstalledMcpServer): voi
     execSync(`"${binaryPath}" ${args.map(a => a.includes(' ') ? `"${a}"` : a).join(' ')}`, {
       stdio: 'pipe',
       timeout: 30000,
+      env: { ...process.env, HOME: versionHome },
     });
   }
   // Note: Codex may not support HTTP MCPs
@@ -178,8 +183,8 @@ function installMcpViaCodex(binaryPath: string, server: InstalledMcpServer): voi
 /**
  * Install MCP server to Gemini config file.
  */
-function installMcpToGeminiConfig(server: InstalledMcpServer): void {
-  const configPath = path.join(os.homedir(), '.gemini', 'settings.json');
+function installMcpToGeminiConfig(server: InstalledMcpServer, versionHome: string): void {
+  const configPath = path.join(versionHome, '.gemini', 'settings.json');
 
   let config: Record<string, unknown> = {};
   if (fs.existsSync(configPath)) {
@@ -211,8 +216,8 @@ function installMcpToGeminiConfig(server: InstalledMcpServer): void {
 /**
  * Install MCP server to Cursor config file.
  */
-function installMcpToCursorConfig(server: InstalledMcpServer): void {
-  const configPath = path.join(os.homedir(), '.cursor', 'mcp.json');
+function installMcpToCursorConfig(server: InstalledMcpServer, versionHome: string): void {
+  const configPath = path.join(versionHome, '.cursor', 'mcp.json');
 
   let config: Record<string, unknown> = {};
   if (fs.existsSync(configPath)) {
@@ -244,8 +249,8 @@ function installMcpToCursorConfig(server: InstalledMcpServer): void {
 /**
  * Install MCP server to OpenCode config file.
  */
-function installMcpToOpenCodeConfig(server: InstalledMcpServer): void {
-  const configPath = path.join(os.homedir(), '.opencode', 'opencode.jsonc');
+function installMcpToOpenCodeConfig(server: InstalledMcpServer, versionHome: string): void {
+  const configPath = path.join(versionHome, '.opencode', 'opencode.jsonc');
 
   let config: Record<string, unknown> = {};
   if (fs.existsSync(configPath)) {
@@ -292,6 +297,7 @@ function installMcpToOpenCodeConfig(server: InstalledMcpServer): void {
 export function installMcpServers(
   agentId: AgentId,
   version: string,
+  versionHome: string,
   mcpNames?: string[]
 ): { success: boolean; applied: string[]; errors: string[] } {
   if (!MCP_CAPABLE_AGENTS.includes(agentId)) {
@@ -315,19 +321,19 @@ export function installMcpServers(
   for (const server of servers) {
     try {
       if (agentId === 'claude') {
-        installMcpViaClaude(binaryPath, server);
+        installMcpViaClaude(binaryPath, server, versionHome);
         applied.push(server.name);
       } else if (agentId === 'codex') {
-        installMcpViaCodex(binaryPath, server);
+        installMcpViaCodex(binaryPath, server, versionHome);
         applied.push(server.name);
       } else if (agentId === 'gemini') {
-        installMcpToGeminiConfig(server);
+        installMcpToGeminiConfig(server, versionHome);
         applied.push(server.name);
       } else if (agentId === 'cursor') {
-        installMcpToCursorConfig(server);
+        installMcpToCursorConfig(server, versionHome);
         applied.push(server.name);
       } else if (agentId === 'opencode') {
-        installMcpToOpenCodeConfig(server);
+        installMcpToOpenCodeConfig(server, versionHome);
         applied.push(server.name);
       }
     } catch (err) {
@@ -363,7 +369,7 @@ export function applyMcpToVersion(
   }
   const version = parts[versionIndex + 2];
 
-  const result = installMcpServers(agentId, version, mcpNames);
+  const result = installMcpServers(agentId, version, versionHome, mcpNames);
   return {
     success: result.success,
     applied: result.applied,
