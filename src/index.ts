@@ -34,6 +34,7 @@ import { registerPackagesCommands } from './commands/packages.js';
 import { registerDaemonCommands } from './commands/daemon.js';
 import { registerCronCommands } from './commands/cron.js';
 import { registerExecCommand } from './commands/exec.js';
+import { registerSubagentsCommands } from './commands/subagents.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -63,10 +64,11 @@ Agents
 Resources
   memory                          Manage AGENTS.md, SOUL.md, etc.
   commands                        Manage slash commands
-  mcp                             Manage MCP servers
+  subagents                       Manage subagent definitions
   skills                          Manage skills (SKILL.md + rules/)
-  hooks                           Manage agent hooks
+  mcp                             Manage MCP servers
   permissions                     Manage agent permissions
+  hooks                           Manage agent hooks
 
 Packages
   search <query>                  Search MCP servers
@@ -222,6 +224,7 @@ program
   });
 
 registerMcpCommands(program);
+registerSubagentsCommands(program);
 registerVersionsCommands(program);
 registerPackagesCommands(program);
 registerDaemonCommands(program);

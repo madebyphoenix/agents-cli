@@ -22,6 +22,7 @@ const SHIMS_DIR = path.join(AGENTS_DIR, 'shims');
 const PERMISSIONS_DIR = path.join(AGENTS_DIR, 'permissions');
 const MCP_DIR = path.join(AGENTS_DIR, 'mcp');
 const BACKUPS_DIR = path.join(AGENTS_DIR, 'backups');
+const SUBAGENTS_DIR = path.join(AGENTS_DIR, 'subagents');
 
 const META_HEADER = `# agents-cli metadata
 # Auto-generated - do not edit manually
@@ -67,6 +68,10 @@ export function getMcpDir(): string {
 
 export function getBackupsDir(): string {
   return BACKUPS_DIR;
+}
+
+export function getSubagentsDir(): string {
+  return SUBAGENTS_DIR;
 }
 
 export function getCommandsDir(): string {
@@ -129,6 +134,9 @@ export function ensureAgentsDir(): void {
   }
   if (!fs.existsSync(PERMISSIONS_DIR)) {
     fs.mkdirSync(PERMISSIONS_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(SUBAGENTS_DIR)) {
+    fs.mkdirSync(SUBAGENTS_DIR, { recursive: true });
   }
 }
 

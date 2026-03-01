@@ -6,12 +6,13 @@ import { promisify } from 'util';
 import chalk from 'chalk';
 import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
-import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir } from './state.js';
+import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir } from './state.js';
 import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups } from './permissions.js';
 import { installMcpServers } from './mcp.js';
 import { markdownToToml } from './convert.js';
 import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion } from './shims.js';
+import { listInstalledSubagents, transformSubagentForClaude, syncSubagentToOpenclaw, SUBAGENT_CAPABLE_AGENTS } from './subagents.js';
 
 const execAsync = promisify(exec);
 
@@ -29,6 +30,7 @@ export interface ResourceSelection {
   memory?: string[] | 'all';
   mcp?: string[] | 'all';
   permissions?: string[] | 'all';
+  subagents?: string[] | 'all';
 }
 
 /**
@@ -41,6 +43,7 @@ export interface AvailableResources {
   memory: string[];
   mcp: string[];
   permissions: string[];
+  subagents: string[];
 }
 
 /**
@@ -54,6 +57,7 @@ export function getAvailableResources(): AvailableResources {
     memory: [],
     mcp: [],
     permissions: [],
+    subagents: [],
   };
 
   // Commands (*.md files)
@@ -103,6 +107,14 @@ export function getAvailableResources(): AvailableResources {
       .map(f => f.replace(/\.(yaml|yml)$/, ''));
   }
 
+  // Subagents (directories with AGENT.md)
+  const subagentsDir = getSubagentsDir();
+  if (fs.existsSync(subagentsDir)) {
+    result.subagents = fs.readdirSync(subagentsDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && fs.existsSync(path.join(subagentsDir, d.name, 'AGENT.md')))
+      .map(d => d.name);
+  }
+
   return result;
 }
 
@@ -122,6 +134,7 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
     memory: [],
     mcp: [],
     permissions: [],
+    subagents: [],
   };
 
   // Commands - check what files exist in version home
@@ -226,6 +239,26 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
     }
   }
 
+  // Subagents - check agent-specific locations
+  if (SUBAGENT_CAPABLE_AGENTS.includes(agent)) {
+    if (agent === 'claude') {
+      const agentsDir = path.join(configDir, 'agents');
+      if (fs.existsSync(agentsDir)) {
+        result.subagents = fs.readdirSync(agentsDir)
+          .filter(f => f.endsWith('.md'))
+          .map(f => f.replace('.md', ''));
+      }
+    } else if (agent === 'openclaw') {
+      // OpenClaw: directories with AGENTS.md
+      const openclawDir = path.join(versionHome, '.openclaw');
+      if (fs.existsSync(openclawDir)) {
+        result.subagents = fs.readdirSync(openclawDir, { withFileTypes: true })
+          .filter(d => d.isDirectory() && fs.existsSync(path.join(openclawDir, d.name, 'AGENTS.md')))
+          .map(d => d.name);
+      }
+    }
+  }
+
   return result;
 }
 
@@ -245,6 +278,7 @@ export function getNewResources(
     memory: available.memory.filter(m => !actuallySynced.memory.includes(m)),
     mcp: available.mcp.filter(m => !actuallySynced.mcp.includes(m)),
     permissions: available.permissions.filter(p => !actuallySynced.permissions.includes(p)),
+    subagents: available.subagents.filter(s => !actuallySynced.subagents.includes(s)),
   };
 }
 
@@ -258,7 +292,8 @@ export function hasNewResources(diff: AvailableResources): boolean {
     diff.hooks.length > 0 ||
     diff.memory.length > 0 ||
     diff.mcp.length > 0 ||
-    diff.permissions.length > 0
+    diff.permissions.length > 0 ||
+    diff.subagents.length > 0
   );
 }
 
@@ -287,6 +322,9 @@ function buildNewResourcesSummary(newResources: AvailableResources, agent: Agent
   }
   if (newResources.permissions.length > 0 && PERMISSIONS_CAPABLE_AGENTS.includes(agent)) {
     parts.push(`${newResources.permissions.length} permission group${newResources.permissions.length === 1 ? '' : 's'}`);
+  }
+  if (newResources.subagents.length > 0 && SUBAGENT_CAPABLE_AGENTS.includes(agent)) {
+    parts.push(`${newResources.subagents.length} subagent${newResources.subagents.length === 1 ? '' : 's'}`);
   }
 
   return parts.join(', ');
@@ -336,6 +374,7 @@ export async function promptNewResourceSelection(
     if (newResources.memory.length > 0) selection.memory = newResources.memory;
     if (newResources.mcp.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) selection.mcp = newResources.mcp;
     if (newResources.permissions.length > 0 && PERMISSIONS_CAPABLE_AGENTS.includes(agent)) selection.permissions = newResources.permissions;
+    if (newResources.subagents.length > 0 && SUBAGENT_CAPABLE_AGENTS.includes(agent)) selection.subagents = newResources.subagents;
     return selection;
   }
 
@@ -392,6 +431,14 @@ export async function promptNewResourceSelection(
     if (selected.length > 0) selection.permissions = selected;
   }
 
+  if (newResources.subagents.length > 0 && SUBAGENT_CAPABLE_AGENTS.includes(agent)) {
+    const selected = await checkbox({
+      message: 'Select new subagents to sync:',
+      choices: newResources.subagents.map(s => ({ name: s, value: s, checked: true })),
+    });
+    if (selected.length > 0) selection.subagents = selected;
+  }
+
   return selection;
 }
 
@@ -417,6 +464,7 @@ export async function promptResourceSelection(agent: AgentId): Promise<ResourceS
     { key: 'memory', label: 'Memory', available: available.memory.length > 0, displayCount: `${available.memory.length} available` },
     { key: 'mcp', label: 'MCPs', available: MCP_CAPABLE_AGENTS.includes(agent) && available.mcp.length > 0, displayCount: `${available.mcp.length} available` },
     { key: 'permissions', label: 'Permissions', available: PERMISSIONS_CAPABLE_AGENTS.includes(agent) && permissionGroups.length > 0, displayCount: `${permissionGroups.length} groups, ${totalPermissionRules} rules` },
+    { key: 'subagents', label: 'Subagents', available: SUBAGENT_CAPABLE_AGENTS.includes(agent) && available.subagents.length > 0, displayCount: `${available.subagents.length} available` },
   ];
 
   const availableCategories = categories.filter(c => c.available);
@@ -873,6 +921,7 @@ export interface SyncResult {
   memory: string[];
   permissions: boolean;
   mcp: string[];
+  subagents: string[];
 }
 
 export interface ResourceDiff {
@@ -1026,7 +1075,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
   const agentDir = path.join(versionHome, `.${agent}`);
   fs.mkdirSync(agentDir, { recursive: true });
 
-  const result: SyncResult = { commands: false, skills: false, hooks: false, memory: [], permissions: false, mcp: [] };
+  const result: SyncResult = { commands: false, skills: false, hooks: false, memory: [], permissions: false, mcp: [], subagents: [] };
   const available = getAvailableResources();
 
   // Helper: remove a path (symlink or real) if it exists
@@ -1211,6 +1260,43 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     result.mcp = mcpResult.applied;
     if (mcpResult.applied.length > 0) {
       recordVersionResources(agent, version, 'mcp', mcpResult.applied);
+    }
+  }
+
+  // Sync subagents (claude and openclaw only)
+  const subagentsToSync = selection
+    ? resolveSelection(selection.subagents, available.subagents)
+    : (SUBAGENT_CAPABLE_AGENTS.includes(agent) ? available.subagents : []);
+
+  if (subagentsToSync.length > 0 && SUBAGENT_CAPABLE_AGENTS.includes(agent)) {
+    const allSubagents = listInstalledSubagents();
+    const subagentsMap = new Map(allSubagents.map(s => [s.name, s]));
+
+    for (const name of subagentsToSync) {
+      const subagent = subagentsMap.get(name);
+      if (!subagent) continue;
+
+      try {
+        if (agent === 'claude') {
+          // Claude: flatten to single .md file
+          const agentsDir = path.join(agentDir, 'agents');
+          fs.mkdirSync(agentsDir, { recursive: true });
+          const transformed = transformSubagentForClaude(subagent.path);
+          fs.writeFileSync(path.join(agentsDir, `${subagent.name}.md`), transformed);
+          result.subagents.push(subagent.name);
+        } else if (agent === 'openclaw') {
+          // OpenClaw: copy full directory, rename AGENT.md -> AGENTS.md
+          const targetDir = path.join(versionHome, '.openclaw', subagent.name);
+          const syncResult = syncSubagentToOpenclaw(subagent.path, targetDir);
+          if (syncResult.success) {
+            result.subagents.push(subagent.name);
+          }
+        }
+      } catch {}
+    }
+
+    if (result.subagents.length > 0) {
+      recordVersionResources(agent, version, 'subagents', result.subagents);
     }
   }
 

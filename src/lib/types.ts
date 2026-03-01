@@ -205,7 +205,7 @@ export interface ResolvedPackage {
 }
 
 // Resource tracking per agent version
-export type ResourceType = 'commands' | 'skills' | 'hooks' | 'memory' | 'mcp' | 'permissions';
+export type ResourceType = 'commands' | 'skills' | 'hooks' | 'memory' | 'mcp' | 'permissions' | 'subagents';
 
 export interface VersionResources {
   commands?: string[];
@@ -214,6 +214,30 @@ export interface VersionResources {
   memory?: string[];
   mcp?: string[];
   permissions?: string[];
+  subagents?: string[];
+}
+
+// Subagent types
+export interface SubagentFrontmatter {
+  name: string;
+  description: string;
+  model?: string;
+  color?: string;
+}
+
+export interface DiscoveredSubagent {
+  name: string;
+  path: string;
+  files: string[];
+  agentMd: string;
+  frontmatter: SubagentFrontmatter;
+}
+
+export interface InstalledSubagent {
+  name: string;
+  path: string;
+  files: string[];
+  frontmatter: SubagentFrontmatter;
 }
 
 export interface Meta {
