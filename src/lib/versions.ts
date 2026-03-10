@@ -161,15 +161,23 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
       .filter(f => !f.startsWith('.'));
   }
 
-  // Memory - check if agent-specific memory file exists
-  const memoryFile = path.join(configDir, agentConfig.instructionsFile);
-  if (fs.existsSync(memoryFile)) {
-    // Check which source files this could have come from
-    const memoryDir = getMemoryDir();
-    if (fs.existsSync(memoryDir)) {
-      result.memory = fs.readdirSync(memoryDir)
-        .filter(f => f.endsWith('.md'))
-        .map(f => f.replace(/\.md$/, ''));
+  // Memory - check which memory files are actually in sync (content matches)
+  const memoryDir = getMemoryDir();
+  if (fs.existsSync(memoryDir)) {
+    const centralFiles = fs.readdirSync(memoryDir).filter(f => f.endsWith('.md'));
+    for (const file of centralFiles) {
+      const memName = file.replace(/\.md$/, '');
+      // AGENTS.md maps to agent's instructionsFile (e.g., CLAUDE.md)
+      const targetName = file === 'AGENTS.md' ? agentConfig.instructionsFile : file;
+      const versionFile = path.join(configDir, targetName);
+      if (fs.existsSync(versionFile)) {
+        // Only "synced" if content matches
+        const centralContent = fs.readFileSync(path.join(memoryDir, file), 'utf-8');
+        const versionContent = fs.readFileSync(versionFile, 'utf-8');
+        if (centralContent === versionContent) {
+          result.memory.push(memName);
+        }
+      }
     }
   }
 

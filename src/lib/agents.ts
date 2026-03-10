@@ -249,7 +249,8 @@ export async function getAccountEmail(
   try {
     switch (agentId) {
       case 'claude': {
-        const data = JSON.parse(await fs.promises.readFile(path.join(base, '.claude.json'), 'utf-8'));
+        // Claude stores auth in ~/.claude.json at REAL home, not version home
+        const data = JSON.parse(await fs.promises.readFile(path.join(os.homedir(), '.claude.json'), 'utf-8'));
         return data.oauthAccount?.emailAddress || null;
       }
       case 'codex': {
