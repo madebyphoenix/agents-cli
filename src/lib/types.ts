@@ -20,6 +20,7 @@ export interface AgentConfig {
     mcp: boolean;
     allowlist: boolean;
     skills: boolean;
+    commands: boolean;
   };
 }
 

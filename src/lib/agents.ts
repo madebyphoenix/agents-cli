@@ -33,7 +33,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     format: 'markdown',
     variableSyntax: '$ARGUMENTS',
     supportsHooks: true,
-    capabilities: { hooks: true, mcp: true, allowlist: true, skills: true },
+    capabilities: { hooks: true, mcp: true, allowlist: true, skills: true, commands: true },
   },
   codex: {
     id: 'codex',
@@ -49,7 +49,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     format: 'markdown',
     variableSyntax: '$ARGUMENTS',
     supportsHooks: false,
-    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true },
+    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true, commands: true },
   },
   gemini: {
     id: 'gemini',
@@ -65,7 +65,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     format: 'toml',
     variableSyntax: '{{args}}',
     supportsHooks: true,
-    capabilities: { hooks: true, mcp: true, allowlist: false, skills: true },
+    capabilities: { hooks: true, mcp: true, allowlist: false, skills: true, commands: true },
   },
   cursor: {
     id: 'cursor',
@@ -82,7 +82,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     format: 'markdown',
     variableSyntax: '$ARGUMENTS',
     supportsHooks: false,
-    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true },
+    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true, commands: true },
   },
   opencode: {
     id: 'opencode',
@@ -98,7 +98,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     format: 'markdown',
     variableSyntax: '$ARGUMENTS',
     supportsHooks: false,
-    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true },
+    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true, commands: true },
   },
   openclaw: {
     id: 'openclaw',
@@ -114,7 +114,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     format: 'markdown',
     variableSyntax: '{{ARGUMENTS}}',
     supportsHooks: true,
-    capabilities: { hooks: true, mcp: true, allowlist: false, skills: true },
+    capabilities: { hooks: true, mcp: true, allowlist: false, skills: true, commands: false },
   },
 };
 
@@ -124,6 +124,9 @@ export const MCP_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
 );
 export const SKILLS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
   (id) => AGENTS[id].capabilities.skills
+);
+export const COMMANDS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
+  (id) => AGENTS[id].capabilities.commands
 );
 export const HOOKS_CAPABLE_AGENTS = ['claude', 'gemini', 'openclaw'] as const;
 

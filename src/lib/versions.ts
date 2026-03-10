@@ -7,7 +7,7 @@ import chalk from 'chalk';
 import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
 import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir } from './state.js';
-import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS } from './agents.js';
+import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups } from './permissions.js';
 import { installMcpServers } from './mcp.js';
 import { markdownToToml } from './convert.js';
@@ -124,6 +124,27 @@ export function getAvailableResources(): AvailableResources {
 }
 
 /**
+ * Recursively compare two directories: every file in src must exist in dest with identical content.
+ */
+function skillDirsMatch(src: string, dest: string): boolean {
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      if (!fs.existsSync(destPath)) return false;
+      if (!skillDirsMatch(srcPath, destPath)) return false;
+    } else {
+      if (!fs.existsSync(destPath)) return false;
+      const srcContent = fs.readFileSync(srcPath, 'utf-8');
+      const destContent = fs.readFileSync(destPath, 'utf-8');
+      if (srcContent !== destContent) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Get what's ACTUALLY synced to a version by inspecting the version home.
  * This is the source of truth - not the tracking in agents.yaml.
  */
@@ -151,12 +172,27 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
       .map(f => f.replace(new RegExp(`\\${ext}$`), ''));
   }
 
-  // Skills - check what directories exist
+  // Skills - check what directories exist AND content matches central source
   const skillsDir = path.join(configDir, 'skills');
+  const centralSkillsDir = getSkillsDir();
   if (fs.existsSync(skillsDir)) {
-    result.skills = fs.readdirSync(skillsDir, { withFileTypes: true })
+    const installedSkills = fs.readdirSync(skillsDir, { withFileTypes: true })
       .filter(d => d.isDirectory() && !d.name.startsWith('.'))
       .map(d => d.name);
+    for (const skill of installedSkills) {
+      const centralSkillDir = path.join(centralSkillsDir, skill);
+      const versionSkillDir = path.join(skillsDir, skill);
+      // If no central source, consider it synced (user-local skill)
+      if (!fs.existsSync(centralSkillDir)) {
+        result.skills.push(skill);
+        continue;
+      }
+      // Content-match: every file in central must exist in version with same content
+      const allMatch = skillDirsMatch(centralSkillDir, versionSkillDir);
+      if (allMatch) {
+        result.skills.push(skill);
+      }
+    }
   }
 
   // Hooks - check what files exist
@@ -471,10 +507,10 @@ export async function promptResourceSelection(agent: AgentId): Promise<ResourceS
   // Build category choices based on what's available
   type CategoryKey = keyof AvailableResources;
   const categories: { key: CategoryKey; label: string; available: boolean; displayCount: string }[] = [
-    { key: 'commands', label: 'Commands', available: available.commands.length > 0, displayCount: `${available.commands.length} available` },
+    { key: 'commands', label: 'Commands', available: COMMANDS_CAPABLE_AGENTS.includes(agent) && available.commands.length > 0, displayCount: `${available.commands.length} available` },
     { key: 'skills', label: 'Skills', available: available.skills.length > 0, displayCount: `${available.skills.length} available` },
     { key: 'hooks', label: 'Hooks', available: agentConfig.supportsHooks && available.hooks.length > 0, displayCount: `${available.hooks.length} available` },
-    { key: 'memory', label: 'Memory', available: available.memory.length > 0, displayCount: `${available.memory.length} available` },
+    { key: 'memory', label: 'Memory', available: COMMANDS_CAPABLE_AGENTS.includes(agent) && available.memory.length > 0, displayCount: `${available.memory.length} available` },
     { key: 'mcp', label: 'MCPs', available: MCP_CAPABLE_AGENTS.includes(agent) && available.mcp.length > 0, displayCount: `${available.mcp.length} available` },
     { key: 'permissions', label: 'Permissions', available: PERMISSIONS_CAPABLE_AGENTS.includes(agent) && permissionGroups.length > 0, displayCount: `${permissionGroups.length} groups, ${totalPermissionRules} rules` },
     { key: 'subagents', label: 'Subagents', available: SUBAGENT_CAPABLE_AGENTS.includes(agent) && available.subagents.length > 0, displayCount: `${available.subagents.length} available` },
@@ -1130,7 +1166,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     ? resolveSelection(selection.commands, available.commands)
     : available.commands; // No selection = sync all
 
-  if (commandsToSync.length > 0) {
+  if (commandsToSync.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) {
     const centralCommands = getCommandsDir();
     const commandsTarget = path.join(agentDir, agentConfig.commandsSubdir);
     // Don't remove existing - just ensure dir exists and add/overwrite selected items
@@ -1221,7 +1257,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     ? resolveSelection(selection.memory, available.memory)
     : available.memory;
 
-  if (memoryToSync.length > 0) {
+  if (memoryToSync.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) {
     const centralMemory = getMemoryDir();
     const syncedMemory: string[] = [];
 

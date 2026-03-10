@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.7
+
+**Bug fix**
+
+- Skip commands and memory sync for agents that don't support file-based commands (openclaw)
+- Added `commands` capability flag to agent configs
+- `agents use openclaw` no longer offers slash commands or memory files as syncable resources
+
 ## 1.6.5
 
 **Bug fix**
