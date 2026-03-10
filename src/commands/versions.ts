@@ -140,7 +140,7 @@ export function registerVersionsCommands(program: Command): void {
                 if (userSelection) {
                   selection = userSelection;
                 }
-              } else if (hasNewResources(newResources)) {
+              } else if (hasNewResources(newResources, agent)) {
                 // Some synced, but NEW resources available - prompt for new only
                 const userSelection = await promptNewResourceSelection(agent, newResources);
                 if (userSelection) {
@@ -488,7 +488,7 @@ export function registerVersionsCommands(program: Command): void {
                   console.log(chalk.green(`Synced: ${syncedTypes.join(', ')}`));
                 }
               }
-            } else if (hasNewResources(newResources)) {
+            } else if (hasNewResources(newResources, agentId)) {
               // Has synced before, but NEW items available
               const userSelection = await promptNewResourceSelection(agentId, newResources);
               if (userSelection && Object.keys(userSelection).length > 0) {
