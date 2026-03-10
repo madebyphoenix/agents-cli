@@ -334,15 +334,20 @@ export function getNewResources(
 /**
  * Check if there are any new resources to sync.
  */
-export function hasNewResources(diff: AvailableResources): boolean {
+export function hasNewResources(diff: AvailableResources, agent?: AgentId): boolean {
+  const commandsApply = agent ? COMMANDS_CAPABLE_AGENTS.includes(agent) : true;
+  const hooksApply = agent ? AGENTS[agent].supportsHooks : true;
+  const mcpApply = agent ? MCP_CAPABLE_AGENTS.includes(agent) : true;
+  const permsApply = agent ? PERMISSIONS_CAPABLE_AGENTS.includes(agent) : true;
+  const subagentsApply = agent ? SUBAGENT_CAPABLE_AGENTS.includes(agent) : true;
   return (
-    diff.commands.length > 0 ||
+    (diff.commands.length > 0 && commandsApply) ||
     diff.skills.length > 0 ||
-    diff.hooks.length > 0 ||
-    diff.memory.length > 0 ||
-    diff.mcp.length > 0 ||
-    diff.permissions.length > 0 ||
-    diff.subagents.length > 0
+    (diff.hooks.length > 0 && hooksApply) ||
+    (diff.memory.length > 0 && commandsApply) ||
+    (diff.mcp.length > 0 && mcpApply) ||
+    (diff.permissions.length > 0 && permsApply) ||
+    (diff.subagents.length > 0 && subagentsApply)
   );
 }
 
@@ -354,7 +359,7 @@ function buildNewResourcesSummary(newResources: AvailableResources, agent: Agent
   const agentConfig = AGENTS[agent];
   const parts: string[] = [];
 
-  if (newResources.commands.length > 0) {
+  if (newResources.commands.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) {
     parts.push(`${newResources.commands.length} command${newResources.commands.length === 1 ? '' : 's'}`);
   }
   if (newResources.skills.length > 0) {
@@ -363,7 +368,7 @@ function buildNewResourcesSummary(newResources: AvailableResources, agent: Agent
   if (newResources.hooks.length > 0 && agentConfig.supportsHooks) {
     parts.push(`${newResources.hooks.length} hook${newResources.hooks.length === 1 ? '' : 's'}`);
   }
-  if (newResources.memory.length > 0) {
+  if (newResources.memory.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) {
     parts.push(`${newResources.memory.length} memory file${newResources.memory.length === 1 ? '' : 's'}`);
   }
   if (newResources.mcp.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) {
@@ -417,10 +422,10 @@ export async function promptNewResourceSelection(
 
   if (action === 'all') {
     // Sync all new resources
-    if (newResources.commands.length > 0) selection.commands = newResources.commands;
+    if (newResources.commands.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) selection.commands = newResources.commands;
     if (newResources.skills.length > 0) selection.skills = newResources.skills;
     if (newResources.hooks.length > 0 && agentConfig.supportsHooks) selection.hooks = newResources.hooks;
-    if (newResources.memory.length > 0) selection.memory = newResources.memory;
+    if (newResources.memory.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) selection.memory = newResources.memory;
     if (newResources.mcp.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) selection.mcp = newResources.mcp;
     if (newResources.permissions.length > 0 && PERMISSIONS_CAPABLE_AGENTS.includes(agent)) selection.permissions = newResources.permissions;
     if (newResources.subagents.length > 0 && SUBAGENT_CAPABLE_AGENTS.includes(agent)) selection.subagents = newResources.subagents;
@@ -428,7 +433,7 @@ export async function promptNewResourceSelection(
   }
 
   // Select specific items for each category
-  if (newResources.commands.length > 0) {
+  if (newResources.commands.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) {
     const selected = await checkbox({
       message: 'Select new commands to sync:',
       choices: newResources.commands.map(c => ({ name: c, value: c, checked: true })),
@@ -452,7 +457,7 @@ export async function promptNewResourceSelection(
     if (selected.length > 0) selection.hooks = selected;
   }
 
-  if (newResources.memory.length > 0) {
+  if (newResources.memory.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) {
     const selected = await checkbox({
       message: 'Select new memory files to sync:',
       choices: newResources.memory.map(m => ({ name: m, value: m, checked: true })),

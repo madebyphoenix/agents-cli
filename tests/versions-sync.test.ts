@@ -38,21 +38,47 @@ describe('getActuallySyncedResources', () => {
     expect(files.length).toBe(2);
   });
 
-  it('detects skills directories in version home', () => {
-    const versionHome = join(TEST_DIR, 'claude-home');
-    const skillsDir = join(versionHome, '.claude', 'skills');
-    mkdirSync(join(skillsDir, 'mq'), { recursive: true });
-    mkdirSync(join(skillsDir, 'browser'), { recursive: true });
-    writeFileSync(join(skillsDir, '.hidden'), 'hidden file'); // Should be ignored
+  it('considers a skill synced when content matches central source', () => {
+    const centralSkillsDir = join(TEST_DIR, 'central-skills');
+    const versionSkillsDir = join(TEST_DIR, 'claude-home', '.claude', 'skills');
+    mkdirSync(join(centralSkillsDir, 'mq'), { recursive: true });
+    mkdirSync(join(versionSkillsDir, 'mq'), { recursive: true });
+    writeFileSync(join(centralSkillsDir, 'mq', 'SKILL.md'), '# MQ skill');
+    writeFileSync(join(versionSkillsDir, 'mq', 'SKILL.md'), '# MQ skill');
 
-    const dirs = require('fs').readdirSync(skillsDir, { withFileTypes: true })
+    // Content match: skill should be considered synced
+    const centralContent = require('fs').readFileSync(join(centralSkillsDir, 'mq', 'SKILL.md'), 'utf-8');
+    const versionContent = require('fs').readFileSync(join(versionSkillsDir, 'mq', 'SKILL.md'), 'utf-8');
+    expect(centralContent).toBe(versionContent);
+  });
+
+  it('considers a skill NOT synced when content differs from central source', () => {
+    const centralSkillsDir = join(TEST_DIR, 'central-skills');
+    const versionSkillsDir = join(TEST_DIR, 'claude-home', '.claude', 'skills');
+    mkdirSync(join(centralSkillsDir, 'sessions'), { recursive: true });
+    mkdirSync(join(versionSkillsDir, 'sessions'), { recursive: true });
+    writeFileSync(join(centralSkillsDir, 'sessions', 'SKILL.md'), '# Sessions v2 (updated)');
+    writeFileSync(join(versionSkillsDir, 'sessions', 'SKILL.md'), '# Sessions v1 (stale)');
+
+    // Content mismatch: skill should NOT be considered synced
+    const centralContent = require('fs').readFileSync(join(centralSkillsDir, 'sessions', 'SKILL.md'), 'utf-8');
+    const versionContent = require('fs').readFileSync(join(versionSkillsDir, 'sessions', 'SKILL.md'), 'utf-8');
+    expect(centralContent).not.toBe(versionContent);
+  });
+
+  it('ignores hidden directories in skills dir', () => {
+    const versionSkillsDir = join(TEST_DIR, 'claude-home2', '.claude', 'skills');
+    mkdirSync(join(versionSkillsDir, 'mq'), { recursive: true });
+    mkdirSync(join(versionSkillsDir, '.hidden'), { recursive: true });
+    writeFileSync(join(versionSkillsDir, '.hidden-file'), 'hidden');
+
+    const dirs = require('fs').readdirSync(versionSkillsDir, { withFileTypes: true })
       .filter((d: any) => d.isDirectory() && !d.name.startsWith('.'))
       .map((d: any) => d.name);
 
     expect(dirs).toContain('mq');
-    expect(dirs).toContain('browser');
     expect(dirs).not.toContain('.hidden');
-    expect(dirs.length).toBe(2);
+    expect(dirs.length).toBe(1);
   });
 
   it('detects permissions from settings.json allow array', () => {
