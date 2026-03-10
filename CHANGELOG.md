@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.4
+
+**Bug fixes**
+
+- Fixed Claude email not showing in `agents view` (was reading from version home instead of real ~/.claude.json)
+- Fixed memory file updates not being detected in `agents use` (now compares content, not just existence)
+
 ## 1.6.3
 
 **Bug fix**
