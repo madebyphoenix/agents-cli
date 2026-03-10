@@ -1120,7 +1120,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
   if (commandsToSync.length > 0) {
     const centralCommands = getCommandsDir();
     const commandsTarget = path.join(agentDir, agentConfig.commandsSubdir);
-    removePath(commandsTarget);
+    // Don't remove existing - just ensure dir exists and add/overwrite selected items
     fs.mkdirSync(commandsTarget, { recursive: true });
 
     const syncedCommands: string[] = [];
@@ -1153,7 +1153,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
   if (skillsToSync.length > 0) {
     const centralSkills = getSkillsDir();
     const skillsTarget = path.join(agentDir, 'skills');
-    removePath(skillsTarget);
+    // Don't remove existing - just ensure dir exists and add/overwrite selected items
     fs.mkdirSync(skillsTarget, { recursive: true });
 
     const syncedSkills: string[] = [];
@@ -1162,6 +1162,8 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
       if (!fs.existsSync(srcDir)) continue;
 
       const destDir = path.join(skillsTarget, skill);
+      // Remove just this skill's dir to ensure clean state, then copy fresh
+      removePath(destDir);
       copyDir(srcDir, destDir);
       syncedSkills.push(skill);
     }
@@ -1180,7 +1182,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     if (hooksToSync.length > 0) {
       const centralHooks = getHooksDir();
       const hooksTarget = path.join(agentDir, 'hooks');
-      removePath(hooksTarget);
+      // Don't remove existing - just ensure dir exists and add/overwrite selected items
       fs.mkdirSync(hooksTarget, { recursive: true });
 
       const syncedHooks: string[] = [];

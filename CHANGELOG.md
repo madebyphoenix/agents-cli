@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.3
+
+**Bug fix**
+
+- Fixed infinite "new resources available" loop in `agents view`
+- Partial resource syncs no longer wipe out previously synced resources
+
 ## 1.5.82
 
 **MCP & Permission improvements**
