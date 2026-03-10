@@ -83,11 +83,16 @@ export function getAvailableResources(): AvailableResources {
       .filter(f => !f.startsWith('.'));
   }
 
-  // Memory (*.md files)
+  // Memory (*.md files, excluding symlinks)
   const memoryDir = getMemoryDir();
   if (fs.existsSync(memoryDir)) {
     result.memory = fs.readdirSync(memoryDir)
-      .filter(f => f.endsWith('.md'))
+      .filter(f => {
+        if (!f.endsWith('.md')) return false;
+        // Skip symlinks (e.g., CLAUDE.md -> AGENTS.md)
+        const stat = fs.lstatSync(path.join(memoryDir, f));
+        return !stat.isSymbolicLink();
+      })
       .map(f => f.replace(/\.md$/, ''));
   }
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.5
+
+**Bug fix**
+
+- Fixed memory file detection counting symlinks as separate files (CLAUDE.md/GEMINI.md -> AGENTS.md)
+
 ## 1.6.4
 
 **Bug fixes**
