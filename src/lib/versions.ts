@@ -4,11 +4,12 @@ import * as os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import chalk from 'chalk';
+import * as TOML from 'smol-toml';
 import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
 import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir } from './state.js';
 import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS } from './agents.js';
-import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups } from './permissions.js';
+import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME } from './permissions.js';
 import { installMcpServers } from './mcp.js';
 import { markdownToToml } from './convert.js';
 import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion } from './shims.js';
@@ -251,40 +252,78 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
     }
   }
 
-  // Permissions - check settings.json permissions.allow and deny
-  if (PERMISSIONS_CAPABLE_AGENTS.includes(agent) && fs.existsSync(settingsPath)) {
-    try {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-      const allowRules = settings.permissions?.allow || [];
-      const denyRules = settings.permissions?.deny || [];
+  // Permissions - check agent-specific config files
+  if (PERMISSIONS_CAPABLE_AGENTS.includes(agent)) {
+    if (agent === 'claude' && fs.existsSync(settingsPath)) {
+      // Claude: check settings.json permissions.allow and deny
+      try {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        const allowRules = settings.permissions?.allow || [];
+        const denyRules = settings.permissions?.deny || [];
 
-      if (allowRules.length > 0 || denyRules.length > 0) {
-        // Permissions were applied - figure out which groups by matching rules
-        const permGroups = discoverPermissionGroups();
-        const appliedGroups: string[] = [];
+        if (allowRules.length > 0 || denyRules.length > 0) {
+          const permGroups = discoverPermissionGroups();
+          const appliedGroups: string[] = [];
 
-        for (const group of permGroups) {
-          const groupSet = buildPermissionsFromGroups([group.name]);
+          for (const group of permGroups) {
+            const groupSet = buildPermissionsFromGroups([group.name]);
 
-          // Empty groups (like header files) are considered synced if ANY permissions are applied
-          if (groupSet.allow.length === 0 && (!groupSet.deny || groupSet.deny.length === 0)) {
-            appliedGroups.push(group.name);
-            continue;
+            // Empty groups (like header files) are considered synced if ANY permissions are applied
+            if (groupSet.allow.length === 0 && (!groupSet.deny || groupSet.deny.length === 0)) {
+              appliedGroups.push(group.name);
+              continue;
+            }
+
+            const hasAllowRule = groupSet.allow.some(rule => allowRules.includes(rule));
+            const hasDenyRule = groupSet.deny?.some(rule => denyRules.includes(rule)) || false;
+
+            if (hasAllowRule || hasDenyRule) {
+              appliedGroups.push(group.name);
+            }
           }
-
-          // Check if ANY rule from this group is in allow OR deny lists
-          const hasAllowRule = groupSet.allow.some(rule => allowRules.includes(rule));
-          const hasDenyRule = groupSet.deny?.some(rule => denyRules.includes(rule)) || false;
-
-          if (hasAllowRule || hasDenyRule) {
-            appliedGroups.push(group.name);
-          }
+          result.permissions = appliedGroups;
         }
-        result.permissions = appliedGroups;
+      } catch {
+        // Ignore parse errors
       }
-      // If both arrays empty, permissions is empty array (nothing synced)
-    } catch {
-      // Ignore parse errors
+    } else if (agent === 'codex') {
+      // Codex: config.toml for approval_policy/sandbox_mode, .rules for deny
+      const codexConfigPath = path.join(configDir, 'config.toml');
+      const codexRulesPath = path.join(configDir, 'rules', CODEX_RULES_FILENAME);
+      const hasConfig = fs.existsSync(codexConfigPath);
+      const hasRules = fs.existsSync(codexRulesPath);
+      if (hasConfig || hasRules) {
+        try {
+          // Codex format is lossy — all groups merge into a few keys.
+          // If any permission artifacts exist, all groups were applied together.
+          let hasPermKeys = false;
+          if (hasConfig) {
+            const content = fs.readFileSync(codexConfigPath, 'utf-8');
+            const config = TOML.parse(content) as Record<string, unknown>;
+            hasPermKeys = !!(config.approval_policy || config.sandbox_mode || config.sandbox_workspace_write);
+          }
+          if (hasPermKeys || hasRules) {
+            result.permissions = discoverPermissionGroups().map(g => g.name);
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    } else if (agent === 'opencode') {
+      // OpenCode: opencode.jsonc for permission.bash
+      const opencodeConfigPath = path.join(configDir, 'opencode.jsonc');
+      if (fs.existsSync(opencodeConfigPath)) {
+        try {
+          const content = fs.readFileSync(opencodeConfigPath, 'utf-8');
+          const stripped = content.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+          const config = JSON.parse(stripped);
+          if (config.permission && Object.keys(config.permission.bash || {}).length > 0) {
+            result.permissions = discoverPermissionGroups().map(g => g.name);
+          }
+        } catch {
+          // Ignore parse errors
+        }
+      }
     }
   }
 
