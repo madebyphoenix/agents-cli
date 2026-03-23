@@ -24,7 +24,7 @@ describe('Git Sync Status - Real Repo Tests', () => {
     console.log('Git tracked skills files:', trackedFiles);
 
     // These should be tracked based on GitHub repo
-    const expectedTracked = ['skills/mq', 'skills/openclaw', 'skills/skill-creator'];
+    const expectedTracked = ['skills/mq', 'skills/linear', 'skills/twitter-warmup'];
     for (const expected of expectedTracked) {
       const hasMatch = trackedFiles.some(f => f.startsWith(expected));
       expect(hasMatch, `Expected ${expected} to be tracked`).toBe(true);
