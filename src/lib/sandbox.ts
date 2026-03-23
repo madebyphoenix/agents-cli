@@ -108,6 +108,15 @@ export function symlinkAllowedDirs(overlayHome: string, dirs: string[]): void {
   }
 }
 
+const CLAUDE_TOOL_MAP: Record<string, string> = {
+  web_search: 'WebSearch(*)',
+  web_fetch: 'WebFetch(*)',
+  bash: 'Bash(*)',
+  read: 'Read(*)',
+  write: 'Write(*)',
+  edit: 'Edit(*)',
+};
+
 export function generateClaudeConfig(overlayHome: string, config: JobConfig): void {
   const claudeDir = path.join(overlayHome, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
