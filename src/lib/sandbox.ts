@@ -29,17 +29,14 @@ const ENV_ALLOWLIST = [
   'FORCE_COLOR',
 ];
 
-const CLAUDE_TOOL_MAP: Record<string, string> = {
+// Tools safe to grant as wildcards (no filesystem access)
+const SAFE_TOOLS: Record<string, string> = {
   web_search: 'WebSearch(*)',
   web_fetch: 'WebFetch(*)',
-  bash: 'Bash(*)',
-  read: 'Read(*)',
-  write: 'Write(*)',
-  edit: 'Edit(*)',
-  glob: 'Glob(*)',
-  grep: 'Grep(*)',
-  notebook_edit: 'NotebookEdit(*)',
 };
+
+// Bare tool names that get scoped to allow.dirs, never wildcarded
+const DIR_SCOPED_TOOLS = new Set(['read', 'write', 'edit', 'glob', 'grep', 'notebook_edit']);
 
 export function buildSpawnEnv(overlayHome: string, extraEnv?: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = { HOME: overlayHome };
