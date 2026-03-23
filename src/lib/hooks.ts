@@ -1,9 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as yaml from 'yaml';
 import { AGENTS, ALL_AGENT_IDS } from './agents.js';
-import { getHooksDir as getCentralHooksDir } from './state.js';
+import { getAgentsDir, getHooksDir as getCentralHooksDir } from './state.js';
 import { getEffectiveHome } from './versions.js';
-import type { AgentId, InstalledHook } from './types.js';
+import type { AgentId, InstalledHook, ManifestHook } from './types.js';
 
 export type HookEntry = { name: string; scriptPath: string; dataFile?: string };
 
@@ -419,4 +420,146 @@ export async function installHooksCentrally(
  */
 export function listCentralHooks(): HookEntry[] {
   return listHookEntriesFromDir(getCentralHooksDir());
+}
+
+/**
+ * Parse ~/.agents/hooks.yaml manifest.
+ * Returns hook definitions with lifecycle event metadata.
+ */
+export function parseHookManifest(): Record<string, ManifestHook> {
+  const manifestPath = path.join(getAgentsDir(), 'hooks.yaml');
+  if (!fs.existsSync(manifestPath)) {
+    return {};
+  }
+
+  try {
+    const content = fs.readFileSync(manifestPath, 'utf-8');
+    const parsed = yaml.parse(content) as Record<string, ManifestHook> | null;
+    return parsed || {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Register hooks as lifecycle events in Claude's settings.json.
+ * Reads hooks.yaml manifest, merges into settings.json hooks section.
+ * Only manages hooks whose command paths are under ~/.agents/hooks/.
+ * Does not remove user-added hooks.
+ */
+export function registerHooksToSettings(
+  agentId: AgentId,
+  versionHome: string,
+  hookManifest?: Record<string, ManifestHook>
+): { registered: string[]; errors: string[] } {
+  const registered: string[] = [];
+  const errors: string[] = [];
+
+  // Only Claude supports settings.json hooks registration
+  if (agentId !== 'claude') {
+    return { registered, errors };
+  }
+
+  const manifest = hookManifest || parseHookManifest();
+  if (Object.keys(manifest).length === 0) {
+    return { registered, errors };
+  }
+
+  const agentsDir = getAgentsDir();
+  const configDir = path.join(versionHome, '.claude');
+  const settingsPath = path.join(configDir, 'settings.json');
+
+  // Read existing settings
+  let config: Record<string, unknown> = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      config = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    } catch {
+      errors.push('Failed to parse settings.json');
+      return { registered, errors };
+    }
+  }
+
+  // Ensure hooks object exists
+  if (!config.hooks || typeof config.hooks !== 'object') {
+    config.hooks = {};
+  }
+  const hooks = config.hooks as Record<string, unknown[]>;
+
+  // Marker prefix for managed hooks — we only touch hooks with this path prefix
+  const managedPrefix = path.join(agentsDir, 'hooks') + '/';
+
+  for (const [name, hookDef] of Object.entries(manifest)) {
+    // Skip if not for this agent
+    if (hookDef.agents && !hookDef.agents.includes(agentId)) {
+      continue;
+    }
+
+    if (!hookDef.events || hookDef.events.length === 0) {
+      continue;
+    }
+
+    const commandPath = path.join(agentsDir, 'hooks', hookDef.script);
+    if (!fs.existsSync(commandPath)) {
+      errors.push(`${name}: script not found at ${commandPath}`);
+      continue;
+    }
+
+    for (const event of hookDef.events) {
+      // Ensure event array exists
+      if (!hooks[event]) {
+        hooks[event] = [];
+      }
+
+      const eventEntries = hooks[event] as Array<{
+        matcher?: string;
+        hooks?: Array<{ type: string; command: string; timeout?: number }>;
+      }>;
+
+      const matcher = hookDef.matcher || '';
+      const timeout = hookDef.timeout || 600;
+
+      // Find existing matcher group or create one
+      let matcherGroup = eventEntries.find((e) => (e.matcher || '') === matcher);
+      if (!matcherGroup) {
+        matcherGroup = { matcher, hooks: [] };
+        eventEntries.push(matcherGroup);
+      }
+
+      if (!matcherGroup.hooks) {
+        matcherGroup.hooks = [];
+      }
+
+      // Check if this hook is already registered (by command path)
+      const existingIdx = matcherGroup.hooks.findIndex(
+        (h) => h.command === commandPath
+      );
+
+      const hookEntry = {
+        type: 'command' as const,
+        command: commandPath,
+        timeout,
+      };
+
+      if (existingIdx >= 0) {
+        // Update existing
+        matcherGroup.hooks[existingIdx] = hookEntry;
+      } else {
+        // Add new
+        matcherGroup.hooks.push(hookEntry);
+      }
+
+      registered.push(`${name} -> ${event}`);
+    }
+  }
+
+  // Write back
+  try {
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(config, null, 2), 'utf-8');
+  } catch (err) {
+    errors.push(`Failed to write settings.json: ${(err as Error).message}`);
+  }
+
+  return { registered, errors };
 }

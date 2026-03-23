@@ -40,6 +40,21 @@ export interface HookConfig {
   dataFile?: string;
 }
 
+export interface ManifestHook {
+  script: string;
+  events: string[];
+  timeout?: number;
+  matcher?: string;
+  agents?: AgentId[];
+}
+
+export interface HookResourceEntry {
+  name: string;
+  events: string[];
+  timeout?: number;
+  matcher?: string;
+}
+
 export interface InstalledHook {
   name: string;
   path: string;

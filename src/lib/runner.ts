@@ -84,7 +84,8 @@ export async function executeJob(config: JobConfig): Promise<RunResult> {
   const resolvedPrompt = resolveJobPrompt(config);
   const cmd = buildJobCommand(config, resolvedPrompt);
 
-  const overlayHome = prepareJobHome(config);
+  const useSandbox = config.sandbox !== false;
+  const overlayHome = useSandbox ? prepareJobHome(config) : undefined;
 
   const runId = generateRunId();
   const runDir = getRunDir(config.name, runId);
@@ -93,7 +94,10 @@ export async function executeJob(config: JobConfig): Promise<RunResult> {
   const stdoutPath = path.join(runDir, 'stdout.log');
   const stdoutFd = fs.openSync(stdoutPath, 'w');
 
-  const spawnEnv = buildSpawnEnv(overlayHome);
+  let spawnEnv = useSandbox ? buildSpawnEnv(overlayHome!) : { ...process.env } as Record<string, string>;
+  if (config.timezone) {
+    spawnEnv.TZ = config.timezone;
+  }
 
   const meta: RunMeta = {
     jobName: config.name,
@@ -180,7 +184,8 @@ export async function executeJobDetached(config: JobConfig): Promise<RunMeta> {
   const resolvedPrompt = resolveJobPrompt(config);
   const cmd = buildJobCommand(config, resolvedPrompt);
 
-  const overlayHome = prepareJobHome(config);
+  const useSandbox = config.sandbox !== false;
+  const overlayHome = useSandbox ? prepareJobHome(config) : undefined;
 
   const runId = generateRunId();
   const runDir = getRunDir(config.name, runId);
@@ -189,7 +194,10 @@ export async function executeJobDetached(config: JobConfig): Promise<RunMeta> {
   const stdoutPath = path.join(runDir, 'stdout.log');
   const stdoutFd = fs.openSync(stdoutPath, 'w');
 
-  const spawnEnv = buildSpawnEnv(overlayHome);
+  let spawnEnv = useSandbox ? buildSpawnEnv(overlayHome!) : { ...process.env } as Record<string, string>;
+  if (config.timezone) {
+    spawnEnv.TZ = config.timezone;
+  }
 
   const meta: RunMeta = {
     jobName: config.name,

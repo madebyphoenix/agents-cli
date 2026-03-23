@@ -21,6 +21,7 @@ export interface JobConfig {
   prompt: string;
   timezone?: string;
   variables?: Record<string, string>;
+  sandbox?: boolean;
   allow?: JobAllowConfig;
   config?: Record<string, unknown>;
   version?: string;
@@ -153,14 +154,21 @@ export function validateJob(config: Partial<JobConfig>): string[] {
 
 export function resolveJobPrompt(config: JobConfig): string {
   const now = new Date();
+  const tz = config.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  // Compute date/day/time in the job's configured timezone
+  const dayIndex = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'narrow' }).formatToParts(now).find(p => p.type === 'weekday')?.value || '0', 10);
+  const localDay = days[new Date(now.toLocaleString('en-US', { timeZone: tz })).getDay()];
+  const localDate = now.toLocaleDateString('en-CA', { timeZone: tz }); // en-CA gives YYYY-MM-DD
+  const localTime = now.toLocaleTimeString('en-GB', { timeZone: tz, hour12: false }); // HH:MM:SS
 
   let prompt = config.prompt;
 
-  // Built-in variables
-  prompt = prompt.replace(/\{day\}/g, days[now.getDay()]);
-  prompt = prompt.replace(/\{date\}/g, now.toISOString().split('T')[0]);
-  prompt = prompt.replace(/\{time\}/g, now.toTimeString().split(' ')[0]);
+  // Built-in variables (timezone-aware)
+  prompt = prompt.replace(/\{day\}/g, localDay);
+  prompt = prompt.replace(/\{date\}/g, localDate);
+  prompt = prompt.replace(/\{time\}/g, localTime);
   prompt = prompt.replace(/\{job_name\}/g, config.name);
 
   // User-defined variables

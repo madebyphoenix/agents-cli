@@ -8,12 +8,13 @@ import * as TOML from 'smol-toml';
 import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
 import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir } from './state.js';
-import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS } from './agents.js';
+import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME } from './permissions.js';
 import { installMcpServers } from './mcp.js';
 import { markdownToToml } from './convert.js';
 import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion } from './shims.js';
 import { listInstalledSubagents, transformSubagentForClaude, syncSubagentToOpenclaw, SUBAGENT_CAPABLE_AGENTS } from './subagents.js';
+import { parseHookManifest, registerHooksToSettings } from './hooks.js';
 
 const execAsync = promisify(exec);
 
@@ -223,36 +224,21 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
     }
   }
 
-  // MCP - check both settings.json and .claude.json for mcpServers
-  // Claude/Codex store MCPs in .claude.json, others use settings.json
-  const settingsPath = path.join(configDir, 'settings.json');
-  const claudeJsonPath = path.join(versionHome, '.claude.json');
-
-  // Check .claude.json first (for Claude/Codex)
-  if (fs.existsSync(claudeJsonPath)) {
-    try {
-      const claudeJson = JSON.parse(fs.readFileSync(claudeJsonPath, 'utf-8'));
-      if (claudeJson.mcpServers && typeof claudeJson.mcpServers === 'object') {
-        result.mcp = Object.keys(claudeJson.mcpServers);
+  // MCP - use canonical config path + parser per agent
+  if (MCP_CAPABLE_AGENTS.includes(agent)) {
+    const mcpConfigPath = getMcpConfigPathForHome(agent, versionHome);
+    if (fs.existsSync(mcpConfigPath)) {
+      try {
+        const servers = parseMcpConfig(agent, mcpConfigPath);
+        result.mcp = Object.keys(servers);
+      } catch {
+        // Ignore parse errors
       }
-    } catch {
-      // Ignore parse errors
-    }
-  }
-
-  // Also check settings.json (for other agents or fallback)
-  if (result.mcp.length === 0 && fs.existsSync(settingsPath)) {
-    try {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-      if (settings.mcpServers && typeof settings.mcpServers === 'object') {
-        result.mcp = Object.keys(settings.mcpServers);
-      }
-    } catch {
-      // Ignore parse errors
     }
   }
 
   // Permissions - check agent-specific config files
+  const settingsPath = path.join(configDir, 'settings.json');
   if (PERMISSIONS_CAPABLE_AGENTS.includes(agent)) {
     if (agent === 'claude' && fs.existsSync(settingsPath)) {
       // Claude: check settings.json permissions.allow and deny
@@ -1292,6 +1278,11 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
       result.hooks = syncedHooks.length > 0;
       if (syncedHooks.length > 0) {
         recordVersionResources(agent, version, 'hooks', syncedHooks);
+      }
+
+      // Register hooks as lifecycle events in settings.json
+      if (agent === 'claude') {
+        registerHooksToSettings(agent, versionHome);
       }
     }
   }

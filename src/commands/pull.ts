@@ -54,6 +54,7 @@ import {
   getPathSetupInstructions,
   switchConfigSymlink,
 } from '../lib/shims.js';
+import { parseHookManifest, registerHooksToSettings } from '../lib/hooks.js';
 import { select } from '@inquirer/prompts';
 import { isPromptCancelled } from './utils.js';
 
@@ -369,6 +370,30 @@ export function registerPullCommand(program: Command): void {
                 console.log(`  ${chalk.green('✓')} ${label} ${chalk.gray(`(${summary.join(', ')})`)}`);
               }
             }
+          }
+        }
+
+        // Register hooks as lifecycle events in settings.json
+        const hookManifest = parseHookManifest();
+        if (Object.keys(hookManifest).length > 0) {
+          let hookRegistered = 0;
+          for (const agentId of agentsToSync) {
+            if (agentId !== 'claude') continue;
+            const versions = listInstalledVersions(agentId);
+            const defaultVer = getGlobalDefault(agentId);
+            const targetVersions = defaultVer ? [defaultVer] : versions.slice(-1);
+
+            for (const ver of targetVersions) {
+              const home = getVersionHomePath(agentId, ver);
+              const result = registerHooksToSettings(agentId, home, hookManifest);
+              hookRegistered += result.registered.length;
+              for (const error of result.errors) {
+                console.log(chalk.yellow(`  Hook warning: ${error}`));
+              }
+            }
+          }
+          if (hookRegistered > 0) {
+            console.log(chalk.green(`\nRegistered ${hookRegistered} hook lifecycle event(s)`));
           }
         }
 

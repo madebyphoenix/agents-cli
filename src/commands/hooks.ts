@@ -21,6 +21,7 @@ import {
   listInstalledHooksWithScope,
   removeHook,
   getHookInfo,
+  parseHookManifest,
 } from '../lib/hooks.js';
 import {
   listInstalledVersions,
@@ -62,6 +63,21 @@ export function registerHooksCommands(program: Command): void {
         }
       }
 
+      // Load hook manifest for event display
+      const hookManifest = parseHookManifest();
+
+      // Helper: get events for a hook name from manifest
+      const getHookEvents = (hookName: string): string[] => {
+        // Try exact match, then try without extension
+        for (const [, def] of Object.entries(hookManifest)) {
+          const scriptBase = def.script.replace(/\.[^.]+$/, '');
+          if (def.script === hookName || scriptBase === hookName || hookName.replace(/\.[^.]+$/, '') === scriptBase) {
+            return def.events || [];
+          }
+        }
+        return [];
+      };
+
       // Helper to render hooks for a specific version
       const renderVersionHooks = (
         agentId: AgentId,
@@ -95,14 +111,22 @@ export function registerHooksCommands(program: Command): void {
           if (userHooks.length > 0 && (options.scope === 'all' || options.scope === 'user')) {
             console.log(`    ${chalk.gray('User:')}`);
             for (const hook of userHooks) {
-              console.log(`      ${chalk.cyan(hook.name.padEnd(20))}`);
+              const events = getHookEvents(hook.name);
+              const eventStr = events.length > 0
+                ? chalk.gray(` [${events.join(', ')}]`)
+                : '';
+              console.log(`      ${chalk.cyan(hook.name.padEnd(28))}${eventStr}`);
             }
           }
 
           if (projectHooks.length > 0 && (options.scope === 'all' || options.scope === 'project')) {
             console.log(`    ${chalk.gray('Project:')}`);
             for (const hook of projectHooks) {
-              console.log(`      ${chalk.yellow(hook.name.padEnd(20))}`);
+              const events = getHookEvents(hook.name);
+              const eventStr = events.length > 0
+                ? chalk.gray(` [${events.join(', ')}]`)
+                : '';
+              console.log(`      ${chalk.yellow(hook.name.padEnd(28))}${eventStr}`);
             }
           }
         }
