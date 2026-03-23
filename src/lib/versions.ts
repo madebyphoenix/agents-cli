@@ -197,11 +197,30 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
     }
   }
 
-  // Hooks - check what files exist
+  // Hooks - check what files exist AND content matches central source
   const hooksDir = path.join(configDir, 'hooks');
+  const centralHooksDir = getHooksDir();
   if (fs.existsSync(hooksDir)) {
-    result.hooks = fs.readdirSync(hooksDir)
-      .filter(f => !f.startsWith('.'));
+    const installedHooks = fs.readdirSync(hooksDir).filter(f => !f.startsWith('.'));
+    for (const hook of installedHooks) {
+      const centralFile = path.join(centralHooksDir, hook);
+      const versionFile = path.join(hooksDir, hook);
+      // If no central source, consider it synced (user-local hook)
+      if (!fs.existsSync(centralFile)) {
+        result.hooks.push(hook);
+        continue;
+      }
+      // Content-match: version hook must match central hook
+      try {
+        const centralContent = fs.readFileSync(centralFile, 'utf-8');
+        const versionContent = fs.readFileSync(versionFile, 'utf-8');
+        if (centralContent === versionContent) {
+          result.hooks.push(hook);
+        }
+      } catch {
+        // If read fails, consider not synced
+      }
+    }
   }
 
   // Memory - check which memory files are actually in sync (content matches)
