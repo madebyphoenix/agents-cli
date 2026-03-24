@@ -221,7 +221,7 @@ export interface ResolvedPackage {
 }
 
 // Resource tracking per agent version
-export type ResourceType = 'commands' | 'skills' | 'hooks' | 'memory' | 'mcp' | 'permissions' | 'subagents';
+export type ResourceType = 'commands' | 'skills' | 'hooks' | 'memory' | 'mcp' | 'permissions' | 'subagents' | 'plugins';
 
 export interface VersionResources {
   commands?: string[];
@@ -231,6 +231,7 @@ export interface VersionResources {
   mcp?: string[];
   permissions?: string[];
   subagents?: string[];
+  plugins?: string[];
 }
 
 // Subagent types
