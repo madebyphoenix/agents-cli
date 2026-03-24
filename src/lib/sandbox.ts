@@ -108,35 +108,66 @@ export function symlinkAllowedDirs(overlayHome: string, dirs: string[]): void {
   }
 }
 
-const CLAUDE_TOOL_MAP: Record<string, string> = {
-  web_search: 'WebSearch(*)',
-  web_fetch: 'WebFetch(*)',
-  bash: 'Bash(*)',
-  read: 'Read(*)',
-  write: 'Write(*)',
-  edit: 'Edit(*)',
-};
-
 export function generateClaudeConfig(overlayHome: string, config: JobConfig): void {
   const claudeDir = path.join(overlayHome, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
 
   const allowPermissions: string[] = [];
+  const enabledTools = new Set(config.allow?.tools || []);
 
   if (config.allow?.tools) {
     for (const tool of config.allow.tools) {
-      const mapped = CLAUDE_TOOL_MAP[tool];
-      allowPermissions.push(mapped || tool);
+      // Safe wildcards (no filesystem access)
+      if (tool in SAFE_TOOLS) {
+        allowPermissions.push(SAFE_TOOLS[tool]);
+        continue;
+      }
+
+      // Bare filesystem tool names — permissions come from allow.dirs
+      if (DIR_SCOPED_TOOLS.has(tool)) {
+        continue;
+      }
+
+      // Bare "bash" — must use scoped pattern like "Bash(git *)"
+      if (tool === 'bash') {
+        throw new Error(
+          'Bare "bash" not allowed in sandbox — use scoped patterns like "Bash(git *)"'
+        );
+      }
+
+      // Reject wildcard patterns like Bash(*), Read(*)
+      if (/^\w+\(\*\)$/.test(tool)) {
+        throw new Error(
+          `Wildcard "${tool}" not allowed in sandbox — use scoped patterns`
+        );
+      }
+
+      // Scoped pattern like "Bash(git *)" — pass through
+      allowPermissions.push(tool);
     }
   }
 
+  // Scope filesystem tools to allowed dirs
   if (config.allow?.dirs) {
     for (const dir of config.allow.dirs) {
       const resolved = dir.replace(/^~/, REAL_HOME);
+
+      // Read always granted for allowed dirs
       allowPermissions.push(`Read(${resolved}/**)`);
+
       if (config.mode === 'edit') {
         allowPermissions.push(`Write(${resolved}/**)`);
         allowPermissions.push(`Edit(${resolved}/**)`);
+      }
+
+      if (enabledTools.has('glob')) {
+        allowPermissions.push(`Glob(${resolved}/**)`);
+      }
+      if (enabledTools.has('grep')) {
+        allowPermissions.push(`Grep(${resolved}/**)`);
+      }
+      if (enabledTools.has('notebook_edit') && config.mode === 'edit') {
+        allowPermissions.push(`NotebookEdit(${resolved}/**)`);
       }
     }
   }

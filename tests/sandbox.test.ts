@@ -52,9 +52,44 @@ describe('generateClaudeConfig', () => {
     expect(settings.permissions.deny).toEqual([]);
   });
 
-  it('maps known tool names to Claude permission format', () => {
+  it('grants safe tool wildcards for non-filesystem tools', () => {
     const config = makeConfig({
-      allow: { tools: ['web_search', 'web_fetch', 'bash', 'read', 'write', 'edit'] },
+      allow: { tools: ['web_search', 'web_fetch'] },
+    });
+    generateClaudeConfig(overlayHome, config);
+
+    const settings = JSON.parse(
+      readFileSync(join(overlayHome, '.claude', 'settings.json'), 'utf-8')
+    );
+    const perms = settings.permissions.allow;
+    expect(perms).toContain('WebSearch(*)');
+    expect(perms).toContain('WebFetch(*)');
+  });
+
+  it('throws on bare "bash" — requires scoped pattern', () => {
+    const config = makeConfig({ allow: { tools: ['bash'] } });
+    expect(() => generateClaudeConfig(overlayHome, config)).toThrow(/scoped patterns/);
+  });
+
+  it('throws on wildcard patterns like Bash(*)', () => {
+    const config = makeConfig({ allow: { tools: ['Bash(*)'] } });
+    expect(() => generateClaudeConfig(overlayHome, config)).toThrow(/scoped patterns/);
+  });
+
+  it('passes through scoped bash patterns', () => {
+    const config = makeConfig({ allow: { tools: ['Bash(git *)'] } });
+    generateClaudeConfig(overlayHome, config);
+
+    const settings = JSON.parse(
+      readFileSync(join(overlayHome, '.claude', 'settings.json'), 'utf-8')
+    );
+    expect(settings.permissions.allow).toContain('Bash(git *)');
+  });
+
+  it('scopes dir-based tools to allow.dirs instead of wildcarding', () => {
+    const config = makeConfig({
+      mode: 'edit',
+      allow: { tools: ['read', 'write', 'edit', 'glob', 'grep'], dirs: ['/tmp/test-dir'] },
     });
     generateClaudeConfig(overlayHome, config);
 
@@ -63,25 +98,21 @@ describe('generateClaudeConfig', () => {
     );
     const perms = settings.permissions.allow;
 
-    expect(perms).toContain('WebSearch(*)');
-    expect(perms).toContain('WebFetch(*)');
-    expect(perms).toContain('Bash(*)');
-    expect(perms).toContain('Read(*)');
-    expect(perms).toContain('Write(*)');
-    expect(perms).toContain('Edit(*)');
+    // Scoped to dir, not wildcarded
+    expect(perms).toContain('Read(/tmp/test-dir/**)');
+    expect(perms).toContain('Write(/tmp/test-dir/**)');
+    expect(perms).toContain('Edit(/tmp/test-dir/**)');
+    expect(perms).toContain('Glob(/tmp/test-dir/**)');
+    expect(perms).toContain('Grep(/tmp/test-dir/**)');
+
+    // No wildcards
+    expect(perms).not.toContain('Read(*)');
+    expect(perms).not.toContain('Write(*)');
+    expect(perms).not.toContain('Edit(*)');
+    expect(perms).not.toContain('Bash(*)');
   });
 
-  it('passes through unknown tool names as-is', () => {
-    const config = makeConfig({ allow: { tools: ['CustomTool(*)'] } });
-    generateClaudeConfig(overlayHome, config);
-
-    const settings = JSON.parse(
-      readFileSync(join(overlayHome, '.claude', 'settings.json'), 'utf-8')
-    );
-    expect(settings.permissions.allow).toContain('CustomTool(*)');
-  });
-
-  it('adds Read permissions for allowed dirs in plan mode', () => {
+  it('adds Read for allowed dirs in plan mode, no Write/Edit', () => {
     const config = makeConfig({
       mode: 'plan',
       allow: { dirs: ['/tmp/test-dir'] },
@@ -94,9 +125,10 @@ describe('generateClaudeConfig', () => {
     const perms = settings.permissions.allow;
     expect(perms).toContain('Read(/tmp/test-dir/**)');
     expect(perms).not.toContain('Write(/tmp/test-dir/**)');
+    expect(perms).not.toContain('Edit(/tmp/test-dir/**)');
   });
 
-  it('adds Read+Write+Edit permissions for allowed dirs in edit mode', () => {
+  it('adds Read+Write+Edit for allowed dirs in edit mode', () => {
     const config = makeConfig({
       mode: 'edit',
       allow: { dirs: ['/tmp/test-dir'] },
