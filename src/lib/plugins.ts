@@ -432,21 +432,56 @@ function copyDirWithVarExpansion(
 
 /**
  * Check if a plugin is synced to a version by inspecting the version home.
- * A plugin is considered synced if at least one of its skills exists in the version.
+ * Checks multiple signals: skills directories, hook commands in settings.json,
+ * and plugin permissions in settings.json.
  */
 export function isPluginSynced(
   plugin: DiscoveredPlugin,
   agent: AgentId,
   versionHome: string
 ): boolean {
-  const skillsDir = path.join(versionHome, `.${agent}`, 'skills');
-  if (!fs.existsSync(skillsDir)) return false;
+  // Check 1: plugin skill directories exist
+  if (plugin.skills.length > 0) {
+    const skillsDir = path.join(versionHome, `.${agent}`, 'skills');
+    if (fs.existsSync(skillsDir)) {
+      for (const skillName of plugin.skills) {
+        const fsSafeName = `${plugin.name}--${skillName}`;
+        if (fs.existsSync(path.join(skillsDir, fsSafeName))) {
+          return true;
+        }
+      }
+    }
+  }
 
-  // Check if any plugin skill directory exists (using the fs-safe prefix)
-  for (const skillName of plugin.skills) {
-    const fsSafeName = `${plugin.name}--${skillName}`;
-    if (fs.existsSync(path.join(skillsDir, fsSafeName))) {
-      return true;
+  // Check 2: plugin hooks registered in settings.json (commands referencing plugin root)
+  if (plugin.hooks.length > 0 && agent === 'claude') {
+    const settingsPath = path.join(versionHome, `.${agent}`, 'settings.json');
+    if (fs.existsSync(settingsPath)) {
+      try {
+        const content = fs.readFileSync(settingsPath, 'utf-8');
+        // Check if any hook command references this plugin's root path
+        if (content.includes(plugin.root)) {
+          return true;
+        }
+      } catch {
+        // Ignore read errors
+      }
+    }
+  }
+
+  // Check 3: plugin permissions in settings.json (rules referencing plugin root)
+  if (agent === 'claude') {
+    const settingsPath = path.join(versionHome, `.${agent}`, 'settings.json');
+    if (fs.existsSync(settingsPath)) {
+      try {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        const allow = settings.permissions?.allow || [];
+        if (allow.some((rule: string) => rule.includes(plugin.root))) {
+          return true;
+        }
+      } catch {
+        // Ignore parse errors
+      }
     }
   }
 
