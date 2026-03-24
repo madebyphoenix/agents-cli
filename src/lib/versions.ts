@@ -564,6 +564,20 @@ export async function promptNewResourceSelection(
     if (selected.length > 0) selection.subagents = selected;
   }
 
+  if (newResources.plugins.length > 0 && PLUGINS_CAPABLE_AGENTS.includes(agent)) {
+    const allPlugins = discoverPlugins();
+    const pluginMap = new Map(allPlugins.map(p => [p.name, p]));
+    const selected = await checkbox({
+      message: 'Select new plugins to sync:',
+      choices: newResources.plugins.map(name => {
+        const plugin = pluginMap.get(name);
+        const desc = plugin?.manifest.description;
+        return { name: desc ? `${name} - ${desc}` : name, value: name, checked: true };
+      }),
+    });
+    if (selected.length > 0) selection.plugins = selected;
+  }
+
   return selection;
 }
 
@@ -590,6 +604,7 @@ export async function promptResourceSelection(agent: AgentId): Promise<ResourceS
     { key: 'mcp', label: 'MCPs', available: MCP_CAPABLE_AGENTS.includes(agent) && available.mcp.length > 0, displayCount: `${available.mcp.length} available` },
     { key: 'permissions', label: 'Permissions', available: PERMISSIONS_CAPABLE_AGENTS.includes(agent) && permissionGroups.length > 0, displayCount: `${permissionGroups.length} groups, ${totalPermissionRules} rules` },
     { key: 'subagents', label: 'Subagents', available: SUBAGENT_CAPABLE_AGENTS.includes(agent) && available.subagents.length > 0, displayCount: `${available.subagents.length} available` },
+    { key: 'plugins', label: 'Plugins', available: PLUGINS_CAPABLE_AGENTS.includes(agent) && available.plugins.length > 0, displayCount: `${available.plugins.length} available` },
   ];
 
   const availableCategories = categories.filter(c => c.available);
