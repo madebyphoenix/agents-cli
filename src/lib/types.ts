@@ -21,6 +21,7 @@ export interface AgentConfig {
     allowlist: boolean;
     skills: boolean;
     commands: boolean;
+    plugins: boolean;
   };
 }
 
@@ -232,6 +233,23 @@ export interface VersionResources {
   permissions?: string[];
   subagents?: string[];
   plugins?: string[];
+}
+
+// Plugin types
+export interface PluginManifest {
+  name: string;
+  description: string;
+  version: string;
+  agents?: AgentId[];
+}
+
+export interface DiscoveredPlugin {
+  name: string;
+  root: string;
+  manifest: PluginManifest;
+  skills: string[];
+  hooks: string[];
+  scripts: string[];
 }
 
 // Subagent types
