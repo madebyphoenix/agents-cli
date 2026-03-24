@@ -1062,6 +1062,7 @@ export interface SyncResult {
   permissions: boolean;
   mcp: string[];
   subagents: string[];
+  plugins: string[];
 }
 
 export interface ResourceDiff {
@@ -1215,7 +1216,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
   const agentDir = path.join(versionHome, `.${agent}`);
   fs.mkdirSync(agentDir, { recursive: true });
 
-  const result: SyncResult = { commands: false, skills: false, hooks: false, memory: [], permissions: false, mcp: [], subagents: [] };
+  const result: SyncResult = { commands: false, skills: false, hooks: false, memory: [], permissions: false, mcp: [], subagents: [], plugins: [] };
   const available = getAvailableResources();
 
   // Helper: remove a path (symlink or real) if it exists
@@ -1444,6 +1445,30 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
 
     if (result.subagents.length > 0) {
       recordVersionResources(agent, version, 'subagents', result.subagents);
+    }
+  }
+
+  // Sync plugins (claude and openclaw)
+  const pluginsToSync = selection
+    ? resolveSelection(selection.plugins, available.plugins)
+    : (PLUGINS_CAPABLE_AGENTS.includes(agent) ? available.plugins : []);
+
+  if (pluginsToSync.length > 0 && PLUGINS_CAPABLE_AGENTS.includes(agent)) {
+    const allPlugins = discoverPlugins();
+    const pluginMap = new Map(allPlugins.map(p => [p.name, p]));
+
+    for (const name of pluginsToSync) {
+      const plugin = pluginMap.get(name);
+      if (!plugin || !pluginSupportsAgent(plugin, agent)) continue;
+
+      const pluginResult = syncPluginToVersion(plugin, agent, versionHome);
+      if (pluginResult.success) {
+        result.plugins.push(name);
+      }
+    }
+
+    if (result.plugins.length > 0) {
+      recordVersionResources(agent, version, 'plugins', result.plugins);
     }
   }
 

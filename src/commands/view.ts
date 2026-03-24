@@ -262,6 +262,7 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
             if (result.memory.length > 0) synced.push('memory');
             if (result.permissions) synced.push('permissions');
             if (result.mcp.length > 0) synced.push('mcp');
+            if (result.plugins.length > 0) synced.push('plugins');
 
             if (synced.length > 0) {
               console.log(chalk.green(`\nSynced to ${AGENTS[filterAgentId].name}@${defaultVersion}: ${synced.join(', ')}`));

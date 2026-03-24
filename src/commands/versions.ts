@@ -166,6 +166,7 @@ export function registerVersionsCommands(program: Command): void {
               if (syncResult.memory.length > 0) synced.push('memory');
               if (syncResult.permissions) synced.push('permissions');
               if (syncResult.mcp.length > 0) synced.push('mcp');
+              if (syncResult.plugins.length > 0) synced.push('plugins');
 
               if (synced.length > 0) {
                 console.log(chalk.green(`  Synced: ${synced.join(', ')}`));
@@ -483,6 +484,7 @@ export function registerVersionsCommands(program: Command): void {
                 if (syncResult.memory.length > 0) syncedTypes.push('memory');
                 if (syncResult.permissions) syncedTypes.push('permissions');
                 if (syncResult.mcp.length > 0) syncedTypes.push('mcp');
+                if (syncResult.plugins.length > 0) syncedTypes.push('plugins');
 
                 if (syncedTypes.length > 0) {
                   console.log(chalk.green(`Synced: ${syncedTypes.join(', ')}`));
@@ -500,6 +502,7 @@ export function registerVersionsCommands(program: Command): void {
                 if (syncResult.memory.length > 0) syncedTypes.push('memory');
                 if (syncResult.permissions) syncedTypes.push('permissions');
                 if (syncResult.mcp.length > 0) syncedTypes.push('mcp');
+                if (syncResult.plugins.length > 0) syncedTypes.push('plugins');
 
                 if (syncedTypes.length > 0) {
                   console.log(chalk.green(`Synced: ${syncedTypes.join(', ')}`));
