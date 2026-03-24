@@ -15,6 +15,8 @@ import { markdownToToml } from './convert.js';
 import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion } from './shims.js';
 import { listInstalledSubagents, transformSubagentForClaude, syncSubagentToOpenclaw, SUBAGENT_CAPABLE_AGENTS } from './subagents.js';
 import { parseHookManifest, registerHooksToSettings } from './hooks.js';
+import { discoverPlugins, syncPluginToVersion, isPluginSynced, pluginSupportsAgent } from './plugins.js';
+import { PLUGINS_CAPABLE_AGENTS } from './agents.js';
 
 const execAsync = promisify(exec);
 
@@ -33,6 +35,7 @@ export interface ResourceSelection {
   mcp?: string[] | 'all';
   permissions?: string[] | 'all';
   subagents?: string[] | 'all';
+  plugins?: string[] | 'all';
 }
 
 /**
@@ -46,6 +49,7 @@ export interface AvailableResources {
   mcp: string[];
   permissions: string[];
   subagents: string[];
+  plugins: string[];
 }
 
 /**
@@ -60,6 +64,7 @@ export function getAvailableResources(): AvailableResources {
     mcp: [],
     permissions: [],
     subagents: [],
+    plugins: [],
   };
 
   // Commands (*.md files)
