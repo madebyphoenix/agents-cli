@@ -127,6 +127,10 @@ export function getAvailableResources(): AvailableResources {
       .map(d => d.name);
   }
 
+  // Plugins (directories with .claude-plugin/plugin.json)
+  const allPlugins = discoverPlugins();
+  result.plugins = allPlugins.map(p => p.name);
+
   return result;
 }
 
@@ -168,6 +172,7 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
     mcp: [],
     permissions: [],
     subagents: [],
+    plugins: [],
   };
 
   // Commands - check what files exist in version home
@@ -357,6 +362,16 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
     }
   }
 
+  // Plugins - check which discovered plugins have their skills in the version
+  if (PLUGINS_CAPABLE_AGENTS.includes(agent)) {
+    const allPlugins = discoverPlugins();
+    for (const plugin of allPlugins) {
+      if (isPluginSynced(plugin, agent, versionHome)) {
+        result.plugins.push(plugin.name);
+      }
+    }
+  }
+
   return result;
 }
 
@@ -377,6 +392,7 @@ export function getNewResources(
     mcp: available.mcp.filter(m => !actuallySynced.mcp.includes(m)),
     permissions: available.permissions.filter(p => !actuallySynced.permissions.includes(p)),
     subagents: available.subagents.filter(s => !actuallySynced.subagents.includes(s)),
+    plugins: available.plugins.filter(p => !actuallySynced.plugins.includes(p)),
   };
 }
 
@@ -389,6 +405,7 @@ export function hasNewResources(diff: AvailableResources, agent?: AgentId): bool
   const mcpApply = agent ? MCP_CAPABLE_AGENTS.includes(agent) : true;
   const permsApply = agent ? PERMISSIONS_CAPABLE_AGENTS.includes(agent) : true;
   const subagentsApply = agent ? SUBAGENT_CAPABLE_AGENTS.includes(agent) : true;
+  const pluginsApply = agent ? PLUGINS_CAPABLE_AGENTS.includes(agent) : true;
   return (
     (diff.commands.length > 0 && commandsApply) ||
     diff.skills.length > 0 ||
@@ -396,7 +413,8 @@ export function hasNewResources(diff: AvailableResources, agent?: AgentId): bool
     (diff.memory.length > 0 && commandsApply) ||
     (diff.mcp.length > 0 && mcpApply) ||
     (diff.permissions.length > 0 && permsApply) ||
-    (diff.subagents.length > 0 && subagentsApply)
+    (diff.subagents.length > 0 && subagentsApply) ||
+    (diff.plugins.length > 0 && pluginsApply)
   );
 }
 
@@ -428,6 +446,9 @@ function buildNewResourcesSummary(newResources: AvailableResources, agent: Agent
   }
   if (newResources.subagents.length > 0 && SUBAGENT_CAPABLE_AGENTS.includes(agent)) {
     parts.push(`${newResources.subagents.length} subagent${newResources.subagents.length === 1 ? '' : 's'}`);
+  }
+  if (newResources.plugins.length > 0 && PLUGINS_CAPABLE_AGENTS.includes(agent)) {
+    parts.push(`${newResources.plugins.length} plugin${newResources.plugins.length === 1 ? '' : 's'}`);
   }
 
   return parts.join(', ');
@@ -478,6 +499,7 @@ export async function promptNewResourceSelection(
     if (newResources.mcp.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) selection.mcp = newResources.mcp;
     if (newResources.permissions.length > 0 && PERMISSIONS_CAPABLE_AGENTS.includes(agent)) selection.permissions = newResources.permissions;
     if (newResources.subagents.length > 0 && SUBAGENT_CAPABLE_AGENTS.includes(agent)) selection.subagents = newResources.subagents;
+    if (newResources.plugins.length > 0 && PLUGINS_CAPABLE_AGENTS.includes(agent)) selection.plugins = newResources.plugins;
     return selection;
   }
 
