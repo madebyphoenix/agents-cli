@@ -129,7 +129,8 @@ export function registerVersionsCommands(program: Command): void {
               actuallySynced.hooks.length > 0 ||
               actuallySynced.memory.length > 0 ||
               actuallySynced.mcp.length > 0 ||
-              actuallySynced.permissions.length > 0;
+              actuallySynced.permissions.length > 0 ||
+              actuallySynced.plugins.length > 0;
 
             let selection: ResourceSelection | undefined;
 

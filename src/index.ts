@@ -35,6 +35,7 @@ import { registerDaemonCommands } from './commands/daemon.js';
 import { registerCronCommands } from './commands/cron.js';
 import { registerExecCommand } from './commands/exec.js';
 import { registerSubagentsCommands } from './commands/subagents.js';
+import { registerPluginsCommands } from './commands/plugins.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -69,6 +70,7 @@ Resources
   mcp                             Manage MCP servers
   permissions                     Manage agent permissions
   hooks                           Manage agent hooks
+  plugins                         Manage agent plugins
 
 Packages
   search <query>                  Search MCP servers
@@ -225,6 +227,7 @@ program
 
 registerMcpCommands(program);
 registerSubagentsCommands(program);
+registerPluginsCommands(program);
 registerVersionsCommands(program);
 registerPackagesCommands(program);
 registerDaemonCommands(program);
