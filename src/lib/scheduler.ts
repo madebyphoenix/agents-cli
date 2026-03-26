@@ -1,6 +1,6 @@
 import { Cron } from 'croner';
 import type { JobConfig } from './cron.js';
-import { listJobs } from './cron.js';
+import { listJobs, deleteJob } from './cron.js';
 
 interface ScheduledJob {
   config: JobConfig;
@@ -32,6 +32,12 @@ export class JobScheduler {
         await this.onTrigger(config);
       } catch (err) {
         console.error(`Job '${config.name}' failed:`, (err as Error).message);
+      }
+
+      // One-shot jobs: remove after first execution
+      if (config.runOnce) {
+        this.unschedule(config.name);
+        deleteJob(config.name);
       }
     });
 

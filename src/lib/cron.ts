@@ -1,8 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
+import { Cron } from 'croner';
 import { getCronDir, getRunsDir, ensureAgentsDir } from './state.js';
 import type { AgentId } from './types.js';
+import { ALL_AGENT_IDS } from './agents.js';
 
 export interface JobAllowConfig {
   tools?: string[];
@@ -25,6 +27,7 @@ export interface JobConfig {
   allow?: JobAllowConfig;
   config?: Record<string, unknown>;
   version?: string;
+  runOnce?: boolean;
 }
 
 export interface RunMeta {
@@ -97,6 +100,7 @@ export function writeJob(config: JobConfig): void {
   if (output.effort === 'default') delete output.effort;
   if (output.timeout === '30m') delete output.timeout;
   if (output.enabled === true) delete output.enabled;
+  if (output.runOnce === false || output.runOnce === undefined) delete output.runOnce;
 
   fs.writeFileSync(filePath, yaml.stringify(output), 'utf-8');
 }
@@ -128,13 +132,19 @@ export function validateJob(config: Partial<JobConfig>): string[] {
   }
   if (!config.schedule || typeof config.schedule !== 'string') {
     errors.push('schedule (cron expression) is required');
+  } else {
+    // Validate cron expression is parseable
+    try {
+      new Cron(config.schedule);
+    } catch {
+      errors.push(`invalid cron expression: "${config.schedule}"`);
+    }
   }
   if (!config.agent || typeof config.agent !== 'string') {
     errors.push('agent is required');
   }
-  const validJobAgents = ['claude', 'codex', 'gemini', 'cursor', 'opencode'];
-  if (config.agent && !validJobAgents.includes(config.agent)) {
-    errors.push(`agent must be one of: ${validJobAgents.join(', ')}`);
+  if (config.agent && !ALL_AGENT_IDS.includes(config.agent as AgentId)) {
+    errors.push(`agent must be one of: ${ALL_AGENT_IDS.join(', ')}`);
   }
   if (config.mode && !['plan', 'edit'].includes(config.mode)) {
     errors.push('mode must be plan or edit');
@@ -158,8 +168,9 @@ export function resolveJobPrompt(config: JobConfig): string {
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
   // Compute date/day/time in the job's configured timezone
-  const dayIndex = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'narrow' }).formatToParts(now).find(p => p.type === 'weekday')?.value || '0', 10);
-  const localDay = days[new Date(now.toLocaleString('en-US', { timeZone: tz })).getDay()];
+  // Use Intl.DateTimeFormat to get the weekday name directly in the target timezone
+  const localDayName = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long' }).format(now);
+  const localDay = days.includes(localDayName) ? localDayName : days[now.getDay()];
   const localDate = now.toLocaleDateString('en-CA', { timeZone: tz }); // en-CA gives YYYY-MM-DD
   const localTime = now.toLocaleTimeString('en-GB', { timeZone: tz, hour12: false }); // HH:MM:SS
 

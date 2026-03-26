@@ -1,0 +1,226 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { symlinkAllowedDirs } from '../sandbox.js';
+import { validateJob, parseAtTime, writeJob, readJob, deleteJob, resolveJobPrompt } from '../cron.js';
+import { cleanOrphanedPluginSkills } from '../plugins.js';
+
+describe('Bug Fix: Path traversal in sandbox.ts', () => {
+  let overlayHome: string;
+
+  beforeEach(() => {
+    overlayHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sandbox-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(overlayHome, { recursive: true, force: true });
+  });
+
+  it('should block path traversal via .. components', () => {
+    // ~/../../../etc should resolve outside HOME and be rejected
+    symlinkAllowedDirs(overlayHome, ['~/../../../etc']);
+
+    // No symlink should be created for the traversal path
+    const entries = fs.readdirSync(overlayHome);
+    const hasEtc = entries.some(e => e === 'etc' || e.includes('etc'));
+    expect(hasEtc).toBe(false);
+  });
+
+  it('should block ~/../../../ style traversals', () => {
+    symlinkAllowedDirs(overlayHome, ['~/../../..']);
+
+    const entries = fs.readdirSync(overlayHome);
+    expect(entries.length).toBe(0);
+  });
+
+  it('should allow valid paths under HOME', () => {
+    const validDir = path.join(os.homedir(), '.agents');
+    if (!fs.existsSync(validDir)) return; // skip if doesn't exist
+
+    symlinkAllowedDirs(overlayHome, ['~/.agents']);
+
+    // Should create symlink for .agents
+    const symlinkPath = path.join(overlayHome, '.agents');
+    expect(fs.existsSync(symlinkPath)).toBe(true);
+    expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
+  });
+
+  it('should block absolute paths outside HOME', () => {
+    symlinkAllowedDirs(overlayHome, ['/etc', '/tmp', '/var']);
+
+    const entries = fs.readdirSync(overlayHome);
+    expect(entries.length).toBe(0);
+  });
+});
+
+describe('Bug Fix: Cron expression validation', () => {
+  it('should reject invalid cron expressions', () => {
+    const errors = validateJob({
+      name: 'test',
+      schedule: '99 99 99 99 99',
+      agent: 'claude',
+      prompt: 'test',
+    });
+    expect(errors.some(e => e.includes('invalid cron expression'))).toBe(true);
+  });
+
+  it('should accept valid cron expressions', () => {
+    const errors = validateJob({
+      name: 'test',
+      schedule: '0 9 * * 1-5',
+      agent: 'claude',
+      prompt: 'test',
+    });
+    expect(errors.some(e => e.includes('invalid cron expression'))).toBe(false);
+  });
+
+  it('should reject invalid agent names', () => {
+    const errors = validateJob({
+      name: 'test',
+      schedule: '0 9 * * *',
+      agent: 'fake-agent' as any,
+      prompt: 'test',
+    });
+    expect(errors.some(e => e.includes('agent must be one of'))).toBe(true);
+  });
+
+  it('should accept openclaw as a valid agent', () => {
+    const errors = validateJob({
+      name: 'test',
+      schedule: '0 9 * * *',
+      agent: 'openclaw',
+      prompt: 'test',
+    });
+    expect(errors.some(e => e.includes('agent must be one of'))).toBe(false);
+  });
+});
+
+describe('Bug Fix: Timezone day resolution', () => {
+  it('should resolve {day} correctly for a timezone', () => {
+    const config = {
+      name: 'test',
+      schedule: '0 9 * * *',
+      agent: 'claude' as const,
+      mode: 'plan' as const,
+      effort: 'default' as const,
+      timeout: '30m',
+      enabled: true,
+      prompt: 'Today is {day}',
+      timezone: 'America/New_York',
+    };
+
+    const resolved = resolveJobPrompt(config);
+    const validDays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayFound = validDays.some(day => resolved.includes(day));
+    expect(dayFound).toBe(true);
+  });
+
+  it('should resolve {day} using Intl API for correct timezone', () => {
+    const config = {
+      name: 'test',
+      schedule: '0 9 * * *',
+      agent: 'claude' as const,
+      mode: 'plan' as const,
+      effort: 'default' as const,
+      timeout: '30m',
+      enabled: true,
+      prompt: '{day}',
+      timezone: 'UTC',
+    };
+
+    const resolved = resolveJobPrompt(config);
+    // Verify it's a valid day name (not empty or broken)
+    const validDays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    expect(validDays).toContain(resolved);
+  });
+});
+
+describe('Bug Fix: One-shot job runOnce field', () => {
+  it('parseAtTime should return runOnce: true', () => {
+    const result = parseAtTime('14:30');
+    expect(result).not.toBeNull();
+    expect(result!.runOnce).toBe(true);
+  });
+
+  it('parseAtTime with date should return runOnce: true', () => {
+    const result = parseAtTime('2030-06-15 09:00');
+    expect(result).not.toBeNull();
+    expect(result!.runOnce).toBe(true);
+  });
+
+  it('runOnce should survive write/read cycle', () => {
+    const testJobName = '__test-runonce-bugfix__';
+    try {
+      writeJob({
+        name: testJobName,
+        schedule: '30 14 25 3 *',
+        agent: 'claude',
+        mode: 'plan',
+        effort: 'default',
+        timeout: '30m',
+        enabled: true,
+        prompt: 'test',
+        runOnce: true,
+      });
+
+      const read = readJob(testJobName);
+      expect(read).not.toBeNull();
+      expect(read!.runOnce).toBe(true);
+    } finally {
+      deleteJob(testJobName);
+    }
+  });
+});
+
+describe('Bug Fix: Plugin orphan cleanup', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-orphan-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('should remove orphaned plugin skill dirs', () => {
+    // Create a fake version home with plugin skills
+    const skillsDir = path.join(tempDir, '.claude', 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    // Active plugin skill
+    fs.mkdirSync(path.join(skillsDir, 'active-plugin--skill1'));
+    fs.writeFileSync(path.join(skillsDir, 'active-plugin--skill1', 'SKILL.md'), 'test');
+
+    // Orphaned plugin skill (plugin no longer exists)
+    fs.mkdirSync(path.join(skillsDir, 'deleted-plugin--skill1'));
+    fs.writeFileSync(path.join(skillsDir, 'deleted-plugin--skill1', 'SKILL.md'), 'test');
+
+    // Regular skill (not a plugin)
+    fs.mkdirSync(path.join(skillsDir, 'regular-skill'));
+    fs.writeFileSync(path.join(skillsDir, 'regular-skill', 'SKILL.md'), 'test');
+
+    const activePlugins = new Set(['active-plugin']);
+    const removed = cleanOrphanedPluginSkills('claude', tempDir, activePlugins);
+
+    // Should remove deleted-plugin--skill1 but keep others
+    expect(removed).toEqual(['deleted-plugin--skill1']);
+    expect(fs.existsSync(path.join(skillsDir, 'active-plugin--skill1'))).toBe(true);
+    expect(fs.existsSync(path.join(skillsDir, 'deleted-plugin--skill1'))).toBe(false);
+    expect(fs.existsSync(path.join(skillsDir, 'regular-skill'))).toBe(true);
+  });
+
+  it('should not touch non-plugin dirs (no -- separator)', () => {
+    const skillsDir = path.join(tempDir, '.claude', 'skills');
+    fs.mkdirSync(skillsDir, { recursive: true });
+
+    fs.mkdirSync(path.join(skillsDir, 'my-normal-skill'));
+    fs.writeFileSync(path.join(skillsDir, 'my-normal-skill', 'SKILL.md'), 'test');
+
+    const removed = cleanOrphanedPluginSkills('claude', tempDir, new Set());
+
+    expect(removed).toEqual([]);
+    expect(fs.existsSync(path.join(skillsDir, 'my-normal-skill'))).toBe(true);
+  });
+});

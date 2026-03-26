@@ -487,3 +487,37 @@ export function isPluginSynced(
 
   return false;
 }
+
+/**
+ * Remove orphaned plugin skill directories from a version home.
+ * An orphan is a skill dir with the plugin prefix pattern (name--skill)
+ * where the plugin no longer exists in ~/.agents/plugins/.
+ */
+export function cleanOrphanedPluginSkills(
+  agent: AgentId,
+  versionHome: string,
+  activePluginNames: Set<string>
+): string[] {
+  const removed: string[] = [];
+  const skillsDir = path.join(versionHome, `.${agent}`, 'skills');
+  if (!fs.existsSync(skillsDir)) return removed;
+
+  const entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    // Plugin skill dirs use the pattern: pluginName--skillName
+    const dashIdx = entry.name.indexOf('--');
+    if (dashIdx === -1) continue;
+
+    const pluginName = entry.name.slice(0, dashIdx);
+    if (!activePluginNames.has(pluginName)) {
+      try {
+        fs.rmSync(path.join(skillsDir, entry.name), { recursive: true, force: true });
+        removed.push(entry.name);
+      } catch {
+        // Skip on error
+      }
+    }
+  }
+  return removed;
+}

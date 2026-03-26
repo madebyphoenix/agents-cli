@@ -15,7 +15,7 @@ import { markdownToToml } from './convert.js';
 import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion } from './shims.js';
 import { listInstalledSubagents, transformSubagentForClaude, syncSubagentToOpenclaw, SUBAGENT_CAPABLE_AGENTS } from './subagents.js';
 import { parseHookManifest, registerHooksToSettings } from './hooks.js';
-import { discoverPlugins, syncPluginToVersion, isPluginSynced, pluginSupportsAgent } from './plugins.js';
+import { discoverPlugins, syncPluginToVersion, isPluginSynced, pluginSupportsAgent, cleanOrphanedPluginSkills } from './plugins.js';
 import { PLUGINS_CAPABLE_AGENTS } from './agents.js';
 
 const execAsync = promisify(exec);
@@ -1456,6 +1456,10 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
   if (pluginsToSync.length > 0 && PLUGINS_CAPABLE_AGENTS.includes(agent)) {
     const allPlugins = discoverPlugins();
     const pluginMap = new Map(allPlugins.map(p => [p.name, p]));
+
+    // Clean orphaned plugin skills from plugins that no longer exist
+    const activePluginNames = new Set(allPlugins.map(p => p.name));
+    cleanOrphanedPluginSkills(agent, versionHome, activePluginNames);
 
     for (const name of pluginsToSync) {
       const plugin = pluginMap.get(name);

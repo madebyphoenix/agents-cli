@@ -170,6 +170,7 @@ export function registerCronCommands(program: Command): void {
           enabled: !options.disabled,
           prompt: options.prompt,
           timezone: options.timezone,
+          ...(runOnce ? { runOnce: true } : {}),
         };
 
         const errors = validateJob(config);

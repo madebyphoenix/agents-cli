@@ -88,9 +88,19 @@ export function cleanJobHome(name: string): void {
 
 export function symlinkAllowedDirs(overlayHome: string, dirs: string[]): void {
   for (const dir of dirs) {
-    const realPath = dir.replace(/^~/, REAL_HOME);
+    const expanded = dir.replace(/^~/, REAL_HOME);
 
-    if (!realPath.startsWith(REAL_HOME)) {
+    // Resolve .. and symlinks to prevent path traversal outside HOME
+    let realPath: string;
+    try {
+      // Use realpath if the directory exists (resolves symlinks)
+      realPath = fs.realpathSync(expanded);
+    } catch {
+      // Directory doesn't exist yet — resolve .. components without following symlinks
+      realPath = path.resolve(expanded);
+    }
+
+    if (!realPath.startsWith(REAL_HOME + path.sep) && realPath !== REAL_HOME) {
       continue;
     }
 
