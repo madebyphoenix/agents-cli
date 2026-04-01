@@ -448,26 +448,19 @@ export async function hasLocalChanges(dir: string): Promise<boolean> {
 
 /**
  * Pull changes in an existing repo.
- * Handles untracked files by stashing (for system repo) or committing (for user's repo).
+ * Refuses to pull if the working tree is dirty — user must commit or discard changes first.
  */
-export async function pullRepo(dir: string): Promise<{ success: boolean; commit: string; error?: string; stashed?: boolean }> {
+export async function pullRepo(dir: string): Promise<{ success: boolean; commit: string; error?: string }> {
   try {
     const git = simpleGit(dir);
     const status = await git.status();
-    const hasChanges = !status.isClean();
-    const isSystemRepo = await isSystemRepoOrigin(dir);
-    let stashed = false;
 
-    if (hasChanges) {
-      if (isSystemRepo) {
-        // System repo: stash changes (including untracked) before pull
-        await git.stash(['push', '-u', '-m', 'agents-cli: auto-stash before pull']);
-        stashed = true;
-      } else {
-        // User's repo: commit changes before pull so we can merge
-        await git.add('-A');
-        await git.commit('Local changes before pull', { '--allow-empty': null });
-      }
+    if (!status.isClean()) {
+      return {
+        success: false,
+        commit: '',
+        error: 'Working tree has uncommitted changes. Commit or discard them before pulling.\n\n  cd ~/.agents && git status',
+      };
     }
 
     await git.fetch();
@@ -482,25 +475,10 @@ export async function pullRepo(dir: string): Promise<{ success: boolean; commit:
       }
     }
 
-    // Restore stashed changes
-    if (stashed) {
-      try {
-        await git.stash(['pop']);
-      } catch (stashErr) {
-        // Stash pop failed - likely conflicts
-        return {
-          success: true,
-          commit: (await git.log({ maxCount: 1 })).latest?.hash.slice(0, 8) || 'unknown',
-          error: `Pulled successfully but stash pop had conflicts. Run 'cd ~/.agents && git stash pop' to resolve.`,
-        };
-      }
-    }
-
     const log = await git.log({ maxCount: 1 });
     return {
       success: true,
       commit: log.latest?.hash.slice(0, 8) || 'unknown',
-      stashed,
     };
   } catch (err) {
     return { success: false, commit: '', error: (err as Error).message };

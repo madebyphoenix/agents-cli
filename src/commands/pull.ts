@@ -1,8 +1,6 @@
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { checkbox, confirm } from '@inquirer/prompts';
-
 import {
   AGENTS,
   ALL_AGENT_IDS,
@@ -43,8 +41,13 @@ import {
   getBinaryPath,
   getVersionHomePath,
   syncResourcesToVersion,
-  getResourceDiff,
-  type ResourceDiff,
+  getAvailableResources,
+  getActuallySyncedResources,
+  getNewResources,
+  hasNewResources,
+  promptNewResourceSelection,
+  promptResourceSelection,
+  type ResourceSelection,
 } from '../lib/versions.js';
 import {
   createShim,
@@ -262,113 +265,70 @@ export function registerPullCommand(program: Command): void {
           }
         }
 
-        // Sync resources to version homes
+        // Sync resources to default version homes only
         const cliStates = await getAllCliStates();
         const agentsToSync = agentFilter ? [agentFilter] : ALL_AGENT_IDS;
-
-        // Collect versions with their diffs
-        const versionDiffs: {
-          agentId: AgentId;
-          version: string;
-          label: string;
-          diff: ResourceDiff;
-        }[] = [];
+        const available = getAvailableResources();
 
         for (const agentId of agentsToSync) {
           if (!cliStates[agentId]?.installed && listInstalledVersions(agentId).length === 0) continue;
-          const versions = listInstalledVersions(agentId);
           const defaultVer = getGlobalDefault(agentId);
+          if (!defaultVer) continue;
 
-          for (const ver of versions) {
-            const isDefault = ver === defaultVer;
-            const diff = getResourceDiff(agentId, ver);
-            versionDiffs.push({
-              agentId,
-              version: ver,
-              label: `${AGENTS[agentId].name}@${ver}${isDefault ? ' (default)' : ''}`,
-              diff,
-            });
-          }
-        }
+          const actuallySynced = getActuallySyncedResources(agentId, defaultVer);
+          const newResources = getNewResources(available, actuallySynced);
 
-        if (versionDiffs.length === 0) {
-          console.log(chalk.gray('\nNo versions to sync'));
-        } else {
-          // Check if there are any changes
-          const hasAnyChanges = versionDiffs.some(v => v.diff.totalAdded > 0 || v.diff.totalDangling > 0);
+          const hasAnySynced = actuallySynced.commands.length > 0 ||
+            actuallySynced.skills.length > 0 ||
+            actuallySynced.hooks.length > 0 ||
+            actuallySynced.memory.length > 0 ||
+            actuallySynced.mcp.length > 0 ||
+            actuallySynced.permissions.length > 0 ||
+            actuallySynced.plugins.length > 0;
 
-          if (!hasAnyChanges) {
-            console.log(chalk.gray('\nNo resource changes to sync'));
-          } else {
-            // Show diffs per version
-            console.log(chalk.bold('\nResource changes:\n'));
+          try {
+            let selection: ResourceSelection | undefined;
 
-            for (const { label, diff } of versionDiffs) {
-              if (diff.totalAdded === 0 && diff.totalDangling === 0) {
-                console.log(`  ${chalk.gray(label)}: ${chalk.gray('(no changes)')}`);
-                continue;
+            if (options.yes) {
+              // -y flag: sync all without prompting
+              if (!hasAnySynced || hasNewResources(newResources, agentId)) {
+                selection = {
+                  commands: 'all', skills: 'all', hooks: 'all', memory: 'all',
+                  mcp: 'all', permissions: 'all', subagents: 'all', plugins: 'all',
+                };
               }
-
-              console.log(`  ${chalk.cyan(label)}:`);
-
-              // Show added items
-              const showAdded = (type: string, items: string[]) => {
-                for (const item of items.slice(0, 5)) {
-                  console.log(`    ${chalk.green('+')} ${type}/${item}`);
-                }
-                if (items.length > 5) {
-                  console.log(chalk.gray(`    ... and ${items.length - 5} more`));
-                }
-              };
-
-              if (diff.commands.added.length > 0) showAdded('commands', diff.commands.added);
-              if (diff.skills.added.length > 0) showAdded('skills', diff.skills.added);
-              if (diff.hooks.added.length > 0) showAdded('hooks', diff.hooks.added);
-              if (diff.memory.added.length > 0) showAdded('memory', diff.memory.added);
-
-              // Show dangling
-              const showDangling = (items: string[]) => {
-                for (const item of items) {
-                  console.log(`    ${chalk.red('-')} ${item} ${chalk.gray('(dangling)')}`);
-                }
-              };
-
-              if (diff.commands.dangling.length > 0) showDangling(diff.commands.dangling);
-              if (diff.skills.dangling.length > 0) showDangling(diff.skills.dangling);
-              if (diff.hooks.dangling.length > 0) showDangling(diff.hooks.dangling);
-              if (diff.memory.dangling.length > 0) showDangling(diff.memory.dangling);
-
-              console.log();
+            } else if (!hasAnySynced) {
+              // Nothing synced yet - prompt for ALL resources
+              console.log(chalk.yellow(`\n${AGENTS[agentId].name}@${defaultVer} has no synced resources.`));
+              const userSelection = await promptResourceSelection(agentId);
+              if (userSelection) selection = userSelection;
+            } else if (hasNewResources(newResources, agentId)) {
+              // Has synced before, but NEW items available
+              console.log(chalk.cyan(`\n${AGENTS[agentId].name}@${defaultVer}:`));
+              const userSelection = await promptNewResourceSelection(agentId, newResources);
+              if (userSelection) selection = userSelection;
             }
 
-            // Filter to versions with changes
-            const versionsWithChanges = versionDiffs.filter(v => v.diff.totalAdded > 0 || v.diff.totalDangling > 0);
-            let versionsToSync = versionsWithChanges;
+            if (selection && Object.keys(selection).length > 0) {
+              const syncResult = syncResourcesToVersion(agentId, defaultVer, selection);
+              const synced: string[] = [];
+              if (syncResult.commands) synced.push('commands');
+              if (syncResult.skills) synced.push('skills');
+              if (syncResult.hooks) synced.push('hooks');
+              if (syncResult.memory.length > 0) synced.push('memory');
+              if (syncResult.permissions) synced.push('permissions');
+              if (syncResult.mcp.length > 0) synced.push('mcp');
+              if (syncResult.plugins.length > 0) synced.push('plugins');
 
-            // Interactive version selection (unless -y flag)
-            if (!options.yes && versionsWithChanges.length > 1) {
-              const selected = await checkbox({
-                message: 'Select versions to sync:',
-                choices: versionsWithChanges.map((v) => ({
-                  name: `${v.label} ${chalk.gray(`(${v.diff.totalAdded} new${v.diff.totalDangling > 0 ? `, ${v.diff.totalDangling} dangling` : ''})`)}`,
-                  value: v,
-                  checked: true,
-                })),
-              });
-              versionsToSync = selected;
+              if (synced.length > 0) {
+                console.log(chalk.green(`  Synced: ${synced.join(', ')}`));
+              }
             }
-
-            if (versionsToSync.length === 0) {
-              console.log(chalk.yellow('No versions selected'));
+          } catch (err) {
+            if (isPromptCancelled(err)) {
+              console.log(chalk.gray('Skipped resource selection'));
             } else {
-              console.log(chalk.bold('Syncing...\n'));
-              for (const { agentId, version, label, diff } of versionsToSync) {
-                syncResourcesToVersion(agentId, version);
-                const summary = [];
-                if (diff.totalAdded > 0) summary.push(`${diff.totalAdded} added`);
-                if (diff.totalDangling > 0) summary.push(`${diff.totalDangling} removed`);
-                console.log(`  ${chalk.green('✓')} ${label} ${chalk.gray(`(${summary.join(', ')})`)}`);
-              }
+              throw err;
             }
           }
         }
