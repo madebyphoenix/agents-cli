@@ -78,6 +78,7 @@ export function parsePermissionSet(filePath: string): PermissionSet | null {
       description: parsed.description,
       allow: Array.isArray(parsed.allow) ? parsed.allow : [],
       deny: Array.isArray(parsed.deny) ? parsed.deny : [],
+      additionalDirectories: Array.isArray(parsed.additionalDirectories) ? parsed.additionalDirectories : undefined,
     };
   } catch {
     return null;
@@ -349,12 +350,14 @@ export function removePermissionSet(name: string): { success: boolean; error?: s
  * Claude uses: { permissions: { allow: ["Bash(*)", "Read(**)"], deny: [] } }
  */
 export function convertToClaudeFormat(set: PermissionSet): ClaudePermissions {
-  return {
-    permissions: {
-      allow: [...set.allow],
-      deny: set.deny ? [...set.deny] : [],
-    },
+  const permissions: ClaudePermissions['permissions'] = {
+    allow: [...set.allow],
+    deny: set.deny ? [...set.deny] : [],
   };
+  if (set.additionalDirectories?.length) {
+    permissions.additionalDirectories = [...set.additionalDirectories];
+  }
+  return { permissions };
 }
 
 /**
@@ -838,13 +841,18 @@ export function applyPermissionsToVersion(
       const newPermissions = convertToClaudeFormat(set);
 
       if (merge && config.permissions) {
-        const existing = config.permissions as { allow?: string[]; deny?: string[] };
+        const existing = config.permissions as { allow?: string[]; deny?: string[]; additionalDirectories?: string[] };
         const mergedAllow = new Set([...(existing.allow || []), ...newPermissions.permissions.allow]);
         const mergedDeny = new Set([...(existing.deny || []), ...newPermissions.permissions.deny]);
-        config.permissions = {
+        const mergedDirs = new Set([...(existing.additionalDirectories || []), ...(newPermissions.permissions.additionalDirectories || [])]);
+        const perms: Record<string, unknown> = {
           allow: [...mergedAllow],
           deny: [...mergedDeny],
         };
+        if (mergedDirs.size > 0) {
+          perms.additionalDirectories = [...mergedDirs];
+        }
+        config.permissions = perms;
       } else {
         config.permissions = newPermissions.permissions;
       }
@@ -932,11 +940,15 @@ export function applyPermissionsToVersion(
  * Convert Claude permissions back to canonical format.
  */
 export function claudeToCanonical(perms: ClaudePermissions): PermissionSet {
-  return {
+  const result: PermissionSet = {
     name: 'exported',
     allow: perms.permissions.allow,
     deny: perms.permissions.deny.length > 0 ? perms.permissions.deny : undefined,
   };
+  if (perms.permissions.additionalDirectories?.length) {
+    result.additionalDirectories = perms.permissions.additionalDirectories;
+  }
+  return result;
 }
 
 /**
@@ -1170,13 +1182,18 @@ export function computePermissionsDiff(
 export function mergePermissionSets(existing: PermissionSet, incoming: PermissionSet): PermissionSet {
   const allowSet = new Set([...existing.allow, ...incoming.allow]);
   const denySet = new Set([...(existing.deny || []), ...(incoming.deny || [])]);
+  const dirsSet = new Set([...(existing.additionalDirectories || []), ...(incoming.additionalDirectories || [])]);
 
-  return {
+  const result: PermissionSet = {
     name: existing.name,
     description: existing.description,
     allow: Array.from(allowSet).sort(),
     deny: Array.from(denySet).sort(),
   };
+  if (dirsSet.size > 0) {
+    result.additionalDirectories = Array.from(dirsSet).sort();
+  }
+  return result;
 }
 
 /**

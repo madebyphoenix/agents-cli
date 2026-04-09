@@ -466,7 +466,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
   }
 
   renderSection('MCP Servers', agentData.mcp);
-  renderSection('Memory', agentData.memory);
+  renderSection('Rules', agentData.memory);
   renderSection('Hooks', agentData.hooks);
 
   // Show legend at the end if git repo exists

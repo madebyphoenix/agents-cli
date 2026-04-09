@@ -220,6 +220,7 @@ export function registerPermissionsCommands(program: Command): void {
     .command('add [source]')
     .description('Install permissions from a repo, YAML file, or agent config file')
     .option('-a, --agents <list>', 'Comma-separated agents to apply to')
+    .option('--all', 'Apply to all installed versions (not just default)')
     .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (source: string | undefined, options) => {
       try {
@@ -403,8 +404,21 @@ export function registerPermissionsCommands(program: Command): void {
             for (const agentId of selectedAgents) {
               const versions = listInstalledVersions(agentId);
               if (versions.length > 0) {
-                const defaultVer = getGlobalDefault(agentId);
-                versionSelections.set(agentId, defaultVer ? [defaultVer] : [versions[versions.length - 1]]);
+                if (options.all) {
+                  versionSelections.set(agentId, [...versions]);
+                } else {
+                  const defaultVer = getGlobalDefault(agentId);
+                  versionSelections.set(agentId, defaultVer ? [defaultVer] : [versions[versions.length - 1]]);
+                }
+              }
+            }
+          } else if (options.all) {
+            selectedAgents = [...PERMISSIONS_CAPABLE_AGENTS];
+            versionSelections = new Map();
+            for (const agentId of selectedAgents) {
+              const versions = listInstalledVersions(agentId);
+              if (versions.length > 0) {
+                versionSelections.set(agentId, [...versions]);
               }
             }
           } else if (!options.yes) {
@@ -513,8 +527,21 @@ export function registerPermissionsCommands(program: Command): void {
             for (const agentId of selectedAgents) {
               const versions = listInstalledVersions(agentId);
               if (versions.length > 0) {
-                const defaultVer = getGlobalDefault(agentId);
-                versionSelections.set(agentId, defaultVer ? [defaultVer] : [versions[versions.length - 1]]);
+                if (options.all) {
+                  versionSelections.set(agentId, [...versions]);
+                } else {
+                  const defaultVer = getGlobalDefault(agentId);
+                  versionSelections.set(agentId, defaultVer ? [defaultVer] : [versions[versions.length - 1]]);
+                }
+              }
+            }
+          } else if (options.all) {
+            selectedAgents = [...PERMISSIONS_CAPABLE_AGENTS];
+            versionSelections = new Map();
+            for (const agentId of selectedAgents) {
+              const versions = listInstalledVersions(agentId);
+              if (versions.length > 0) {
+                versionSelections.set(agentId, [...versions]);
               }
             }
           } else if (!options.yes) {

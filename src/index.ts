@@ -26,7 +26,7 @@ import { registerViewCommand } from './commands/view.js';
 import { registerCommandsCommands } from './commands/commands.js';
 import { registerHooksCommands } from './commands/hooks.js';
 import { registerSkillsCommands } from './commands/skills.js';
-import { registerMemoryCommands } from './commands/memory.js';
+import { registerRulesCommands } from './commands/rules.js';
 import { registerPermissionsCommands } from './commands/permissions.js';
 import { registerMcpCommands } from './commands/mcp.js';
 import { registerVersionsCommands } from './commands/versions.js';
@@ -63,7 +63,7 @@ Agents
   view [agent[@version]]          View versions or resources
 
 Resources
-  memory                          Manage AGENTS.md, SOUL.md, etc.
+  rules                           Manage agent rules/instructions
   commands                        Manage slash commands
   subagents                       Manage subagent definitions
   skills                          Manage skills (SKILL.md + rules/)
@@ -209,7 +209,18 @@ registerStatusCommand(program);
 registerCommandsCommands(program);
 registerHooksCommands(program);
 registerSkillsCommands(program);
-registerMemoryCommands(program);
+registerRulesCommands(program);
+
+// Deprecated 'memory' command - hard error, force users to use 'rules'
+program
+  .command('memory', { hidden: true })
+  .allowUnknownOption()
+  .allowExcessArguments()
+  .action(() => {
+    console.error(chalk.red('"agents memory" has been renamed to "agents rules".'));
+    console.error(chalk.gray('Run "agents rules --help" for usage.\n'));
+    process.exit(1);
+  });
 registerPermissionsCommands(program);
 
 // Deprecated 'perms' alias for 'permissions'

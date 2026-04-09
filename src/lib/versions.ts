@@ -436,7 +436,7 @@ function buildNewResourcesSummary(newResources: AvailableResources, agent: Agent
     parts.push(`${newResources.hooks.length} hook${newResources.hooks.length === 1 ? '' : 's'}`);
   }
   if (newResources.memory.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) {
-    parts.push(`${newResources.memory.length} memory file${newResources.memory.length === 1 ? '' : 's'}`);
+    parts.push(`${newResources.memory.length} rule file${newResources.memory.length === 1 ? '' : 's'}`);
   }
   if (newResources.mcp.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) {
     parts.push(`${newResources.mcp.length} MCP${newResources.mcp.length === 1 ? '' : 's'}`);
@@ -530,7 +530,7 @@ export async function promptNewResourceSelection(
 
   if (newResources.memory.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) {
     const selected = await checkbox({
-      message: 'Select new memory files to sync:',
+      message: 'Select new rule files to sync:',
       choices: newResources.memory.map(m => ({ name: m, value: m, checked: true })),
     });
     if (selected.length > 0) selection.memory = selected;
@@ -600,7 +600,7 @@ export async function promptResourceSelection(agent: AgentId): Promise<ResourceS
     { key: 'commands', label: 'Commands', available: COMMANDS_CAPABLE_AGENTS.includes(agent) && available.commands.length > 0, displayCount: `${available.commands.length} available` },
     { key: 'skills', label: 'Skills', available: available.skills.length > 0, displayCount: `${available.skills.length} available` },
     { key: 'hooks', label: 'Hooks', available: agentConfig.supportsHooks && available.hooks.length > 0, displayCount: `${available.hooks.length} available` },
-    { key: 'memory', label: 'Memory', available: COMMANDS_CAPABLE_AGENTS.includes(agent) && available.memory.length > 0, displayCount: `${available.memory.length} available` },
+    { key: 'memory', label: 'Rules', available: COMMANDS_CAPABLE_AGENTS.includes(agent) && available.memory.length > 0, displayCount: `${available.memory.length} available` },
     { key: 'mcp', label: 'MCPs', available: MCP_CAPABLE_AGENTS.includes(agent) && available.mcp.length > 0, displayCount: `${available.mcp.length} available` },
     { key: 'permissions', label: 'Permissions', available: PERMISSIONS_CAPABLE_AGENTS.includes(agent) && permissionGroups.length > 0, displayCount: `${permissionGroups.length} groups, ${totalPermissionRules} rules` },
     { key: 'subagents', label: 'Subagents', available: SUBAGENT_CAPABLE_AGENTS.includes(agent) && available.subagents.length > 0, displayCount: `${available.subagents.length} available` },

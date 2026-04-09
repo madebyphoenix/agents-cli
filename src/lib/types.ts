@@ -299,6 +299,7 @@ export interface PermissionSet {
   description?: string;
   allow: string[];
   deny?: string[];
+  additionalDirectories?: string[];
 }
 
 export interface InstalledPermission {
@@ -312,6 +313,7 @@ export interface ClaudePermissions {
   permissions: {
     allow: string[];
     deny: string[];
+    additionalDirectories?: string[];
   };
 }
 
