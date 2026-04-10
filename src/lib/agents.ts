@@ -25,6 +25,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     cliCommand: 'claude',
     npmPackage: '@anthropic-ai/claude-code',
     configDir: path.join(HOME, '.claude'),
+    homeFiles: ['.claude.json'],
     commandsDir: path.join(HOME, '.claude', 'commands'),
     commandsSubdir: 'commands',
     skillsDir: path.join(HOME, '.claude', 'skills'),

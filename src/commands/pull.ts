@@ -56,6 +56,7 @@ import {
   addShimsToPath,
   getPathSetupInstructions,
   switchConfigSymlink,
+  switchHomeFileSymlinks,
 } from '../lib/shims.js';
 import { parseHookManifest, registerHooksToSettings } from '../lib/hooks.js';
 import { select } from '@inquirer/prompts';
@@ -414,6 +415,7 @@ export function registerPullCommand(program: Command): void {
             } else if (symlinkResult.backupPath) {
               console.log(chalk.gray(`Backed up existing config to: ${symlinkResult.backupPath}`));
             }
+            switchHomeFileSymlinks(agentId, version);
             console.log(chalk.green(`Set ${agent.name}@${version} as default`));
           }
         }

@@ -505,6 +505,117 @@ export async function switchConfigSymlink(
 }
 
 /**
+ * Switch home-level files (outside the config dir) to per-version symlinks.
+ * e.g., ~/.claude.json -> ~/.agents/versions/claude/2.0.65/home/.claude.json
+ *
+ * Uses atomic rename to avoid data loss if another session is running.
+ * On first migration (real file -> symlink), merges global auth into
+ * ALL installed versions so they inherit the current account.
+ */
+export function switchHomeFileSymlinks(
+  agent: AgentId,
+  version: string
+): { switched: string[]; errors: string[] } {
+  const agentConfig = AGENTS[agent];
+  const homeFiles = agentConfig.homeFiles;
+  if (!homeFiles || homeFiles.length === 0) return { switched: [], errors: [] };
+
+  const home = process.env.AGENTS_REAL_HOME || os.homedir();
+  const versionsDir = getVersionsDir();
+  const switched: string[] = [];
+  const errors: string[] = [];
+
+  for (const fileName of homeFiles) {
+    const globalPath = path.join(home, fileName);
+    const versionFilePath = path.join(versionsDir, agent, version, 'home', fileName);
+
+    try {
+      // Ensure version home dir exists
+      const versionFileDir = path.dirname(versionFilePath);
+      if (!fs.existsSync(versionFileDir)) {
+        fs.mkdirSync(versionFileDir, { recursive: true });
+      }
+
+      let stat: fs.Stats | null = null;
+      try {
+        stat = fs.lstatSync(globalPath);
+      } catch {
+        // File doesn't exist at global path — just create symlink
+        if (!fs.existsSync(versionFilePath)) {
+          fs.writeFileSync(versionFilePath, '{}');
+        }
+        fs.symlinkSync(versionFilePath, globalPath);
+        switched.push(fileName);
+        continue;
+      }
+
+      if (stat.isSymbolicLink()) {
+        // Already a symlink — retarget atomically
+        const currentTarget = fs.readlinkSync(globalPath);
+        const resolvedCurrent = path.resolve(path.dirname(globalPath), currentTarget);
+        const resolvedTarget = path.resolve(versionFilePath);
+        if (resolvedCurrent === resolvedTarget) {
+          switched.push(fileName);
+          continue; // Already correct
+        }
+        // Atomic retarget: create temp symlink, rename over existing
+        if (!fs.existsSync(versionFilePath)) {
+          fs.writeFileSync(versionFilePath, '{}');
+        }
+        const tmpPath = `${globalPath}.agents-tmp-${process.pid}`;
+        fs.symlinkSync(versionFilePath, tmpPath);
+        fs.renameSync(tmpPath, globalPath);
+        switched.push(fileName);
+      } else if (stat.isFile()) {
+        // Real file — first-time migration
+        // Read the global file content
+        const globalContent = JSON.parse(fs.readFileSync(globalPath, 'utf-8'));
+
+        // Merge auth into ALL installed version files for this agent
+        const agentVersionsDir = path.join(versionsDir, agent);
+        if (fs.existsSync(agentVersionsDir)) {
+          for (const ver of fs.readdirSync(agentVersionsDir)) {
+            const verFilePath = path.join(agentVersionsDir, ver, 'home', fileName);
+            const verFileDir = path.dirname(verFilePath);
+            if (!fs.existsSync(verFileDir)) {
+              fs.mkdirSync(verFileDir, { recursive: true });
+            }
+            if (fs.existsSync(verFilePath)) {
+              // Merge: version-specific fields + global auth fields
+              try {
+                const verContent = JSON.parse(fs.readFileSync(verFilePath, 'utf-8'));
+                const merged = { ...globalContent, ...verContent };
+                // Ensure auth from global always wins
+                if (globalContent.oauthAccount) {
+                  merged.oauthAccount = globalContent.oauthAccount;
+                }
+                fs.writeFileSync(verFilePath, JSON.stringify(merged, null, 2));
+              } catch {
+                // If version file is invalid JSON, overwrite with global
+                fs.writeFileSync(verFilePath, JSON.stringify(globalContent, null, 2));
+              }
+            } else {
+              // No version file — copy global wholesale
+              fs.writeFileSync(verFilePath, JSON.stringify(globalContent, null, 2));
+            }
+          }
+        }
+
+        // Atomic swap: create temp symlink to target version, rename over real file
+        const tmpPath = `${globalPath}.agents-tmp-${process.pid}`;
+        fs.symlinkSync(versionFilePath, tmpPath);
+        fs.renameSync(tmpPath, globalPath);
+        switched.push(fileName);
+      }
+    } catch (err) {
+      errors.push(`${fileName}: ${(err as Error).message}`);
+    }
+  }
+
+  return { switched, errors };
+}
+
+/**
  * Get the current config symlink target version, if any.
  */
 export function getConfigSymlinkVersion(agent: AgentId): string | null {

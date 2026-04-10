@@ -7,6 +7,7 @@ export interface AgentConfig {
   npmPackage: string;
   installScript?: string;
   configDir: string;
+  homeFiles?: string[]; // Files at $HOME level that need per-version symlink switching (e.g., '.claude.json')
   commandsDir: string;
   commandsSubdir: string;
   skillsDir: string;

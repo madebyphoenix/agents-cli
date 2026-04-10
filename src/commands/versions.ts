@@ -42,6 +42,7 @@ import {
   getPathSetupInstructions,
   addShimsToPath,
   switchConfigSymlink,
+  switchHomeFileSymlinks,
 } from '../lib/shims.js';
 import { isPromptCancelled } from './utils.js';
 import { tryAutoPull } from '../lib/git.js';
@@ -192,6 +193,7 @@ export function registerVersionsCommands(program: Command): void {
                       console.log(chalk.gray(`  Backed up existing config to: ${symlinkResult.backupPath}`));
                     }
                   }
+                  switchHomeFileSymlinks(agent, installedVersion);
                 }
               } catch (err) {
                 if (isPromptCancelled(err)) {
@@ -534,6 +536,9 @@ export function registerVersionsCommands(program: Command): void {
           } else if (symlinkResult.backupPath) {
             console.log(chalk.gray(`Backed up existing config to: ${symlinkResult.backupPath}`));
           }
+
+          // Switch home-level files (e.g., ~/.claude.json -> version's auth file)
+          switchHomeFileSymlinks(agentId, finalVersion);
 
           const useEmail = await getAccountEmail(agentId, getVersionHomePath(agentId, finalVersion));
           const useEmailStr = useEmail ? chalk.cyan(` (${useEmail})`) : '';
