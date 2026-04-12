@@ -66,6 +66,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     format: 'toml',
     variableSyntax: '{{args}}',
     supportsHooks: true,
+    nativeAgentsSkillsDir: true,
     capabilities: { hooks: true, mcp: true, allowlist: false, skills: true, commands: true, plugins: false },
   },
   cursor: {

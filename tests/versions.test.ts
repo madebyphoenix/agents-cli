@@ -6,6 +6,7 @@ import * as os from 'os';
 // Mock state.ts to redirect all paths to temp directory
 let TEST_ROOT: string;
 let AGENTS_DIR: string;
+let PROJECT_AGENTS_DIR: string | null;
 
 vi.mock('../src/lib/state.js', () => {
   return {
@@ -19,6 +20,7 @@ vi.mock('../src/lib/state.js', () => {
     get getPermissionsDir() { return () => path.join(AGENTS_DIR, 'permissions'); },
     get getSubagentsDir() { return () => path.join(AGENTS_DIR, 'subagents'); },
     get getPluginsDir() { return () => path.join(AGENTS_DIR, 'plugins'); },
+    get getProjectAgentsDir() { return () => PROJECT_AGENTS_DIR; },
     get ensureAgentsDir() { return () => fs.mkdirSync(AGENTS_DIR, { recursive: true }); },
     get readMeta() { return () => ({}); },
     get writeMeta() { return () => {}; },
@@ -103,6 +105,7 @@ function emptyResources(): AvailableResources {
 beforeEach(() => {
   TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-test-'));
   AGENTS_DIR = path.join(TEST_ROOT, '.agents');
+  PROJECT_AGENTS_DIR = null;
   fs.mkdirSync(AGENTS_DIR, { recursive: true });
 });
 
@@ -332,7 +335,7 @@ describe('version path helpers', () => {
 
   it('getVersionHomePath returns home subdir', () => {
     const home = getVersionHomePath('claude', '2.0.65');
-    expect(home).toEndWith('/home');
+    expect(home.endsWith('/home')).toBe(true);
   });
 });
 
@@ -440,6 +443,16 @@ describe('getAvailableResources', () => {
     expect(resources.subagents).toEqual([]);
     expect(resources.plugins).toEqual([]);
   });
+
+  it('discovers resources from project .agents directory', () => {
+    const projectAgents = path.join(TEST_ROOT, 'repo', '.agents');
+    fs.mkdirSync(path.join(projectAgents, 'commands'), { recursive: true });
+    fs.writeFileSync(path.join(projectAgents, 'commands', 'proj.md'), '# Project command');
+    PROJECT_AGENTS_DIR = projectAgents;
+
+    const resources = getAvailableResources();
+    expect(resources.commands).toContain('proj');
+  });
 });
 
 
@@ -511,7 +524,7 @@ describe('syncResourcesToVersion', () => {
       const toml = fs.readFileSync(path.join(commandsDir, 'debug.toml'), 'utf-8');
       expect(toml).toContain('name = "debug"');
       expect(toml).toContain('description =');
-      expect(toml).toContain('prompt = """');
+      expect(toml).toContain("prompt = '''");
       // Variable syntax should be converted
       expect(toml).toContain('{{args}}');
       expect(toml).not.toContain('$ARGUMENTS');
@@ -561,6 +574,22 @@ describe('syncResourcesToVersion', () => {
       expect(result.commands).toBe(true); // debug was synced
       expect(fs.existsSync(path.join(commandsDir, 'debug.md'))).toBe(true);
       expect(fs.existsSync(path.join(commandsDir, 'nonexistent.md'))).toBe(false);
+    });
+
+    it('prefers project commands over user commands when both exist', () => {
+      setupCentralResources();
+      const projectAgents = path.join(TEST_ROOT, 'project', '.agents');
+      fs.mkdirSync(path.join(projectAgents, 'commands'), { recursive: true });
+      fs.writeFileSync(path.join(projectAgents, 'commands', 'debug.md'), '# Project debug');
+      PROJECT_AGENTS_DIR = projectAgents;
+      const versionHome = path.join(AGENTS_DIR, 'versions', 'claude', '2.0.65', 'home');
+      fs.mkdirSync(versionHome, { recursive: true });
+
+      syncResourcesToVersion('claude', '2.0.65', undefined, { projectDir: projectAgents, cwd: path.dirname(projectAgents) });
+
+      const commandsDir = path.join(getVersionHomePath('claude', '2.0.65'), '.claude', 'commands');
+      const content = fs.readFileSync(path.join(commandsDir, 'debug.md'), 'utf-8');
+      expect(content).toContain('Project debug');
     });
 
     it('empty selection syncs nothing', () => {

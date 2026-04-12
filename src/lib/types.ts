@@ -16,6 +16,7 @@ export interface AgentConfig {
   format: 'markdown' | 'toml';
   variableSyntax: string;
   supportsHooks: boolean;
+  nativeAgentsSkillsDir?: boolean;
   capabilities: {
     hooks: boolean;
     mcp: boolean;

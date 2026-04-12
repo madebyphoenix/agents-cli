@@ -15,7 +15,7 @@ import * as TOML from 'smol-toml';
 import { execSync } from 'child_process';
 import * as os from 'os';
 import type { AgentId } from './types.js';
-import { getMcpDir } from './state.js';
+import { getMcpDir, getProjectAgentsDir } from './state.js';
 import { MCP_CAPABLE_AGENTS, AGENTS } from './agents.js';
 
 /**
@@ -36,6 +36,7 @@ export interface InstalledMcpServer {
   name: string;
   path: string;
   config: McpYamlConfig;
+  scope?: 'user' | 'project';
 }
 
 /**
@@ -76,31 +77,38 @@ export function parseMcpServerConfig(filePath: string): McpYamlConfig | null {
 /**
  * List all MCP server configs from ~/.agents/mcp/.
  */
-export function listMcpServerConfigs(): InstalledMcpServer[] {
-  const mcpDir = getMcpDir();
-  if (!fs.existsSync(mcpDir)) {
-    return [];
+export function listMcpServerConfigs(cwd: string = process.cwd()): InstalledMcpServer[] {
+  const dirs: Array<{ scope: 'project' | 'user'; dir: string }> = [];
+  const projectAgentsDir = getProjectAgentsDir(cwd);
+  if (projectAgentsDir) {
+    dirs.push({ scope: 'project', dir: path.join(projectAgentsDir, 'mcp') });
   }
+  dirs.push({ scope: 'user', dir: getMcpDir() });
 
-  const results: InstalledMcpServer[] = [];
-  const entries = fs.readdirSync(mcpDir, { withFileTypes: true });
+  const results = new Map<string, InstalledMcpServer>();
 
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    if (!entry.name.endsWith('.yaml') && !entry.name.endsWith('.yml')) continue;
+  for (const { scope, dir } of dirs) {
+    if (!fs.existsSync(dir)) continue;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
 
-    const filePath = path.join(mcpDir, entry.name);
-    const config = parseMcpServerConfig(filePath);
-    if (config) {
-      results.push({
-        name: config.name,
-        path: filePath,
-        config,
-      });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith('.yaml') && !entry.name.endsWith('.yml')) continue;
+
+      const filePath = path.join(dir, entry.name);
+      const config = parseMcpServerConfig(filePath);
+      if (config && !results.has(config.name)) {
+        results.set(config.name, {
+          name: config.name,
+          path: filePath,
+          config,
+          scope,
+        });
+      }
     }
   }
 
-  return results;
+  return Array.from(results.values());
 }
 
 /**
@@ -108,8 +116,8 @@ export function listMcpServerConfigs(): InstalledMcpServer[] {
  * If names is provided, returns only those servers.
  * Otherwise returns all servers.
  */
-export function getMcpServersByName(names?: string[]): InstalledMcpServer[] {
-  const allServers = listMcpServerConfigs();
+export function getMcpServersByName(names?: string[], options: { cwd?: string } = {}): InstalledMcpServer[] {
+  const allServers = listMcpServerConfigs(options.cwd);
   if (!names || names.length === 0) {
     return allServers;
   }
@@ -298,13 +306,14 @@ export function installMcpServers(
   agentId: AgentId,
   version: string,
   versionHome: string,
-  mcpNames?: string[]
+  mcpNames?: string[],
+  options: { cwd?: string } = {}
 ): { success: boolean; applied: string[]; errors: string[] } {
   if (!MCP_CAPABLE_AGENTS.includes(agentId)) {
     return { success: true, applied: [], errors: [] };
   }
 
-  const servers = getMcpServersByName(mcpNames);
+  const servers = getMcpServersByName(mcpNames, { cwd: options.cwd });
   if (servers.length === 0) {
     return { success: true, applied: [], errors: [] };
   }

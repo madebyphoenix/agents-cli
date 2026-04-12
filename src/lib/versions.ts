@@ -7,7 +7,7 @@ import chalk from 'chalk';
 import * as TOML from 'smol-toml';
 import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
-import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir } from './state.js';
+import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir, getProjectAgentsDir } from './state.js';
 import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME } from './permissions.js';
 import { installMcpServers } from './mcp.js';
@@ -55,7 +55,7 @@ export interface AvailableResources {
 /**
  * Get all available resources from ~/.agents/.
  */
-export function getAvailableResources(): AvailableResources {
+export function getAvailableResources(cwd: string = process.cwd()): AvailableResources {
   const result: AvailableResources = {
     commands: [],
     skills: [],
@@ -67,65 +67,113 @@ export function getAvailableResources(): AvailableResources {
     plugins: [],
   };
 
+  const projectAgentsDir = getProjectAgentsDir(cwd);
+  const userBase = path.dirname(getCommandsDir());
+  const resourceBases: Array<{ scope: 'project' | 'user'; base: string }> = [];
+  if (projectAgentsDir) {
+    resourceBases.push({ scope: 'project', base: projectAgentsDir });
+  }
+  resourceBases.push({ scope: 'user', base: userBase });
+
   // Commands (*.md files)
-  const commandsDir = getCommandsDir();
-  if (fs.existsSync(commandsDir)) {
-    result.commands = fs.readdirSync(commandsDir)
+  const commandNames = new Set<string>();
+  for (const { base } of resourceBases) {
+    const commandsDir = path.join(base, 'commands');
+    if (!fs.existsSync(commandsDir)) continue;
+    const names = fs.readdirSync(commandsDir)
       .filter(f => f.endsWith('.md'))
       .map(f => f.replace(/\.md$/, ''));
+    for (const name of names) {
+      commandNames.add(name);
+    }
   }
+  result.commands = Array.from(commandNames);
 
   // Skills (directories, excluding hidden)
-  const skillsDir = getSkillsDir();
-  if (fs.existsSync(skillsDir)) {
-    result.skills = fs.readdirSync(skillsDir, { withFileTypes: true })
+  const skillNames = new Set<string>();
+  for (const { base } of resourceBases) {
+    const skillsDir = path.join(base, 'skills');
+    if (!fs.existsSync(skillsDir)) continue;
+    const names = fs.readdirSync(skillsDir, { withFileTypes: true })
       .filter(d => d.isDirectory() && !d.name.startsWith('.'))
       .map(d => d.name);
+    for (const name of names) {
+      skillNames.add(name);
+    }
   }
+  result.skills = Array.from(skillNames);
 
-  // Hooks (executable files)
-  const hooksDir = getHooksDir();
-  if (fs.existsSync(hooksDir)) {
-    result.hooks = fs.readdirSync(hooksDir)
-      .filter(f => !f.startsWith('.'));
+  // Hooks (files)
+  const hookNames = new Set<string>();
+  for (const { base } of resourceBases) {
+    const hooksDir = path.join(base, 'hooks');
+    if (!fs.existsSync(hooksDir)) continue;
+    const names = fs.readdirSync(hooksDir).filter(f => !f.startsWith('.'));
+    for (const name of names) {
+      hookNames.add(name);
+    }
   }
+  result.hooks = Array.from(hookNames);
 
   // Memory (*.md files, excluding symlinks)
-  const memoryDir = getMemoryDir();
-  if (fs.existsSync(memoryDir)) {
-    result.memory = fs.readdirSync(memoryDir)
+  const memoryNames = new Set<string>();
+  for (const { base } of resourceBases) {
+    const memoryDir = path.join(base, 'memory');
+    if (!fs.existsSync(memoryDir)) continue;
+    const names = fs.readdirSync(memoryDir)
       .filter(f => {
         if (!f.endsWith('.md')) return false;
-        // Skip symlinks (e.g., CLAUDE.md -> AGENTS.md)
         const stat = fs.lstatSync(path.join(memoryDir, f));
         return !stat.isSymbolicLink();
       })
       .map(f => f.replace(/\.md$/, ''));
+    for (const name of names) {
+      memoryNames.add(name);
+    }
   }
+  result.memory = Array.from(memoryNames);
 
   // MCP servers (*.yaml files)
-  const mcpDir = getMcpDir();
-  if (fs.existsSync(mcpDir)) {
-    result.mcp = fs.readdirSync(mcpDir)
+  const mcpNames = new Set<string>();
+  for (const { base } of resourceBases) {
+    const mcpDir = path.join(base, 'mcp');
+    if (!fs.existsSync(mcpDir)) continue;
+    const names = fs.readdirSync(mcpDir)
       .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
       .map(f => f.replace(/\.(yaml|yml)$/, ''));
+    for (const name of names) {
+      mcpNames.add(name);
+    }
   }
+  result.mcp = Array.from(mcpNames);
 
   // Permission groups (from permissions/groups/*.yaml)
-  const permsGroupsDir = path.join(getPermissionsDir(), 'groups');
-  if (fs.existsSync(permsGroupsDir)) {
-    result.permissions = fs.readdirSync(permsGroupsDir)
+  const permissionNames = new Set<string>();
+  for (const { base } of resourceBases) {
+    const permsGroupsDir = path.join(base, 'permissions', 'groups');
+    if (!fs.existsSync(permsGroupsDir)) continue;
+    const names = fs.readdirSync(permsGroupsDir)
       .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
       .map(f => f.replace(/\.(yaml|yml)$/, ''));
+    for (const name of names) {
+      permissionNames.add(name);
+    }
   }
+  result.permissions = Array.from(permissionNames);
 
   // Subagents (directories with AGENT.md)
-  const subagentsDir = getSubagentsDir();
-  if (fs.existsSync(subagentsDir)) {
-    result.subagents = fs.readdirSync(subagentsDir, { withFileTypes: true })
+  const subagentNames = new Set<string>();
+  for (const { base } of resourceBases) {
+    const subagentsDir = path.join(base, 'subagents');
+    if (!fs.existsSync(subagentsDir)) continue;
+    const names = fs.readdirSync(subagentsDir, { withFileTypes: true })
       .filter(d => d.isDirectory() && fs.existsSync(path.join(subagentsDir, d.name, 'AGENT.md')))
       .map(d => d.name);
+    for (const name of names) {
+      subagentNames.add(name);
+    }
   }
+  result.subagents = Array.from(subagentNames);
 
   // Plugins (directories with .claude-plugin/plugin.json)
   const allPlugins = discoverPlugins();
@@ -159,10 +207,11 @@ function skillDirsMatch(src: string, dest: string): boolean {
  * Get what's ACTUALLY synced to a version by inspecting the version home.
  * This is the source of truth - not the tracking in agents.yaml.
  */
-export function getActuallySyncedResources(agent: AgentId, version: string): AvailableResources {
+export function getActuallySyncedResources(agent: AgentId, version: string, options: { cwd?: string } = {}): AvailableResources {
   const agentConfig = AGENTS[agent];
   const versionHome = path.join(getVersionsDir(), agent, version, 'home');
   const configDir = path.join(versionHome, `.${agent}`);
+  const projectAgentsDir = getProjectAgentsDir(options.cwd || process.cwd());
 
   const result: AvailableResources = {
     commands: [],
@@ -187,20 +236,23 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
   // Skills - check what directories exist AND content matches central source
   const skillsDir = path.join(configDir, 'skills');
   const centralSkillsDir = getSkillsDir();
+  const projectSkillsDir = projectAgentsDir ? path.join(projectAgentsDir, 'skills') : null;
   if (fs.existsSync(skillsDir)) {
     const installedSkills = fs.readdirSync(skillsDir, { withFileTypes: true })
       .filter(d => d.isDirectory() && !d.name.startsWith('.'))
       .map(d => d.name);
     for (const skill of installedSkills) {
-      const centralSkillDir = path.join(centralSkillsDir, skill);
       const versionSkillDir = path.join(skillsDir, skill);
-      // If no central source, consider it synced (user-local skill)
-      if (!fs.existsSync(centralSkillDir)) {
+      const projectSourceDir = projectSkillsDir ? path.join(projectSkillsDir, skill) : null;
+      const centralSkillDir = path.join(centralSkillsDir, skill);
+      const hasProjectSource = projectSourceDir ? fs.existsSync(projectSourceDir) : false;
+      const hasUserSource = fs.existsSync(centralSkillDir);
+      if (!hasProjectSource && !hasUserSource) {
         result.skills.push(skill);
         continue;
       }
-      // Content-match: every file in central must exist in version with same content
-      const allMatch = skillDirsMatch(centralSkillDir, versionSkillDir);
+      const sourceDir = hasProjectSource ? projectSourceDir! : centralSkillDir;
+      const allMatch = skillDirsMatch(sourceDir, versionSkillDir);
       if (allMatch) {
         result.skills.push(skill);
       }
@@ -210,19 +262,22 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
   // Hooks - check what files exist AND content matches central source
   const hooksDir = path.join(configDir, 'hooks');
   const centralHooksDir = getHooksDir();
+  const projectHooksDir = projectAgentsDir ? path.join(projectAgentsDir, 'hooks') : null;
   if (fs.existsSync(hooksDir)) {
     const installedHooks = fs.readdirSync(hooksDir).filter(f => !f.startsWith('.'));
     for (const hook of installedHooks) {
+      const projectFile = projectHooksDir ? path.join(projectHooksDir, hook) : null;
       const centralFile = path.join(centralHooksDir, hook);
       const versionFile = path.join(hooksDir, hook);
-      // If no central source, consider it synced (user-local hook)
-      if (!fs.existsSync(centralFile)) {
+      const hasProject = projectFile ? fs.existsSync(projectFile) : false;
+      const hasCentral = fs.existsSync(centralFile);
+      const sourceFile = hasProject ? projectFile! : centralFile;
+      if (!hasProject && !hasCentral) {
         result.hooks.push(hook);
         continue;
       }
-      // Content-match: version hook must match central hook
       try {
-        const centralContent = fs.readFileSync(centralFile, 'utf-8');
+        const centralContent = fs.readFileSync(sourceFile, 'utf-8');
         const versionContent = fs.readFileSync(versionFile, 'utf-8');
         if (centralContent === versionContent) {
           result.hooks.push(hook);
@@ -235,21 +290,37 @@ export function getActuallySyncedResources(agent: AgentId, version: string): Ava
 
   // Memory - check which memory files are actually in sync (content matches)
   const memoryDir = getMemoryDir();
+  const projectMemoryDir = projectAgentsDir ? path.join(projectAgentsDir, 'memory') : null;
+  const memoryFiles = new Set<string>();
   if (fs.existsSync(memoryDir)) {
-    const centralFiles = fs.readdirSync(memoryDir).filter(f => f.endsWith('.md'));
-    for (const file of centralFiles) {
-      const memName = file.replace(/\.md$/, '');
-      // AGENTS.md maps to agent's instructionsFile (e.g., CLAUDE.md)
-      const targetName = file === 'AGENTS.md' ? agentConfig.instructionsFile : file;
-      const versionFile = path.join(configDir, targetName);
-      if (fs.existsSync(versionFile)) {
-        // Only "synced" if content matches
-        const centralContent = fs.readFileSync(path.join(memoryDir, file), 'utf-8');
-        const versionContent = fs.readFileSync(versionFile, 'utf-8');
-        if (centralContent === versionContent) {
-          result.memory.push(memName);
-        }
+    fs.readdirSync(memoryDir).filter(f => f.endsWith('.md')).forEach(f => memoryFiles.add(f));
+  }
+  if (projectMemoryDir && fs.existsSync(projectMemoryDir)) {
+    fs.readdirSync(projectMemoryDir).filter(f => f.endsWith('.md')).forEach(f => memoryFiles.add(f));
+  }
+  for (const file of memoryFiles) {
+    const memName = file.replace(/\.md$/, '');
+    const targetName = file === 'AGENTS.md' ? agentConfig.instructionsFile : file;
+    const versionFile = path.join(configDir, targetName);
+    if (!fs.existsSync(versionFile)) continue;
+
+    const projectFile = projectMemoryDir ? path.join(projectMemoryDir, file) : null;
+    const centralFile = path.join(memoryDir, file);
+    const hasProject = projectFile ? fs.existsSync(projectFile) : false;
+    const hasCentral = fs.existsSync(centralFile);
+    const sourceFile = hasProject ? projectFile! : centralFile;
+    if (!hasProject && !hasCentral) {
+      result.memory.push(memName);
+      continue;
+    }
+    try {
+      const centralContent = fs.readFileSync(sourceFile, 'utf-8');
+      const versionContent = fs.readFileSync(versionFile, 'utf-8');
+      if (centralContent === versionContent) {
+        result.memory.push(memName);
       }
+    } catch {
+      // Ignore
     }
   }
 
@@ -1148,18 +1219,20 @@ export function getResourceDiff(agent: AgentId, version: string): ResourceDiff {
     }
   }
 
-  // Skills: check directory symlink
-  const centralSkills = getSkillsDir();
-  const skillsTarget = path.join(agentDir, 'skills');
-  const skillsStatus = getSymlinkStatus(skillsTarget);
-  if (skillsStatus === 'none' && fs.existsSync(centralSkills)) {
-    const dirs = fs.readdirSync(centralSkills).filter(f => {
-      const stat = fs.statSync(path.join(centralSkills, f));
-      return stat.isDirectory() && !f.startsWith('.');
-    });
-    diff.skills.added = dirs;
-  } else if (skillsStatus === 'dangling') {
-    diff.skills.dangling = ['skills/'];
+  // Skills: check directory symlink (skip if agent natively reads ~/.agents/skills/)
+  if (!agentConfig.nativeAgentsSkillsDir) {
+    const centralSkills = getSkillsDir();
+    const skillsTarget = path.join(agentDir, 'skills');
+    const skillsStatus = getSymlinkStatus(skillsTarget);
+    if (skillsStatus === 'none' && fs.existsSync(centralSkills)) {
+      const dirs = fs.readdirSync(centralSkills).filter(f => {
+        const stat = fs.statSync(path.join(centralSkills, f));
+        return stat.isDirectory() && !f.startsWith('.');
+      });
+      diff.skills.added = dirs;
+    } else if (skillsStatus === 'dangling') {
+      diff.skills.dangling = ['skills/'];
+    }
   }
 
   // Hooks: check directory symlink (if agent supports hooks)
@@ -1210,14 +1283,16 @@ export function getResourceDiff(agent: AgentId, version: string): ResourceDiff {
  *
  * For Gemini: commands are converted from markdown to TOML.
  */
-export function syncResourcesToVersion(agent: AgentId, version: string, selection?: ResourceSelection): SyncResult {
+export function syncResourcesToVersion(agent: AgentId, version: string, selection?: ResourceSelection, options: { projectDir?: string; cwd?: string } = {}): SyncResult {
   const agentConfig = AGENTS[agent];
   const versionHome = getVersionHomePath(agent, version);
   const agentDir = path.join(versionHome, `.${agent}`);
   fs.mkdirSync(agentDir, { recursive: true });
 
   const result: SyncResult = { commands: false, skills: false, hooks: false, memory: [], permissions: false, mcp: [], subagents: [], plugins: [] };
-  const available = getAvailableResources();
+  const cwd = options.cwd || process.cwd();
+  const projectAgentsDir = options.projectDir || getProjectAgentsDir(cwd);
+  const available = getAvailableResources(cwd);
 
   // Helper: remove a path (symlink or real) if it exists
   const removePath = (p: string) => {
@@ -1260,22 +1335,22 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
 
   if (commandsToSync.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) {
     const centralCommands = getCommandsDir();
+    const projectCommandsDir = projectAgentsDir ? path.join(projectAgentsDir, 'commands') : null;
     const commandsTarget = path.join(agentDir, agentConfig.commandsSubdir);
-    // Don't remove existing - just ensure dir exists and add/overwrite selected items
     fs.mkdirSync(commandsTarget, { recursive: true });
 
     const syncedCommands: string[] = [];
     for (const cmd of commandsToSync) {
-      const srcFile = path.join(centralCommands, `${cmd}.md`);
+      const projectSource = projectCommandsDir ? path.join(projectCommandsDir, `${cmd}.md`) : null;
+      const userSource = path.join(centralCommands, `${cmd}.md`);
+      const srcFile = projectSource && fs.existsSync(projectSource) ? projectSource : userSource;
       if (!fs.existsSync(srcFile)) continue;
 
       if (agentConfig.format === 'toml') {
-        // Gemini: convert markdown to TOML
         const content = fs.readFileSync(srcFile, 'utf-8');
         const tomlContent = markdownToToml(cmd, content);
         fs.writeFileSync(path.join(commandsTarget, `${cmd}.toml`), tomlContent);
       } else {
-        // Copy markdown file
         fs.copyFileSync(srcFile, path.join(commandsTarget, `${cmd}.md`));
       }
       syncedCommands.push(cmd);
@@ -1286,31 +1361,37 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     }
   }
 
-  // Sync skills
-  const skillsToSync = selection
-    ? resolveSelection(selection.skills, available.skills)
-    : available.skills;
-
-  if (skillsToSync.length > 0) {
-    const centralSkills = getSkillsDir();
+  // Sync skills (skip if agent natively reads ~/.agents/skills/)
+  if (agentConfig.nativeAgentsSkillsDir) {
+    // Clean up stale skills symlink/dir — agent reads from ~/.agents/skills/ directly
     const skillsTarget = path.join(agentDir, 'skills');
-    // Don't remove existing - just ensure dir exists and add/overwrite selected items
-    fs.mkdirSync(skillsTarget, { recursive: true });
+    removePath(skillsTarget);
+  } else {
+    const skillsToSync = selection
+      ? resolveSelection(selection.skills, available.skills)
+      : available.skills;
 
-    const syncedSkills: string[] = [];
-    for (const skill of skillsToSync) {
-      const srcDir = path.join(centralSkills, skill);
-      if (!fs.existsSync(srcDir)) continue;
+    if (skillsToSync.length > 0) {
+      const centralSkills = getSkillsDir();
+      const projectSkills = projectAgentsDir ? path.join(projectAgentsDir, 'skills') : null;
+      const skillsTarget = path.join(agentDir, 'skills');
+      fs.mkdirSync(skillsTarget, { recursive: true });
 
-      const destDir = path.join(skillsTarget, skill);
-      // Remove just this skill's dir to ensure clean state, then copy fresh
-      removePath(destDir);
-      copyDir(srcDir, destDir);
-      syncedSkills.push(skill);
-    }
-    result.skills = syncedSkills.length > 0;
-    if (syncedSkills.length > 0) {
-      recordVersionResources(agent, version, 'skills', syncedSkills);
+      const syncedSkills: string[] = [];
+      for (const skill of skillsToSync) {
+        const projectSource = projectSkills ? path.join(projectSkills, skill) : null;
+        const srcDir = projectSource && fs.existsSync(projectSource) ? projectSource : path.join(centralSkills, skill);
+        if (!fs.existsSync(srcDir)) continue;
+
+        const destDir = path.join(skillsTarget, skill);
+        removePath(destDir);
+        copyDir(srcDir, destDir);
+        syncedSkills.push(skill);
+      }
+      result.skills = syncedSkills.length > 0;
+      if (syncedSkills.length > 0) {
+        recordVersionResources(agent, version, 'skills', syncedSkills);
+      }
     }
   }
 
@@ -1322,18 +1403,18 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
 
     if (hooksToSync.length > 0) {
       const centralHooks = getHooksDir();
+      const projectHooksDir = projectAgentsDir ? path.join(projectAgentsDir, 'hooks') : null;
       const hooksTarget = path.join(agentDir, 'hooks');
-      // Don't remove existing - just ensure dir exists and add/overwrite selected items
       fs.mkdirSync(hooksTarget, { recursive: true });
 
       const syncedHooks: string[] = [];
       for (const hook of hooksToSync) {
-        const srcFile = path.join(centralHooks, hook);
+        const projectSource = projectHooksDir ? path.join(projectHooksDir, hook) : null;
+        const srcFile = projectSource && fs.existsSync(projectSource) ? projectSource : path.join(centralHooks, hook);
         if (!fs.existsSync(srcFile)) continue;
 
         const destFile = path.join(hooksTarget, hook);
         fs.copyFileSync(srcFile, destFile);
-        // Preserve executable permission
         fs.chmodSync(destFile, 0o755);
         syncedHooks.push(hook);
       }
@@ -1342,7 +1423,6 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
         recordVersionResources(agent, version, 'hooks', syncedHooks);
       }
 
-      // Register hooks as lifecycle events in settings.json
       if (agent === 'claude') {
         registerHooksToSettings(agent, versionHome);
       }
@@ -1356,13 +1436,16 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
 
   if (memoryToSync.length > 0 && COMMANDS_CAPABLE_AGENTS.includes(agent)) {
     const centralMemory = getMemoryDir();
+    const projectMemoryDir = projectAgentsDir ? path.join(projectAgentsDir, 'memory') : null;
     const syncedMemory: string[] = [];
 
     for (const mem of memoryToSync) {
-      const srcFile = path.join(centralMemory, `${mem}.md`);
+      const projectSource = projectMemoryDir ? path.join(projectMemoryDir, `${mem}.md`) : null;
+      const srcFile = projectSource && fs.existsSync(projectSource)
+        ? projectSource
+        : path.join(centralMemory, `${mem}.md`);
       if (!fs.existsSync(srcFile)) continue;
 
-      // AGENTS.md gets renamed to the agent's instructionsFile name
       const targetName = mem === 'AGENTS' ? agentConfig.instructionsFile : `${mem}.md`;
       const destFile = path.join(agentDir, targetName);
 
@@ -1404,7 +1487,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     : (MCP_CAPABLE_AGENTS.includes(agent) ? available.mcp : []);
 
   if (mcpToSync.length > 0 && MCP_CAPABLE_AGENTS.includes(agent)) {
-    const mcpResult = installMcpServers(agent, version, versionHome, mcpToSync);
+    const mcpResult = installMcpServers(agent, version, versionHome, mcpToSync, { cwd });
     result.mcp = mcpResult.applied;
     if (mcpResult.applied.length > 0) {
       recordVersionResources(agent, version, 'mcp', mcpResult.applied);

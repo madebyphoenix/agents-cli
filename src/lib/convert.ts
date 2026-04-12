@@ -39,9 +39,9 @@ export function markdownToToml(skillName: string, markdown: string): string {
   const lines = [
     `name = "${skillName}"`,
     `description = "${description.replace(/"/g, '\\"')}"`,
-    'prompt = """',
+    "prompt = '''",
     promptContent,
-    '"""',
+    "'''",
     '',
   ];
 
@@ -51,7 +51,7 @@ export function markdownToToml(skillName: string, markdown: string): string {
 export function tomlToMarkdown(toml: string): string {
   const nameMatch = toml.match(/name\s*=\s*"([^"]+)"/);
   const descMatch = toml.match(/description\s*=\s*"([^"]+)"/);
-  const promptMatch = toml.match(/prompt\s*=\s*"""([\s\S]*?)"""/);
+  const promptMatch = toml.match(/prompt\s*=\s*(?:'''|""")([\s\S]*?)(?:'''|""")/);
 
   const description = descMatch?.[1] || '';
   let prompt = promptMatch?.[1]?.trim() || '';

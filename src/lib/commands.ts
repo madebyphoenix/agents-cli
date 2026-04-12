@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as yaml from 'yaml';
 import { AGENTS, ensureCommandsDir } from './agents.js';
 import { markdownToToml } from './convert.js';
-import { getCommandsDir } from './state.js';
+import { getCommandsDir, getProjectAgentsDir } from './state.js';
 import { getEffectiveHome } from './versions.js';
 import type { AgentId, CommandInstallation } from './types.js';
 
@@ -293,24 +293,31 @@ export function commandContentMatches(
  * Codex: .codex/prompts/
  * Gemini: .gemini/commands/
  */
-function getProjectCommandsDir(agentId: AgentId, cwd: string = process.cwd()): string {
+function getProjectCommandsDirs(agentId: AgentId, cwd: string = process.cwd()): string[] {
   const agent = AGENTS[agentId];
-  return path.join(cwd, `.${agentId}`, agent.commandsSubdir);
+  const dirs: string[] = [];
+
+  const projectAgentsDir = getProjectAgentsDir(cwd);
+  if (projectAgentsDir) {
+    dirs.push(path.join(projectAgentsDir, 'commands'));
+  }
+
+  dirs.push(path.join(cwd, `.${agentId}`, agent.commandsSubdir));
+  return dirs;
 }
 
 /**
  * List commands from a specific directory.
  */
-function listCommandsFromDir(dir: string, format: 'markdown' | 'toml'): string[] {
+function listCommandsFromDir(dir: string, exts: string[]): string[] {
   if (!fs.existsSync(dir)) {
     return [];
   }
 
-  const ext = format === 'toml' ? '.toml' : '.md';
   return fs
     .readdirSync(dir)
-    .filter((f) => f.endsWith(ext))
-    .map((f) => f.replace(ext, ''));
+    .filter((f) => exts.some(ext => f.endsWith(ext)))
+    .map((f) => f.replace(/\.(md|toml)$/, ''));
 }
 
 /**
@@ -325,32 +332,38 @@ export function listInstalledCommandsWithScope(
   const agent = AGENTS[agentId];
   const ext = agent.format === 'toml' ? '.toml' : '.md';
   const results: InstalledCommand[] = [];
+  const seen = new Set<string>();
+
+  const addCommand = (name: string, scope: CommandScope, dir: string, extensions: string[]) => {
+    if (seen.has(name)) return;
+    const extForPath = extensions.find(e => fs.existsSync(path.join(dir, `${name}${e}`))) || extensions[0];
+    const commandPath = path.join(dir, `${name}${extForPath}`);
+    results.push({
+      name,
+      scope,
+      path: commandPath,
+      description: getCommandDescription(commandPath),
+    });
+    seen.add(name);
+  };
+
+  // Project-scoped commands (new .agents/commands takes precedence over agent-specific project dirs)
+  const projectDirs = getProjectCommandsDirs(agentId, cwd);
+  for (const projectDir of projectDirs) {
+    const projectExts = ['.md', '.toml'];
+    const projectCommands = listCommandsFromDir(projectDir, projectExts);
+    for (const name of projectCommands) {
+      addCommand(name, 'project', projectDir, projectExts);
+    }
+  }
 
   // User-scoped commands (version-aware when home is provided)
   const home = options?.home || getEffectiveHome(agentId);
   const userCommandsDir = path.join(home, `.${agentId}`, agent.commandsSubdir);
-  const userCommands = listCommandsFromDir(userCommandsDir, agent.format);
+  const userExts = [ext];
+  const userCommands = listCommandsFromDir(userCommandsDir, userExts);
   for (const name of userCommands) {
-    const commandPath = path.join(userCommandsDir, `${name}${ext}`);
-    results.push({
-      name,
-      scope: 'user',
-      path: commandPath,
-      description: getCommandDescription(commandPath),
-    });
-  }
-
-  // Project-scoped commands
-  const projectDir = getProjectCommandsDir(agentId, cwd);
-  const projectCommands = listCommandsFromDir(projectDir, agent.format);
-  for (const name of projectCommands) {
-    const commandPath = path.join(projectDir, `${name}${ext}`);
-    results.push({
-      name,
-      scope: 'project',
-      path: commandPath,
-      description: getCommandDescription(commandPath),
-    });
+    addCommand(name, 'user', userCommandsDir, userExts);
   }
 
   return results;

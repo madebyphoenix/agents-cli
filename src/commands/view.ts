@@ -68,6 +68,7 @@ interface ResourceWithSync {
   path?: string;
   ruleCount?: number;
   syncState?: SyncState;
+  scope?: 'user' | 'project';
 }
 
 /**
@@ -383,7 +384,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
 
   const resources = getAgentResources(agentId, {
     cwd,
-    scope: 'user',
+    scope: 'all',
     cliInstalled: cliStates[agentId]?.installed ?? false,
   });
 
@@ -393,21 +394,21 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
     version,
     commands: resources.commands.map(r => ({
       ...r,
-      syncState: getSyncState(r.name, 'commands', commandsSync),
+      syncState: r.scope === 'project' ? undefined : getSyncState(r.name, 'commands', commandsSync),
     })),
     skills: resources.skills.map(r => ({
       ...r,
-      syncState: getSyncState(r.name, 'skills', skillsSync),
+      syncState: r.scope === 'project' ? undefined : getSyncState(r.name, 'skills', skillsSync),
     })),
     skillErrors: resources.skillErrors,
-    mcp: resources.mcp.map(r => ({ name: r.name, syncState: 'synced' as SyncState })),
+    mcp: resources.mcp.map(r => ({ name: r.name, scope: r.scope, syncState: r.scope === 'project' ? undefined : 'synced' as SyncState })),
     memory: resources.memory.map(r => ({
       ...r,
-      syncState: getSyncState(r.name, 'memory', memorySync),
+      syncState: r.scope === 'project' ? undefined : getSyncState(r.name, 'memory', memorySync),
     })),
     hooks: resources.hooks.map(r => ({
       ...r,
-      syncState: getSyncState(r.name, 'hooks', hooksSync),
+      syncState: r.scope === 'project' ? undefined : getSyncState(r.name, 'hooks', hooksSync),
     })),
   };
 
@@ -437,8 +438,12 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
 
       let display = nameColor(r.name);
       if (r.ruleCount !== undefined) display += chalk.gray(` (${r.ruleCount} rules)`);
+      if (r.scope === 'project') {
+        display += chalk.gray(' [project]');
+      }
       const pathStr = r.path ? chalk.gray(formatPath(r.path, cwd)) : '';
-      console.log(`    ${display.padEnd(24)} ${pathStr}`);
+      const syncStr = r.syncState ? chalk.gray(` [${r.syncState}]`) : '';
+      console.log(`    ${display.padEnd(24)} ${pathStr}${syncStr}`);
     }
   }
 

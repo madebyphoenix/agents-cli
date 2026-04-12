@@ -350,4 +350,10 @@ describe('shims - generateShimScript', () => {
     expect(script).toContain('agents.yaml');
     expect(script).not.toContain('meta.yaml');
   });
+
+  test('includes project sync hook in shim', () => {
+    const script = generateShimScript('claude');
+    expect(script).toContain('find_project_agents_dir');
+    expect(script).toContain('agents sync --agent "$AGENT" --version "$VERSION" --project-dir "$PROJECT_AGENTS_DIR"');
+  });
 });

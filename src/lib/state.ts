@@ -35,6 +35,43 @@ export function getAgentsDir(): string {
   return AGENTS_DIR;
 }
 
+export function getProjectAgentsDir(startPath: string = process.cwd()): string | null {
+  let dir = path.resolve(startPath);
+
+  while (true) {
+    const agentsPath = path.join(dir, '.agents');
+    if (fs.existsSync(agentsPath) && fs.statSync(agentsPath).isDirectory()) {
+      // Skip if this is ~/.agents (user scope, not project scope)
+      if (agentsPath !== AGENTS_DIR) {
+        return agentsPath;
+      }
+    }
+
+    const isProjectBoundary = fs.existsSync(path.join(dir, '.git')) || fs.existsSync(path.join(dir, '.agents-version'));
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    if (isProjectBoundary) {
+      // Check this boundary dir but don't go further
+      break;
+    }
+    dir = parent;
+  }
+
+  return null;
+}
+
+export function getScopedAgentsDirs(startPath: string = process.cwd()): Array<{ scope: 'project' | 'user'; path: string }> {
+  const dirs: Array<{ scope: 'project' | 'user'; path: string }> = [];
+  const projectDir = getProjectAgentsDir(startPath);
+  if (projectDir) {
+    dirs.push({ scope: 'project', path: projectDir });
+  }
+  dirs.push({ scope: 'user', path: AGENTS_DIR });
+  return dirs;
+}
+
 export function getPackagesDir(): string {
   return PACKAGES_DIR;
 }

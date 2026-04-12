@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { AGENTS, ALL_AGENT_IDS } from './agents.js';
-import { getMemoryDir } from './state.js';
+import { getMemoryDir, getProjectAgentsDir } from './state.js';
 import { getEffectiveHome } from './versions.js';
 import type { AgentId } from './types.js';
 
@@ -66,7 +66,20 @@ export function getInstructionsPath(agentId: AgentId, scope: InstructionsScope, 
   if (scope === 'user') {
     return path.join(getUserConfigDir(agentId), agent.instructionsFile);
   }
-  // Check root-level first (where agents actually read from), then subdirectory
+  const projectAgentsDir = getProjectAgentsDir(cwd);
+  if (projectAgentsDir) {
+    const projectMemoryDir = path.join(projectAgentsDir, 'memory');
+    const centralName = getCentralMemoryFileName(agentId);
+    const candidates = [
+      path.join(projectMemoryDir, centralName),
+      path.join(projectMemoryDir, agent.instructionsFile),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
   const rootPath = path.join(cwd, agent.instructionsFile);
   if (fs.existsSync(rootPath)) {
     return rootPath;
@@ -238,10 +251,7 @@ export function listInstalledInstructionsWithScope(
     exists: fs.existsSync(userPath),
   });
 
-  // Check root-level first (where agents actually read from), then subdirectory
-  const rootPath = path.join(cwd, agent.instructionsFile);
-  const subPath = path.join(cwd, `.${agentId}`, agent.instructionsFile);
-  const projectPath = fs.existsSync(rootPath) ? rootPath : subPath;
+  const projectPath = getInstructionsPath(agentId, 'project', cwd);
   results.push({
     agentId,
     scope: 'project',

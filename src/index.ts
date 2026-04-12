@@ -36,6 +36,7 @@ import { registerCronCommands } from './commands/cron.js';
 import { registerExecCommand } from './commands/exec.js';
 import { registerSubagentsCommands } from './commands/subagents.js';
 import { registerPluginsCommands } from './commands/plugins.js';
+import { registerSyncCommand } from './commands/sync.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -244,6 +245,7 @@ registerPackagesCommands(program);
 registerDaemonCommands(program);
 registerCronCommands(program);
 registerExecCommand(program);
+registerSyncCommand(program);
 
 // Deprecated 'jobs' alias for 'cron'
 program

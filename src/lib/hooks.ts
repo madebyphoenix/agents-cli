@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
 import { AGENTS, ALL_AGENT_IDS } from './agents.js';
-import { getAgentsDir, getHooksDir as getCentralHooksDir } from './state.js';
+import { getAgentsDir, getHooksDir as getCentralHooksDir, getProjectAgentsDir } from './state.js';
 import { getEffectiveHome } from './versions.js';
 import type { AgentId, InstalledHook, ManifestHook } from './types.js';
 
@@ -34,9 +34,15 @@ function getHooksDir(agentId: AgentId): string {
   return path.join(home, `.${agentId}`, agent.hooksDir);
 }
 
-function getProjectHooksDir(agentId: AgentId, cwd: string): string {
+function getProjectHooksDirs(agentId: AgentId, cwd: string): string[] {
   const agent = AGENTS[agentId];
-  return path.join(cwd, `.${agentId}`, agent.hooksDir);
+  const dirs: string[] = [];
+  const projectAgentsDir = getProjectAgentsDir(cwd);
+  if (projectAgentsDir) {
+    dirs.push(path.join(projectAgentsDir, 'hooks'));
+  }
+  dirs.push(path.join(cwd, `.${agentId}`, agent.hooksDir));
+  return dirs;
 }
 
 function ensureDir(dir: string): void {
@@ -236,31 +242,35 @@ export function listInstalledHooksWithScope(
   }
 
   const results: InstalledHook[] = [];
+  const seen = new Set<string>();
+
+  const addHook = (hook: HookEntry, scope: 'user' | 'project', agentId: AgentId) => {
+    if (seen.has(hook.name)) return;
+    results.push({
+      name: hook.name,
+      path: hook.scriptPath,
+      dataFile: hook.dataFile,
+      scope,
+      agent: agentId,
+    });
+    seen.add(hook.name);
+  };
+
+  // Project-scoped hooks (project .agents overrides agent-specific dirs)
+  const projectDirs = getProjectHooksDirs(agentId, cwd);
+  for (const dir of projectDirs) {
+    const projectHooks = listHookEntriesFromDir(dir);
+    for (const hook of projectHooks) {
+      addHook(hook, 'project', agentId);
+    }
+  }
 
   // User-scoped hooks (version-aware when home is provided)
   const home = options?.home || getEffectiveHome(agentId);
   const userDir = path.join(home, `.${agentId}`, agent.hooksDir);
   const userHooks = listHookEntriesFromDir(userDir);
   for (const hook of userHooks) {
-    results.push({
-      name: hook.name,
-      path: hook.scriptPath,
-      dataFile: hook.dataFile,
-      scope: 'user',
-      agent: agentId,
-    });
-  }
-
-  const projectDir = getProjectHooksDir(agentId, cwd);
-  const projectHooks = listHookEntriesFromDir(projectDir);
-  for (const hook of projectHooks) {
-    results.push({
-      name: hook.name,
-      path: hook.scriptPath,
-      dataFile: hook.dataFile,
-      scope: 'project',
-      agent: agentId,
-    });
+    addHook(hook, 'user', agentId);
   }
 
   return results;
@@ -288,7 +298,7 @@ export async function installHooks(
     }
 
     const targetDir =
-      scope === 'project' ? getProjectHooksDir(agentId, cwd) : getHooksDir(agentId);
+      scope === 'project' ? getProjectHooksDirs(agentId, cwd)[0] : getHooksDir(agentId);
 
     for (const entry of hooks) {
       try {

@@ -224,6 +224,22 @@ resolve_default_version() {
   fi
 }
 
+# Find project-scoped .agents directory (stop at .git or .agents-version)
+find_project_agents_dir() {
+  local dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -d "$dir/.agents" ]; then
+      echo "$dir/.agents"
+      return 0
+    fi
+    if [ -f "$dir/.agents-version" ] || [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
+      break
+    fi
+    dir=$(dirname "$dir")
+  done
+  return 1
+}
+
 # Try project version first, then global default
 VERSION=$(find_project_version)
 VERSION_SOURCE="project"
@@ -276,6 +292,12 @@ if [ ! -x "$BINARY" ]; then
     echo "Run: agents add $AGENT@$VERSION" >&2
     exit 1
   fi
+fi
+
+# Sync project-scoped resources into version home if a project .agents/ is present
+PROJECT_AGENTS_DIR=$(find_project_agents_dir)
+if [ -n "$PROJECT_AGENTS_DIR" ]; then
+  agents sync --agent "$AGENT" --version "$VERSION" --project-dir "$PROJECT_AGENTS_DIR" --quiet >/dev/null 2>&1
 fi
 
 exec "$BINARY" "$@"

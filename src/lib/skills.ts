@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as yaml from 'yaml';
 import type { AgentId, SkillMetadata, InstalledSkill } from './types.js';
 import { AGENTS, SKILLS_CAPABLE_AGENTS, ensureSkillsDir } from './agents.js';
-import { getAgentsDir } from './state.js';
+import { getAgentsDir, getProjectAgentsDir } from './state.js';
 import { getEffectiveHome } from './versions.js';
 
 const HOME = os.homedir();
@@ -26,7 +26,17 @@ export function getAgentSkillsDir(agentId: AgentId): string {
 }
 
 export function getProjectSkillsDir(agentId: AgentId, cwd: string = process.cwd()): string {
-  return path.join(cwd, `.${agentId}`, 'skills');
+  const dirs: string[] = [];
+  const projectAgentsDir = getProjectAgentsDir(cwd);
+  if (projectAgentsDir) {
+    dirs.push(path.join(projectAgentsDir, 'skills'));
+  }
+  dirs.push(path.join(cwd, `.${agentId}`, 'skills'));
+  // Return the first existing dir, otherwise default to the first candidate
+  for (const dir of dirs) {
+    if (fs.existsSync(dir)) return dir;
+  }
+  return dirs[0];
 }
 
 export interface ValidationResult {
@@ -412,6 +422,62 @@ export function listInstalledSkillsWithScope(
   options?: { home?: string; errors?: SkillParseError[] }
 ): InstalledSkill[] {
   const results: InstalledSkill[] = [];
+  const seen = new Set<string>();
+
+  // Project-scoped skills
+  const projectCandidates: string[] = [];
+  const projectAgentsDir = getProjectAgentsDir(cwd);
+  if (projectAgentsDir) {
+    projectCandidates.push(path.join(projectAgentsDir, 'skills'));
+  }
+  projectCandidates.push(path.join(cwd, `.${agentId}`, 'skills'));
+
+  for (const projectSkillsDir of projectCandidates) {
+    if (!fs.existsSync(projectSkillsDir)) continue;
+    try {
+      const entries = fs.readdirSync(projectSkillsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+
+        const skillDir = path.join(projectSkillsDir, entry.name);
+
+        let isDir = entry.isDirectory();
+        if (entry.isSymbolicLink()) {
+          try {
+            const stat = fs.statSync(skillDir);
+            isDir = stat.isDirectory();
+          } catch {
+            continue;
+          }
+        }
+        if (!isDir) continue;
+
+        const result = tryParseSkillMetadata(skillDir);
+
+        if (result.metadata && !seen.has(entry.name)) {
+          results.push({
+            name: entry.name,
+            path: skillDir,
+            metadata: result.metadata,
+            ruleCount: countSkillRules(skillDir),
+            scope: 'project',
+            agent: agentId,
+          });
+          seen.add(entry.name);
+        } else if (result.error && options?.errors && !seen.has(entry.name)) {
+          options.errors.push({
+            name: entry.name,
+            path: skillDir,
+            error: result.error,
+            scope: 'project',
+          });
+          seen.add(entry.name);
+        }
+      }
+    } catch {
+      // Ignore errors
+    }
+  }
 
   // User-scoped skills (version-aware when home is provided)
   const userSkillsDir = options?.home
@@ -421,12 +487,10 @@ export function listInstalledSkillsWithScope(
     try {
       const entries = fs.readdirSync(userSkillsDir, { withFileTypes: true });
       for (const entry of entries) {
-        // Skip hidden directories (e.g., .system)
         if (entry.name.startsWith('.')) continue;
 
         const skillDir = path.join(userSkillsDir, entry.name);
 
-        // Handle both directories and symlinks to directories
         let isDir = entry.isDirectory();
         if (entry.isSymbolicLink()) {
           try {
@@ -440,7 +504,7 @@ export function listInstalledSkillsWithScope(
 
         const result = tryParseSkillMetadata(skillDir);
 
-        if (result.metadata) {
+        if (result.metadata && !seen.has(entry.name)) {
           results.push({
             name: entry.name,
             path: skillDir,
@@ -449,61 +513,15 @@ export function listInstalledSkillsWithScope(
             scope: 'user',
             agent: agentId,
           });
-        } else if (result.error && options?.errors) {
+          seen.add(entry.name);
+        } else if (result.error && options?.errors && !seen.has(entry.name)) {
           options.errors.push({
             name: entry.name,
             path: skillDir,
             error: result.error,
             scope: 'user',
           });
-        }
-      }
-    } catch {
-      // Ignore errors
-    }
-  }
-
-  // Project-scoped skills
-  const projectSkillsDir = getProjectSkillsDir(agentId, cwd);
-  if (fs.existsSync(projectSkillsDir)) {
-    try {
-      const entries = fs.readdirSync(projectSkillsDir, { withFileTypes: true });
-      for (const entry of entries) {
-        // Skip hidden directories (e.g., .system)
-        if (entry.name.startsWith('.')) continue;
-
-        const skillDir = path.join(projectSkillsDir, entry.name);
-
-        // Handle both directories and symlinks to directories
-        let isDir = entry.isDirectory();
-        if (entry.isSymbolicLink()) {
-          try {
-            const stat = fs.statSync(skillDir);
-            isDir = stat.isDirectory();
-          } catch {
-            continue;
-          }
-        }
-        if (!isDir) continue;
-
-        const result = tryParseSkillMetadata(skillDir);
-
-        if (result.metadata) {
-          results.push({
-            name: entry.name,
-            path: skillDir,
-            metadata: result.metadata,
-            ruleCount: countSkillRules(skillDir),
-            scope: 'project',
-            agent: agentId,
-          });
-        } else if (result.error && options?.errors) {
-          options.errors.push({
-            name: entry.name,
-            path: skillDir,
-            error: result.error,
-            scope: 'project',
-          });
+          seen.add(entry.name);
         }
       }
     } catch {

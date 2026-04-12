@@ -10,6 +10,7 @@ import { listInstalledSkillsWithScope, type SkillParseError } from './skills.js'
 import { listInstalledHooksWithScope } from './hooks.js';
 import { listInstalledInstructionsWithScope } from './memory.js';
 import { getEffectiveHome } from './versions.js';
+import { listMcpServerConfigs } from './mcp.js';
 
 export interface ResourceEntry {
   name: string;
@@ -84,14 +85,27 @@ export function getAgentResources(
 
   // MCP
   const mcp: McpResourceEntry[] = [];
+  const mcpByName = new Map<string, McpResourceEntry>();
+
+  // Project/user-scoped MCP definitions from .agents/mcp
+  for (const server of listMcpServerConfigs(cwd)) {
+    const scope = server.scope || 'user';
+    if (shouldInclude(scope) && !mcpByName.has(server.name)) {
+      mcpByName.set(server.name, { name: server.name, scope });
+    }
+  }
+
   if (cliInstalled) {
     const home = getEffectiveHome(agentId);
     for (const m of listInstalledMcpsWithScope(agentId, cwd, { home })) {
-      if (shouldInclude(m.scope)) {
-        mcp.push({ name: m.name, scope: m.scope, version: m.version });
+      if (!shouldInclude(m.scope)) continue;
+      if (!mcpByName.has(m.name)) {
+        mcpByName.set(m.name, { name: m.name, scope: m.scope, version: m.version });
       }
     }
   }
+
+  mcp.push(...mcpByName.values());
 
   // Memory/Instructions
   const memory: ResourceEntry[] = [];

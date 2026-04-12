@@ -260,7 +260,7 @@ describe('generateGeminiConfig', () => {
 
 describe('symlinkAllowedDirs', () => {
   const overlayHome = join(TEST_DIR, 'symlink-overlay');
-  const realDir = join(homedir(), '.agents-cli-test-symlink-target');
+  const realDir = join(process.cwd(), '.agents-cli-test-symlink-target');
 
   beforeEach(() => {
     mkdirSync(overlayHome, { recursive: true });
@@ -275,7 +275,8 @@ describe('symlinkAllowedDirs', () => {
   it('creates symlink for HOME-relative dirs', () => {
     symlinkAllowedDirs(overlayHome, [realDir]);
 
-    const expectedLink = join(overlayHome, '.agents-cli-test-symlink-target');
+    const relative = realDir.replace(homedir() + '/', '');
+    const expectedLink = join(overlayHome, relative);
     expect(existsSync(expectedLink)).toBe(true);
     expect(lstatSync(expectedLink).isSymbolicLink()).toBe(true);
   });
@@ -288,12 +289,13 @@ describe('symlinkAllowedDirs', () => {
   });
 
   it('creates parent dirs for nested paths', () => {
-    const nestedDir = join(homedir(), '.agents-cli-test-symlink-target', 'nested');
+    const nestedDir = join(process.cwd(), '.agents-cli-test-symlink-target', 'nested');
     mkdirSync(nestedDir, { recursive: true });
 
     symlinkAllowedDirs(overlayHome, [nestedDir]);
 
-    const expectedLink = join(overlayHome, '.agents-cli-test-symlink-target', 'nested');
+    const relative = nestedDir.replace(homedir() + '/', '');
+    const expectedLink = join(overlayHome, relative);
     expect(existsSync(expectedLink)).toBe(true);
   });
 });
