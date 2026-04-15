@@ -1,11 +1,12 @@
 # agents-cli
 
-CLI for managing AI coding agent versions and config (Claude, Codex, Gemini, Cursor, OpenCode).
+CLI for managing AI coding agent versions, config, and sessions (Claude, Codex, Gemini, Cursor, OpenCode, OpenClaw).
 
 ## Core Concepts
 
 **Version Management** - Install/switch agent CLI versions like `nvm` for Node.js
-**Config Sync** - Backup agent config (commands, skills, hooks, memory) to git, restore across machines
+**Config Sync** - Backup agent config (commands, skills, hooks, rules) to git, restore across machines
+**Session Reading** - Unified view of session logs across Claude, Codex, and Gemini
 
 ### Directory Structure
 
@@ -15,7 +16,7 @@ CLI for managing AI coding agent versions and config (Claude, Codex, Gemini, Cur
   commands/                   # Slash commands (git-tracked)
   skills/                     # Agent skills (git-tracked)
   hooks/                      # Event hooks (git-tracked)
-  memory/                     # Memory files (git-tracked)
+  memory/                     # Memory/rules files (git-tracked)
   mcp/                        # MCP configs as YAML (git-tracked)
   permissions/groups/         # Permission groups (git-tracked)
   versions/{agent}/{version}/ # Installed CLIs (local-only)
@@ -27,8 +28,8 @@ CLI for managing AI coding agent versions and config (Claude, Codex, Gemini, Cur
 ### Version Switching
 
 `agents use claude@2.0.65`:
-1. If `~/.claude/` is a real directory → backup to `~/.agents/backups/claude/{timestamp}/`
-2. Create symlink: `~/.claude/ → ~/.agents/versions/claude/2.0.65/home/.claude/`
+1. If `~/.claude/` is a real directory -> backup to `~/.agents/backups/claude/{timestamp}/`
+2. Create symlink: `~/.claude/ -> ~/.agents/versions/claude/2.0.65/home/.claude/`
 
 Shims in `~/.agents/shims/` resolve version from `.agents-version` (project) or `agents.yaml` (global), then exec.
 
@@ -42,18 +43,31 @@ Shims in `~/.agents/shims/` resolve version from `.agents-version` (project) or 
 src/
   index.ts           # CLI entry (commander.js)
   commands/          # Command implementations
+    sessions.ts      # agents sessions list/view
+    exec.ts          # agents exec
+    cron.ts          # agents cron
+    view.ts          # agents view
+    ...
   lib/
     types.ts         # Core types (AgentId, Meta)
     agents.ts        # Agent configs, detection, MCP ops
     state.ts         # ~/.agents/agents.yaml management
     versions.ts      # Install, remove, sync resources
     shims.ts         # Shim generation, config symlink switching
+    exec.ts          # Agent execution (command building, spawning)
+    cron.ts          # Scheduled job config
+    runner.ts        # Job execution with sandboxing
+    session/         # Session discovery, parsing, rendering
+      types.ts       # SessionEvent, SessionMeta, ViewMode
+      discover.ts    # Find sessions across Claude/Codex/Gemini
+      parse.ts       # Parse stored session formats into normalized events
+      render.ts      # Transcript, summary, trace, JSON renderers
 ```
 
 ## Key Types
 
 ```typescript
-type AgentId = 'claude' | 'codex' | 'gemini' | 'cursor' | 'opencode';
+type AgentId = 'claude' | 'codex' | 'gemini' | 'cursor' | 'opencode' | 'openclaw';
 
 interface Meta {
   agents?: Partial<Record<AgentId, string>>;  // Global defaults
@@ -70,23 +84,69 @@ interface Meta {
 | Gemini | commands/ | toml | GEMINI.md |
 | Cursor | commands/ | markdown | .cursorrules |
 | OpenCode | commands/ | markdown | OPENCODE.md |
+| OpenClaw | (gateway) | markdown | AGENTS.md |
 
 ## Commands
 
 ```bash
+# Agents
 agents add claude@2.0.65     # Install version
 agents use claude@2.0.65     # Set default (only way to set default)
 agents remove claude@2.0.65  # Remove version
 agents view                  # Show installed versions + resources
+
+# Resources
+agents rules                 # Manage agent rules/instructions
+agents commands              # Manage slash commands
+agents subagents             # Manage subagent definitions
+agents skills                # Manage skills (SKILL.md + rules/)
+agents mcp                   # Manage MCP servers
+agents permissions           # Manage agent permissions
+agents hooks                 # Manage agent hooks
+agents plugins               # Manage agent plugins
+
+# Packages
+agents search <query>        # Search MCP servers
+agents install <pkg>         # Install mcp:name or skill:user/repo
+
+# Sessions
+agents sessions              # List sessions across all agents
+agents sessions list         # Same, with --agent/--project filters
+agents sessions view <id>    # View session (transcript by default)
+agents sessions view <id> --summary   # Files touched, commands run
+agents sessions view <id> --trace     # Reasoning trace as markdown
+agents sessions view <id> --json      # Normalized events as JSON
+
+# Execution
+agents exec <agent> <prompt> # Execute agent non-interactively
+
+# Automation
+agents cron                  # Manage scheduled jobs
+agents daemon                # Manage the scheduler daemon
+
+# Env
 agents pull                  # Sync from git repo
-agents push                  # Push to git repo
+agents push                  # Push config to your .agents repo
+agents fork                  # Fork system repo to your GitHub
 ```
+
+## Session Storage
+
+Sessions are stored differently by each agent. `agents sessions` normalizes all three formats.
+
+| Agent | Format | Location |
+|-------|--------|----------|
+| Claude | JSONL (one line per message) | `~/.claude/projects/{encoded-path}/{uuid}.jsonl` |
+| Codex | JSONL (one line per event) | `~/.codex/sessions/YYYY/MM/DD/rollout-{ts}-{uuid}.jsonl` |
+| Gemini | Single JSON | `~/.gemini/tmp/{project-hash}/chats/session-{ts}-{uuid}.json` |
+
+All formats normalize to `SessionEvent` with types: message, tool_use, tool_result, thinking, error, init, result.
 
 ## Rules
 
 - `setGlobalDefault()` MUST only be called from `agents use`
 - Resources sync via symlinks, not copies (except Gemini TOML conversion)
-- Version resolution: `.agents-version` (walk up) → `~/.agents/agents.yaml`
+- Version resolution: `.agents-version` (walk up) -> `~/.agents/agents.yaml`
 
 ## Build
 
