@@ -1,0 +1,31 @@
+export type SessionAgentId = 'claude' | 'codex' | 'gemini';
+
+export const SESSION_AGENTS: SessionAgentId[] = ['claude', 'codex', 'gemini'];
+
+export interface SessionEvent {
+  type: 'message' | 'tool_use' | 'tool_result' | 'thinking' | 'error' | 'init' | 'result';
+  agent: SessionAgentId;
+  timestamp: string;
+  role?: 'user' | 'assistant';
+  content?: string;
+  tool?: string;
+  args?: Record<string, any>;
+  path?: string;
+  command?: string;
+  success?: boolean;
+  output?: string;
+}
+
+export interface SessionMeta {
+  id: string;
+  shortId: string;
+  agent: SessionAgentId;
+  timestamp: string;
+  project?: string;
+  cwd?: string;
+  filePath: string;
+  gitBranch?: string;
+  messageCount?: number;
+}
+
+export type ViewMode = 'transcript' | 'summary' | 'trace' | 'json';

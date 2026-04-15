@@ -37,6 +37,7 @@ import { registerExecCommand } from './commands/exec.js';
 import { registerSubagentsCommands } from './commands/subagents.js';
 import { registerPluginsCommands } from './commands/plugins.js';
 import { registerSyncCommand } from './commands/sync.js';
+import { registerSessionsCommands } from './commands/sessions.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -76,6 +77,9 @@ Resources
 Packages
   search <query>                  Search MCP servers
   install <pkg>                   Install mcp:name or skill:user/repo
+
+Sessions
+  sessions                        List and view agent sessions
 
 Automation
   cron                            Manage scheduled jobs
@@ -245,6 +249,7 @@ registerPackagesCommands(program);
 registerDaemonCommands(program);
 registerCronCommands(program);
 registerExecCommand(program);
+registerSessionsCommands(program);
 registerSyncCommand(program);
 
 // Deprecated 'jobs' alias for 'cron'
