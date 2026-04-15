@@ -36,6 +36,10 @@ export function buildJobCommand(config: JobConfig, resolvedPrompt: string): stri
     if (config.mode === 'edit') {
       const planIndex = cmd.indexOf('plan');
       if (planIndex !== -1) cmd[planIndex] = 'acceptEdits';
+    } else if (config.mode === 'full') {
+      // Replace --permission-mode plan with --dangerously-skip-permissions
+      const pmIndex = cmd.indexOf('--permission-mode');
+      if (pmIndex !== -1) cmd.splice(pmIndex, 2, '--dangerously-skip-permissions');
     }
 
     if (config.allow?.dirs) {
@@ -54,6 +58,11 @@ export function buildJobCommand(config: JobConfig, resolvedPrompt: string): stri
   if (config.agent === 'codex') {
     if (config.mode === 'edit') {
       cmd.push('--full-auto');
+    } else if (config.mode === 'full') {
+      // Remove sandbox restriction, just --full-auto
+      const sbIndex = cmd.indexOf('--sandbox');
+      if (sbIndex !== -1) cmd.splice(sbIndex, 2);
+      cmd.push('--full-auto');
     }
 
     const model = config.config?.model as string | undefined;
@@ -63,7 +72,7 @@ export function buildJobCommand(config: JobConfig, resolvedPrompt: string): stri
   }
 
   if (config.agent === 'gemini') {
-    if (config.mode === 'edit') {
+    if (config.mode === 'edit' || config.mode === 'full') {
       cmd.push('--yolo');
     }
 

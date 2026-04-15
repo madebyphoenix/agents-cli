@@ -20,6 +20,9 @@ interface ExecCommandActionOptions {
   addDir: string[];
   json?: boolean;
   headless?: boolean;
+  sessionId?: string;
+  verbose?: boolean;
+  timeout?: string;
 }
 
 function isValidAgent(agent: string): agent is AgentId {
@@ -30,7 +33,7 @@ export function registerExecCommand(program: Command): void {
   program
     .command('exec <agent> <prompt>')
     .description('Execute an agent CLI with unified interface')
-    .option('-m, --mode <mode>', 'Execution mode: plan (read-only) or edit (write)', 'plan')
+    .option('-m, --mode <mode>', 'Execution mode: plan (read-only), edit (write), or full (full autonomy)', 'plan')
     .option('-e, --effort <effort>', 'Effort level: fast, default, detailed', 'default')
     .option('--model <model>', 'Override model selection')
     .option('--cwd <dir>', 'Working directory')
@@ -42,6 +45,9 @@ export function registerExecCommand(program: Command): void {
     )
     .option('--json', 'Output JSON events')
     .option('--headless', 'Non-interactive mode (default for exec)', true)
+    .option('--session-id <id>', 'Session ID for conversation continuity (Claude only)')
+    .option('--verbose', 'Enable verbose output')
+    .option('--timeout <duration>', 'Timeout duration (e.g., 30m, 1h)')
     .action(async (agentSpec: string, prompt: string, options: ExecCommandActionOptions) => {
       // Parse agent@version
       const [agent, version] = agentSpec.split('@');
@@ -53,8 +59,8 @@ export function registerExecCommand(program: Command): void {
       }
 
       const mode = options.mode as ExecMode;
-      if (!['plan', 'edit'].includes(mode)) {
-        console.log(chalk.red(`Invalid mode: ${mode}. Use 'plan' or 'edit'`));
+      if (!['plan', 'edit', 'full'].includes(mode)) {
+        console.log(chalk.red(`Invalid mode: ${mode}. Use 'plan', 'edit', or 'full'`));
         process.exit(1);
       }
 
@@ -75,6 +81,9 @@ export function registerExecCommand(program: Command): void {
         addDirs: options.addDir,
         json: options.json,
         headless: options.headless ?? true,
+        sessionId: options.sessionId,
+        verbose: options.verbose,
+        timeout: options.timeout,
       };
 
       // Show what we're running

@@ -100,7 +100,7 @@ describe('validateJob', () => {
 
   it('rejects invalid mode', () => {
     const errors = validateJob({ ...makeConfig(), mode: 'yolo' as any });
-    expect(errors).toContain('mode must be plan or edit');
+    expect(errors).toContain('mode must be plan, edit, or full');
   });
 
   it('rejects invalid effort', () => {

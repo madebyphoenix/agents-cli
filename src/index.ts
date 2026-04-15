@@ -319,4 +319,4 @@ program.on('command:*', (operands) => {
 // Run update check on EVERY invocation before parsing
 await checkForUpdates();
 
-program.parse();
+await program.parseAsync();

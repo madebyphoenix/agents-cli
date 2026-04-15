@@ -16,7 +16,7 @@ export interface JobConfig {
   name: string;
   schedule: string;
   agent: AgentId;
-  mode: 'plan' | 'edit';
+  mode: 'plan' | 'edit' | 'full';
   effort: 'fast' | 'default' | 'detailed';
   timeout: string;
   enabled: boolean;
@@ -146,8 +146,8 @@ export function validateJob(config: Partial<JobConfig>): string[] {
   if (config.agent && !ALL_AGENT_IDS.includes(config.agent as AgentId)) {
     errors.push(`agent must be one of: ${ALL_AGENT_IDS.join(', ')}`);
   }
-  if (config.mode && !['plan', 'edit'].includes(config.mode)) {
-    errors.push('mode must be plan or edit');
+  if (config.mode && !['plan', 'edit', 'full'].includes(config.mode)) {
+    errors.push('mode must be plan, edit, or full');
   }
   if (config.effort && !['fast', 'default', 'detailed'].includes(config.effort)) {
     errors.push('effort must be fast, default, or detailed');
