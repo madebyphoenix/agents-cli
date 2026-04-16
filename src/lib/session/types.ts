@@ -1,6 +1,7 @@
-export type SessionAgentId = 'claude' | 'codex' | 'gemini';
+export type SessionAgentId = 'claude' | 'codex' | 'gemini' | 'openclaw';
 
 export const SESSION_AGENTS: SessionAgentId[] = ['claude', 'codex', 'gemini'];
+// Note: 'openclaw' is discovered separately via CLI commands, not filesystem scanning
 
 export interface SessionEvent {
   type: 'message' | 'tool_use' | 'tool_result' | 'thinking' | 'error' | 'init' | 'result';

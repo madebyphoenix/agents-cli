@@ -32,6 +32,10 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
         case 'claude': return discoverClaudeSessions();
         case 'codex': return discoverCodexSessions();
         case 'gemini': return discoverGeminiSessions();
+        case 'openclaw':
+          // OpenClaw sessions are discovered separately by the daemon report command
+          // via CLI commands, not filesystem scanning
+          return Promise.resolve([]);
       }
     })
   );

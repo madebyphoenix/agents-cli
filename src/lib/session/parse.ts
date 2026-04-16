@@ -15,6 +15,10 @@ export function parseSession(filePath: string, agent?: SessionAgentId): SessionE
     case 'claude': return parseClaude(filePath);
     case 'codex': return parseCodex(filePath);
     case 'gemini': return parseGemini(filePath);
+    case 'openclaw':
+      // OpenClaw sessions don't have parseable session files
+      // They are discovered via CLI commands, not file parsing
+      return [];
   }
 }
 
