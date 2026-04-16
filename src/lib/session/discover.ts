@@ -584,6 +584,111 @@ function buildGeminiProjectMap(): Map<string, { name: string; path: string }> {
 }
 
 // ---------------------------------------------------------------------------
+// OpenCode
+// ---------------------------------------------------------------------------
+
+const OPENCODE_DB = path.join(HOME, '.local', 'share', 'opencode', 'opencode.db');
+
+let cachedOpenCodeAccount: string | undefined;
+
+function getOpenCodeAccount(): string | undefined {
+  if (cachedOpenCodeAccount !== undefined) return cachedOpenCodeAccount || undefined;
+
+  // Try control_account table in the DB
+  try {
+    if (fs.existsSync(OPENCODE_DB)) {
+      const out = execSync(
+        `sqlite3 "${OPENCODE_DB}" "SELECT email FROM control_account WHERE active=1 LIMIT 1;"`,
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
+      ).trim();
+      if (out) {
+        cachedOpenCodeAccount = out;
+        return out;
+      }
+    }
+  } catch {}
+
+  cachedOpenCodeAccount = '';
+  return undefined;
+}
+
+async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
+  if (!fs.existsSync(OPENCODE_DB)) return [];
+
+  const account = getOpenCodeAccount();
+
+  try {
+    // Query sessions joined with first user message for topic.
+    // time_created is millisecond epoch. Limit to 200 most recent.
+    const query = `
+      SELECT
+        s.id,
+        s.title,
+        s.directory,
+        s.version,
+        s.time_created,
+        s.parent_id,
+        (SELECT substr(p.data, 1, 300)
+         FROM message m
+         JOIN part p ON p.message_id = m.id AND p.session_id = m.session_id
+         WHERE m.session_id = s.id
+           AND json_extract(m.data, '$.role') = 'user'
+           AND json_extract(p.data, '$.type') = 'text'
+         ORDER BY m.time_created ASC
+         LIMIT 1) AS first_user_text
+      FROM session s
+      WHERE s.parent_id IS NULL
+      ORDER BY s.time_created DESC
+      LIMIT 200;
+    `.replace(/\n/g, ' ');
+
+    const out = execSync(
+      `sqlite3 -separator '|||' "${OPENCODE_DB}" "${query}"`,
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 },
+    );
+
+    const sessions: SessionMeta[] = [];
+
+    for (const line of out.split('\n')) {
+      if (!line.trim()) continue;
+      const [id, title, directory, version, timeCreatedStr, _parentId, firstUserText] = line.split('|||');
+      if (!id) continue;
+
+      const timeCreated = parseInt(timeCreatedStr, 10);
+      const timestamp = isNaN(timeCreated) ? new Date().toISOString() : new Date(timeCreated).toISOString();
+
+      // Extract topic from the part data JSON or fall back to session title
+      let topic = title || undefined;
+      if (firstUserText) {
+        try {
+          const partData = JSON.parse(firstUserText);
+          if (partData.text) {
+            topic = extractTopic(partData.text);
+          }
+        } catch {}
+      }
+
+      sessions.push({
+        id,
+        shortId: id.replace(/^ses_/, '').slice(0, 8),
+        agent: 'opencode',
+        timestamp,
+        project: directory ? path.basename(directory) : undefined,
+        cwd: directory || undefined,
+        filePath: OPENCODE_DB,
+        version: version || undefined,
+        account,
+        topic,
+      });
+    }
+
+    return sessions;
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // OpenClaw
 // ---------------------------------------------------------------------------
 

@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
 import type { SessionAgentId, SessionEvent } from './types.js';
 
 /**
