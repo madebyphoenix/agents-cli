@@ -7,6 +7,9 @@ import type { SessionAgentId, SessionMeta } from './types.js';
 import { SESSION_AGENTS } from './types.js';
 
 const HOME = os.homedir();
+const AGENTS_DIR = path.join(HOME, '.agents');
+const SESSIONS_DIR = path.join(AGENTS_DIR, 'sessions');
+const INDEX_PATH = path.join(SESSIONS_DIR, 'index.jsonl');
 
 export interface DiscoverOptions {
   agent?: SessionAgentId;
@@ -15,7 +18,8 @@ export interface DiscoverOptions {
 }
 
 /**
- * Discover sessions across all installed agents.
+ * Discover sessions across all installed agents, versions, and backups.
+ * Merges with a persistent index so sessions survive version removal.
  * Returns SessionMeta[] sorted by timestamp descending (most recent first).
  */
 export async function discoverSessions(options?: DiscoverOptions): Promise<SessionMeta[]> {
@@ -33,6 +37,18 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
   );
 
   let sessions = results.flat();
+
+  // Merge with persistent index (preserves sessions whose files were removed)
+  const index = loadIndex();
+  const liveIds = new Set(sessions.map(s => s.id));
+  index.forEach((entry, id) => {
+    if (!liveIds.has(id)) {
+      sessions.push(entry);
+    }
+  });
+
+  // Persist updated index
+  saveIndex(sessions);
 
   // Filter by project (case-insensitive substring match)
   if (options?.project) {
@@ -63,45 +79,184 @@ export function resolveSessionById(sessions: SessionMeta[], idQuery: string): Se
 }
 
 // ---------------------------------------------------------------------------
+// Persistent session index
+// ---------------------------------------------------------------------------
+
+function loadIndex(): Map<string, SessionMeta> {
+  const map = new Map<string, SessionMeta>();
+  if (!fs.existsSync(INDEX_PATH)) return map;
+
+  try {
+    const content = fs.readFileSync(INDEX_PATH, 'utf-8');
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line) as SessionMeta;
+        if (entry.id) map.set(entry.id, entry);
+      } catch {}
+    }
+  } catch {}
+
+  return map;
+}
+
+function saveIndex(sessions: SessionMeta[]): void {
+  try {
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    // Deduplicate by id, keeping the first occurrence (live sessions take priority)
+    const seen = new Set<string>();
+    const lines: string[] = [];
+    for (const s of sessions) {
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      lines.push(JSON.stringify({
+        id: s.id,
+        shortId: s.shortId,
+        agent: s.agent,
+        timestamp: s.timestamp,
+        project: s.project,
+        cwd: s.cwd,
+        filePath: s.filePath,
+        gitBranch: s.gitBranch,
+        version: s.version,
+        account: s.account,
+      }));
+    }
+    fs.writeFileSync(INDEX_PATH, lines.join('\n') + '\n', 'utf-8');
+  } catch {}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-version directory scanning
+// ---------------------------------------------------------------------------
+
+/**
+ * Collect all directories to scan for an agent's sessions.
+ * Scans: active config dir, all installed version homes, and backups.
+ * Deduplicates by realpath to avoid double-counting the active symlink.
+ *
+ * @param agent - Agent name (claude, codex, gemini)
+ * @param subdir - Subdirectory within the agent's config dir where sessions live
+ *                 (e.g., 'projects' for Claude, 'sessions' for Codex, 'tmp' for Gemini)
+ */
+function getAgentSessionDirs(agent: string, subdir: string): string[] {
+  const resolved = new Set<string>();
+  const dirs: string[] = [];
+
+  function addDir(dir: string): void {
+    if (!fs.existsSync(dir)) return;
+    const real = safeRealpathSync(dir);
+    const key = real || dir;
+    if (resolved.has(key)) return;
+    resolved.add(key);
+    dirs.push(dir);
+  }
+
+  // 1. Active config (may be a symlink to the current version's home)
+  addDir(path.join(HOME, `.${agent}`, subdir));
+
+  // 2. All installed version homes
+  const versionsBase = path.join(AGENTS_DIR, 'versions', agent);
+  if (fs.existsSync(versionsBase)) {
+    try {
+      for (const version of fs.readdirSync(versionsBase)) {
+        addDir(path.join(versionsBase, version, 'home', `.${agent}`, subdir));
+      }
+    } catch {}
+  }
+
+  // 3. Backups (from before version management was enabled)
+  const backupsBase = path.join(AGENTS_DIR, 'backups', agent);
+  if (fs.existsSync(backupsBase)) {
+    try {
+      for (const ts of fs.readdirSync(backupsBase)) {
+        addDir(path.join(backupsBase, ts, subdir));
+      }
+    } catch {}
+  }
+
+  return dirs;
+}
+
+// ---------------------------------------------------------------------------
+// Claude account info
+// ---------------------------------------------------------------------------
+
+let cachedClaudeAccount: string | undefined;
+
+function getClaudeAccount(): string | undefined {
+  if (cachedClaudeAccount !== undefined) return cachedClaudeAccount || undefined;
+
+  // Check all possible locations for .claude.json
+  const candidates = [
+    path.join(HOME, '.claude.json'),
+  ];
+
+  // Also check version homes (auth files are symlinked there)
+  const versionsBase = path.join(AGENTS_DIR, 'versions', 'claude');
+  if (fs.existsSync(versionsBase)) {
+    try {
+      for (const version of fs.readdirSync(versionsBase)) {
+        candidates.push(path.join(versionsBase, version, 'home', '.claude.json'));
+      }
+    } catch {}
+  }
+
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const data = JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+      const name = data.oauthAccount?.emailAddress || data.oauthAccount?.displayName;
+      if (name) {
+        cachedClaudeAccount = name;
+        return name;
+      }
+    } catch {}
+  }
+
+  cachedClaudeAccount = '';
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Claude
 // ---------------------------------------------------------------------------
 
 async function discoverClaudeSessions(): Promise<SessionMeta[]> {
-  const projectsDir = path.join(HOME, '.claude', 'projects');
-  if (!fs.existsSync(projectsDir)) return [];
-
   const sessions: SessionMeta[] = [];
+  const seen = new Set<string>();
+  const account = getClaudeAccount();
 
-  let projectDirs: string[];
-  try {
-    projectDirs = fs.readdirSync(projectsDir);
-  } catch {
-    return [];
-  }
-
-  for (const dirName of projectDirs) {
-    const dirPath = path.join(projectsDir, dirName);
-    const stat = safeStatSync(dirPath);
-    if (!stat?.isDirectory()) continue;
-
-    let files: string[];
+  for (const projectsDir of getAgentSessionDirs('claude', 'projects')) {
+    let projectDirs: string[];
     try {
-      files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
+      projectDirs = fs.readdirSync(projectsDir);
     } catch {
       continue;
     }
 
-    for (const file of files) {
-      const filePath = path.join(dirPath, file);
-      const sessionId = file.replace('.jsonl', '');
+    for (const dirName of projectDirs) {
+      const dirPath = path.join(projectsDir, dirName);
+      const stat = safeStatSync(dirPath);
+      if (!stat?.isDirectory()) continue;
 
+      let files: string[];
       try {
-        const meta = await readClaudeMeta(filePath, sessionId);
-        if (meta) {
-          sessions.push(meta);
-        }
+        files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
       } catch {
-        // Skip unreadable files
+        continue;
+      }
+
+      for (const file of files) {
+        const sessionId = file.replace('.jsonl', '');
+        if (seen.has(sessionId)) continue;
+        seen.add(sessionId);
+
+        const filePath = path.join(dirPath, file);
+        try {
+          const meta = await readClaudeMeta(filePath, sessionId, account);
+          if (meta) sessions.push(meta);
+        } catch {}
       }
     }
   }
@@ -109,15 +264,24 @@ async function discoverClaudeSessions(): Promise<SessionMeta[]> {
   return sessions;
 }
 
-async function readClaudeMeta(filePath: string, sessionId: string): Promise<SessionMeta | null> {
-  const lines = await readFirstLines(filePath, 5);
+async function readClaudeMeta(filePath: string, sessionId: string, account?: string): Promise<SessionMeta | null> {
+  const lines = await readFirstLines(filePath, 10);
 
+  let topic: string | undefined;
   for (const line of lines) {
     let parsed: any;
     try {
       parsed = JSON.parse(line);
     } catch {
       continue;
+    }
+
+    // Extract topic from first user message
+    if (!topic && parsed.type === 'user' && parsed.message?.content) {
+      const text = Array.isArray(parsed.message.content)
+        ? parsed.message.content.find((b: any) => b.type === 'text')?.text
+        : typeof parsed.message.content === 'string' ? parsed.message.content : undefined;
+      if (text) topic = extractTopic(text);
     }
 
     // Look for first user or assistant line with timestamp/cwd
@@ -132,6 +296,9 @@ async function readClaudeMeta(filePath: string, sessionId: string): Promise<Sess
         cwd,
         filePath,
         gitBranch: parsed.gitBranch || undefined,
+        version: parsed.version || undefined,
+        account,
+        topic,
       };
     }
   }
@@ -144,6 +311,7 @@ async function readClaudeMeta(filePath: string, sessionId: string): Promise<Sess
     agent: 'claude',
     timestamp: stat ? stat.mtime.toISOString() : new Date().toISOString(),
     filePath,
+    account,
   };
 }
 
@@ -152,18 +320,20 @@ async function readClaudeMeta(filePath: string, sessionId: string): Promise<Sess
 // ---------------------------------------------------------------------------
 
 async function discoverCodexSessions(): Promise<SessionMeta[]> {
-  const sessionsDir = path.join(HOME, '.codex', 'sessions');
-  if (!fs.existsSync(sessionsDir)) return [];
-
   const sessions: SessionMeta[] = [];
-  const jsonlFiles = walkForFiles(sessionsDir, '.jsonl', 200);
+  const seen = new Set<string>();
 
-  for (const filePath of jsonlFiles) {
-    try {
-      const meta = await readCodexMeta(filePath);
-      if (meta) sessions.push(meta);
-    } catch {
-      // Skip unreadable files
+  for (const sessionsDir of getAgentSessionDirs('codex', 'sessions')) {
+    const jsonlFiles = walkForFiles(sessionsDir, '.jsonl', 200);
+
+    for (const filePath of jsonlFiles) {
+      try {
+        const meta = await readCodexMeta(filePath);
+        if (meta && !seen.has(meta.id)) {
+          seen.add(meta.id);
+          sessions.push(meta);
+        }
+      } catch {}
     }
   }
 
@@ -171,7 +341,7 @@ async function discoverCodexSessions(): Promise<SessionMeta[]> {
 }
 
 async function readCodexMeta(filePath: string): Promise<SessionMeta | null> {
-  const lines = await readFirstLines(filePath, 1);
+  const lines = await readFirstLines(filePath, 5);
   if (lines.length === 0) return null;
 
   let parsed: any;
@@ -187,6 +357,19 @@ async function readCodexMeta(filePath: string): Promise<SessionMeta | null> {
   const sessionId = payload.id || '';
   if (!sessionId) return null;
 
+  // Extract topic from first user message in subsequent lines
+  let topic: string | undefined;
+  for (let i = 1; i < lines.length; i++) {
+    try {
+      const ev = JSON.parse(lines[i]);
+      if (ev.type === 'message' && ev.role === 'user' && ev.content) {
+        const text = typeof ev.content === 'string' ? ev.content
+          : Array.isArray(ev.content) ? ev.content.find((b: any) => b.type === 'input_text')?.text : undefined;
+        if (text) { topic = extractTopic(text); break; }
+      }
+    } catch {}
+  }
+
   const cwd = payload.cwd || '';
   return {
     id: sessionId,
@@ -197,6 +380,8 @@ async function readCodexMeta(filePath: string): Promise<SessionMeta | null> {
     cwd,
     filePath,
     gitBranch: payload.git?.branch || undefined,
+    version: payload.version || undefined,
+    topic,
   };
 }
 
@@ -205,40 +390,38 @@ async function readCodexMeta(filePath: string): Promise<SessionMeta | null> {
 // ---------------------------------------------------------------------------
 
 async function discoverGeminiSessions(): Promise<SessionMeta[]> {
-  const tmpDir = path.join(HOME, '.gemini', 'tmp');
-  if (!fs.existsSync(tmpDir)) return [];
-
-  // Build project hash -> name map
   const projectMap = buildGeminiProjectMap();
-
   const sessions: SessionMeta[] = [];
+  const seen = new Set<string>();
 
-  let hashDirs: string[];
-  try {
-    hashDirs = fs.readdirSync(tmpDir);
-  } catch {
-    return [];
-  }
-
-  for (const hashDir of hashDirs) {
-    const chatsDir = path.join(tmpDir, hashDir, 'chats');
-    if (!fs.existsSync(chatsDir)) continue;
-
-    let chatFiles: string[];
+  for (const tmpDir of getAgentSessionDirs('gemini', 'tmp')) {
+    let hashDirs: string[];
     try {
-      chatFiles = fs.readdirSync(chatsDir).filter(f => f.endsWith('.json'));
+      hashDirs = fs.readdirSync(tmpDir);
     } catch {
       continue;
     }
 
-    for (const file of chatFiles) {
-      const filePath = path.join(chatsDir, file);
+    for (const hashDir of hashDirs) {
+      const chatsDir = path.join(tmpDir, hashDir, 'chats');
+      if (!fs.existsSync(chatsDir)) continue;
 
+      let chatFiles: string[];
       try {
-        const meta = readGeminiMeta(filePath, hashDir, projectMap);
-        if (meta) sessions.push(meta);
+        chatFiles = fs.readdirSync(chatsDir).filter(f => f.endsWith('.json'));
       } catch {
-        // Skip unreadable files
+        continue;
+      }
+
+      for (const file of chatFiles) {
+        const filePath = path.join(chatsDir, file);
+        try {
+          const meta = readGeminiMeta(filePath, hashDir, projectMap);
+          if (meta && !seen.has(meta.id)) {
+            seen.add(meta.id);
+            sessions.push(meta);
+          }
+        } catch {}
       }
     }
   }
@@ -271,8 +454,12 @@ function readGeminiMeta(
   const project = projectInfo?.name || hashDir.slice(0, 12);
   const cwd = projectInfo?.path;
 
-  // Count messages roughly by counting occurrences of "type":" in the full file size
   const stat = safeStatSync(filePath);
+
+  // Try to extract first user message from the header bytes
+  let topic: string | undefined;
+  const userMsgMatch = header.match(/"role"\s*:\s*"user"[\s\S]*?"text"\s*:\s*"([^"]{1,200})"/);
+  if (userMsgMatch) topic = extractTopic(userMsgMatch[1]);
 
   return {
     id: sessionId,
@@ -282,6 +469,7 @@ function readGeminiMeta(
     project,
     cwd,
     filePath,
+    topic,
   };
 }
 
@@ -421,4 +609,20 @@ function safeStatSync(p: string): fs.Stats | null {
   } catch {
     return null;
   }
+}
+
+function safeRealpathSync(p: string): string | null {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+function extractTopic(text: string): string {
+  // Strip leading whitespace, slash commands, and system tags
+  let clean = text.replace(/^[\s\n]+/, '').replace(/<[^>]+>/g, '').trim();
+  // Take first line only
+  const firstLine = clean.split('\n')[0].trim();
+  return firstLine;
 }

@@ -22,7 +22,7 @@ CLI for managing AI coding agent versions, config, and sessions (Claude, Codex, 
   versions/{agent}/{version}/ # Installed CLIs (local-only)
   shims/                      # Version switching scripts (local-only)
   backups/{agent}/{timestamp}/ # Config backups from version switches
-  cron/                       # Scheduled jobs
+  routines/                   # Scheduled jobs
 ```
 
 ### Version Switching
@@ -45,7 +45,7 @@ src/
   commands/          # Command implementations
     sessions.ts      # agents sessions list/view
     exec.ts          # agents exec
-    cron.ts          # agents cron
+    routines.ts      # agents routines
     view.ts          # agents view
     ...
   lib/
@@ -55,7 +55,7 @@ src/
     versions.ts      # Install, remove, sync resources
     shims.ts         # Shim generation, config symlink switching
     exec.ts          # Agent execution (command building, spawning)
-    cron.ts          # Scheduled job config
+    routines.ts      # Scheduled job config
     runner.ts        # Job execution with sandboxing
     session/         # Session discovery, parsing, rendering
       types.ts       # SessionEvent, SessionMeta, ViewMode
@@ -121,7 +121,7 @@ agents sessions view <id> --json      # Normalized events as JSON
 agents exec <agent> <prompt> # Execute agent non-interactively
 
 # Automation
-agents cron                  # Manage scheduled jobs
+agents routines              # Manage scheduled jobs
 agents daemon                # Manage the scheduler daemon
 
 # Env
@@ -159,4 +159,4 @@ bun install && bun run build && bun test
 See `docs/` for architecture deep-dives:
 - `01-version-management.md` - Version install, switching, isolation
 - `02-resource-sync.md` - Resource syncing between central and version homes
-- `03-cron-jobs.md` - Scheduled jobs with sandboxed permissions
+- `03-routines.md` - Scheduled jobs with sandboxed permissions

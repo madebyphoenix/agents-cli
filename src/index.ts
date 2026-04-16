@@ -37,7 +37,7 @@ import { registerMcpCommands } from './commands/mcp.js';
 import { registerVersionsCommands } from './commands/versions.js';
 import { registerPackagesCommands } from './commands/packages.js';
 import { registerDaemonCommands } from './commands/daemon.js';
-import { registerCronCommands } from './commands/cron.js';
+import { registerRoutinesCommands } from './commands/routines.js';
 import { registerExecCommand } from './commands/exec.js';
 import { registerSubagentsCommands } from './commands/subagents.js';
 import { registerPluginsCommands } from './commands/plugins.js';
@@ -94,8 +94,8 @@ Sessions:
   sessions                        List and view past sessions across all agents
 
 Automation:
-  cron                            Schedule agents to run on a timer
-  daemon                          Start/stop the cron scheduler
+  routines                        Schedule agents to run on a timer
+  daemon                          Start/stop the routines scheduler
   exec <agent> <prompt>           Run an agent non-interactively
 
 Config sync (portable setup via git):
@@ -291,22 +291,24 @@ registerPluginsCommands(program);
 registerVersionsCommands(program);
 registerPackagesCommands(program);
 registerDaemonCommands(program);
-registerCronCommands(program);
+registerRoutinesCommands(program);
 registerExecCommand(program);
 registerSessionsCommands(program);
 registerSyncCommand(program);
 
-// Deprecated 'jobs' alias for 'cron'
-program
-  .command('jobs', { hidden: true })
-  .allowUnknownOption()
-  .allowExcessArguments()
-  .action(async () => {
-    console.log(chalk.yellow('Deprecated: Use "agents cron" instead of "agents jobs"\n'));
-    const args = process.argv.slice(2);
-    args[0] = 'cron';
-    await program.parseAsync(['node', 'agents', ...args]);
-  });
+// Deprecated 'jobs' and 'cron' aliases for 'routines'
+for (const alias of ['jobs', 'cron']) {
+  program
+    .command(alias, { hidden: true })
+    .allowUnknownOption()
+    .allowExcessArguments()
+    .action(async () => {
+      console.log(chalk.yellow(`Deprecated: Use "agents routines" instead of "agents ${alias}"\n`));
+      const args = process.argv.slice(2);
+      args[0] = 'routines';
+      await program.parseAsync(['node', 'agents', ...args]);
+    });
+}
 
 registerPullCommand(program);
 registerPushCommand(program);

@@ -1,6 +1,6 @@
 import { Cron } from 'croner';
-import type { JobConfig } from './cron.js';
-import { listJobs, deleteJob } from './cron.js';
+import type { JobConfig } from './routines.js';
+import { listJobs, deleteJob } from './routines.js';
 
 interface ScheduledJob {
   config: JobConfig;

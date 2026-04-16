@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
 import { Cron } from 'croner';
-import { getCronDir, getRunsDir, ensureAgentsDir } from './state.js';
+import { getRoutinesDir, getRunsDir, ensureAgentsDir } from './state.js';
 import type { AgentId } from './types.js';
 import { ALL_AGENT_IDS } from './agents.js';
 
@@ -50,7 +50,7 @@ const JOB_DEFAULTS: Partial<JobConfig> = {
 
 export function listJobs(): JobConfig[] {
   ensureAgentsDir();
-  const jobsDir = getCronDir();
+  const jobsDir = getRoutinesDir();
   if (!fs.existsSync(jobsDir)) return [];
 
   const files = fs.readdirSync(jobsDir).filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'));
@@ -64,7 +64,7 @@ export function listJobs(): JobConfig[] {
 
 export function readJob(name: string): JobConfig | null {
   ensureAgentsDir();
-  const jobsDir = getCronDir();
+  const jobsDir = getRoutinesDir();
   for (const ext of ['.yml', '.yaml']) {
     const filePath = path.join(jobsDir, name + ext);
     if (fs.existsSync(filePath)) {
@@ -92,7 +92,7 @@ function readJobFile(filePath: string): JobConfig | null {
 
 export function writeJob(config: JobConfig): void {
   ensureAgentsDir();
-  const jobsDir = getCronDir();
+  const jobsDir = getRoutinesDir();
   const filePath = path.join(jobsDir, config.name + '.yml');
 
   const output: Record<string, unknown> = { ...config };
@@ -106,7 +106,7 @@ export function writeJob(config: JobConfig): void {
 }
 
 export function deleteJob(name: string): boolean {
-  const jobsDir = getCronDir();
+  const jobsDir = getRoutinesDir();
   for (const ext of ['.yml', '.yaml']) {
     const filePath = path.join(jobsDir, name + ext);
     if (fs.existsSync(filePath)) {
@@ -261,7 +261,7 @@ export function getRunDir(jobName: string, runId: string): string {
 }
 
 export function discoverJobsFromRepo(repoPath: string): Array<{ name: string; path: string }> {
-  const jobsPath = path.join(repoPath, 'cron');
+  const jobsPath = path.join(repoPath, 'routines');
   if (!fs.existsSync(jobsPath)) return [];
 
   return fs.readdirSync(jobsPath)
@@ -277,7 +277,7 @@ export function jobExists(name: string): boolean {
 }
 
 export function getJobPath(name: string): string | null {
-  const jobsDir = getCronDir();
+  const jobsDir = getRoutinesDir();
   for (const ext of ['.yml', '.yaml']) {
     const filePath = path.join(jobsDir, name + ext);
     if (fs.existsSync(filePath)) {

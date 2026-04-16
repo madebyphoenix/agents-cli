@@ -26,6 +26,9 @@ export interface SessionMeta {
   filePath: string;
   gitBranch?: string;
   messageCount?: number;
+  version?: string;
+  account?: string;
+  topic?: string;
 }
 
 export type ViewMode = 'transcript' | 'summary' | 'trace' | 'json';

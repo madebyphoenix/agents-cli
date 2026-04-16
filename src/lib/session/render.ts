@@ -38,8 +38,9 @@ export function renderTranscript(events: SessionEvent[]): string {
 }
 
 /**
- * Render session as an activity summary (fingerprint).
- * Shows files touched, commands run, and the final message.
+ * Render session as a markdown activity summary.
+ * Groups files by directory, shows commands in a code block,
+ * and gives the final message room to breathe.
  */
 export function renderSummary(events: SessionEvent[]): string {
   const filesRead = new Set<string>();
@@ -60,63 +61,187 @@ export function renderSummary(events: SessionEvent[]): string {
       const tool = event.tool || '';
       const p = event.path || event.args?.file_path || event.args?.path || '';
 
-      // Classify file operations
       if (['Read', 'read_file', 'view_file', 'cat_file', 'get_file'].includes(tool)) {
-        if (p) filesRead.add(shortenPath(p));
+        if (p) filesRead.add(p);
       } else if (['Write', 'Edit', 'write_file', 'edit_file', 'create_file', 'replace', 'patch'].includes(tool)) {
-        if (p) filesModified.add(shortenPath(p));
+        if (p) filesModified.add(p);
       }
 
-      // Collect commands
       if (event.command) {
         const cmd = event.command.replace(/\n/g, ' ').trim();
-        if (cmd.length <= 120) {
-          commands.push(cmd);
-        } else {
-          commands.push(cmd.slice(0, 117) + '...');
-        }
+        if (cmd) commands.push(cmd.length <= 80 ? cmd : cmd.slice(0, 77) + '...');
       }
     }
   }
 
-  const sections: string[] = [];
+  const md: string[] = [];
 
+  // Prompt -- clean up agent preambles, show the human-written part
   if (firstUserMessage) {
-    const truncated = firstUserMessage.length > 200
-      ? firstUserMessage.slice(0, 197) + '...'
-      : firstUserMessage;
-    sections.push(`Prompt: ${truncated}`);
-  }
-
-  if (filesRead.size > 0) {
-    sections.push(`\nFiles read: ${filesRead.size}`);
-    for (const f of filesRead) {
-      sections.push(`  ${f}`);
+    const cleaned = cleanPrompt(firstUserMessage);
+    if (cleaned) {
+      const promptText = cleaned.length > 300 ? cleaned.slice(0, 297) + '...' : cleaned;
+      md.push(`**Prompt:** ${promptText.split('\n')[0]}`);
+      const secondLine = promptText.split('\n')[1]?.trim();
+      if (secondLine) md.push(secondLine);
+      md.push('');
     }
   }
 
+  const hasActivity = filesModified.size > 0 || filesRead.size > 0 || commands.length > 0;
+
+  // Files modified (most important -- what changed)
   if (filesModified.size > 0) {
-    sections.push(`\nFiles modified: ${filesModified.size}`);
-    for (const f of filesModified) {
-      sections.push(`  ${f}`);
-    }
+    md.push(`**Modified** (${filesModified.size})`);
+    const grouped = groupByDirectory(filesModified);
+    formatFileGroups(md, grouped);
+    md.push('');
   }
 
+  // Files read -- compact, just show count + dirs
+  if (filesRead.size > 0) {
+    if (filesRead.size <= 5) {
+      md.push(`**Read** (${filesRead.size})`);
+      const grouped = groupByDirectory(filesRead);
+      formatFileGroups(md, grouped);
+    } else {
+      // For many files, just list the directories
+      const grouped = groupByDirectory(filesRead);
+      const dirList = Array.from(grouped.keys()).map(d => `\`${d}/\``).join(', ');
+      md.push(`**Read** ${filesRead.size} files across ${dirList}`);
+    }
+    md.push('');
+  }
+
+  // Commands -- compact code block
   if (commands.length > 0) {
-    sections.push(`\nCommands: ${commands.length}`);
-    for (const cmd of commands) {
-      sections.push(`  ${cmd}`);
-    }
+    md.push(`**Commands** (${commands.length})`);
+    md.push('```');
+    const shown = commands.slice(0, 10);
+    for (const cmd of shown) md.push(cmd);
+    if (commands.length > 10) md.push(`# ... +${commands.length - 10} more`);
+    md.push('```');
+    md.push('');
   }
 
+  // Final message -- the most important part
   if (lastAssistantMessage) {
-    const truncated = lastAssistantMessage.length > 300
-      ? lastAssistantMessage.slice(0, 297) + '...'
+    if (hasActivity) md.push('---');
+    md.push('');
+    const truncated = lastAssistantMessage.length > 600
+      ? lastAssistantMessage.slice(0, 597) + '...'
       : lastAssistantMessage;
-    sections.push(`\nFinal message:\n${truncated}`);
+    md.push(truncated);
+    md.push('');
+  } else if (!hasActivity) {
+    md.push('*No activity recorded in this session.*');
+    md.push('');
   }
 
-  return sections.join('\n');
+  return md.join('\n');
+}
+
+function formatFileGroups(md: string[], grouped: Map<string, string[]>): void {
+  if (grouped.size === 1) {
+    // Single directory -- inline list
+    const [dir, files] = Array.from(grouped.entries())[0];
+    for (const f of files) md.push(`- \`${dir}/${f}\``);
+  } else {
+    // Multiple directories -- group with bold headers
+    grouped.forEach((files, dir) => {
+      md.push(`  **${dir}/** ${files.map(f => '\`' + f + '\`').join(', ')}`);
+    });
+  }
+}
+
+/**
+ * Strip agent-injected preambles from user prompts.
+ * Codex wraps the real prompt in <environment_context>...</environment_context>
+ * and <user_instructions>...</user_instructions> tags.
+ */
+function cleanPrompt(raw: string): string {
+  let text = raw;
+
+  // Strip XML-style blocks like <environment_context>...</environment_context>
+  text = text.replace(/<\/?[a-z_]+>/gi, '');
+
+  // Strip metadata lines -- key:value pairs and bare values that look like paths/env
+  const lines = text.split('\n');
+  const meaningful: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // Skip key:value metadata
+    if (/^(cwd|shell|current_date|timezone|os|platform|arch|home|user)\b/i.test(trimmed)) continue;
+    // Skip bare absolute paths (e.g., /Users/muqsit/src/...)
+    if (/^\/[\w/.-]+$/.test(trimmed)) continue;
+    // Skip bare shell names
+    if (/^(bash|zsh|fish|sh|dash)$/i.test(trimmed)) continue;
+    // Skip bare dates
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) continue;
+    // Skip timezone identifiers
+    if (/^[A-Z][a-z]+\/[A-Z][a-z]+/.test(trimmed) && trimmed.split('/').length === 2) continue;
+    meaningful.push(trimmed);
+  }
+
+  return meaningful.join('\n').trim();
+}
+
+/**
+ * Group file paths by their parent directory.
+ * Returns Map<shortDir, basename[]> sorted by most files first.
+ */
+function groupByDirectory(paths: Set<string>): Map<string, string[]> {
+  const groups = new Map<string, string[]>();
+  const home = process.env.HOME || '';
+
+  paths.forEach(p => {
+    // Find a meaningful short directory name
+    const dir = extractShortDir(p, home);
+    const basename = p.split('/').pop() || p;
+    const existing = groups.get(dir) || [];
+    existing.push(basename);
+    groups.set(dir, existing);
+  });
+
+  // Sort by count descending
+  const sorted = new Map(
+    Array.from(groups.entries()).sort((a, b) => b[1].length - a[1].length)
+  );
+
+  return sorted;
+}
+
+/**
+ * Extract a short, meaningful directory label from a full path.
+ * Uses the session's cwd (project root) to strip the prefix, falling back
+ * to heuristics if cwd isn't available.
+ *
+ * /Users/me/src/github.com/user/project/src/lib/session/types.ts
+ *  with cwd=/Users/me/src/github.com/user/project -> src/lib/session
+ */
+function extractShortDir(fullPath: string, home: string): string {
+  let p = fullPath;
+
+  // Strip home prefix
+  if (home && p.startsWith(home + '/')) p = p.slice(home.length + 1);
+
+  const parts = p.split('/');
+  parts.pop(); // remove filename
+
+  // Walk from the end to find a code-structure directory (src/, lib/, tests/, etc.)
+  // Skip the outermost 'src' if it's a Go-style path (src/github.com/...)
+  const codeMarkers = new Set(['src', 'lib', 'tests', 'test', 'cmd', 'pkg', 'internal', 'app', 'components', 'scripts']);
+
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (!codeMarkers.has(parts[i])) continue;
+    // Skip if next segment looks like a domain (github.com, golang.org, etc.)
+    if (i + 1 < parts.length && parts[i + 1].includes('.')) continue;
+    return parts.slice(i).join('/');
+  }
+
+  // No code marker found -- show just the last dir (project name)
+  return parts.length > 0 ? parts[parts.length - 1] : '.';
 }
 
 /**

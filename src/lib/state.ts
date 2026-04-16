@@ -14,7 +14,7 @@ const MEMORY_DIR = path.join(AGENTS_DIR, 'memory');
 const INSTRUCTIONS_FILE = path.join(AGENTS_DIR, 'instructions.md');
 const MCP_CONFIG_FILE = path.join(AGENTS_DIR, 'mcp.json');
 const PACKAGES_DIR = path.join(AGENTS_DIR, 'packages');
-const CRON_DIR = path.join(AGENTS_DIR, 'cron');
+const ROUTINES_DIR = path.join(AGENTS_DIR, 'routines');
 const RUNS_DIR = path.join(AGENTS_DIR, 'runs');
 const DRIVES_DIR = path.join(AGENTS_DIR, 'drives');
 const VERSIONS_DIR = path.join(AGENTS_DIR, 'versions');
@@ -76,9 +76,12 @@ export function getPackagesDir(): string {
   return PACKAGES_DIR;
 }
 
-export function getCronDir(): string {
-  return CRON_DIR;
+export function getRoutinesDir(): string {
+  return ROUTINES_DIR;
 }
+
+/** @deprecated Use getRoutinesDir() */
+export const getCronDir = getRoutinesDir;
 
 export function getRunsDir(): string {
   return RUNS_DIR;
@@ -147,8 +150,8 @@ export function ensureAgentsDir(): void {
   if (!fs.existsSync(PACKAGES_DIR)) {
     fs.mkdirSync(PACKAGES_DIR, { recursive: true });
   }
-  if (!fs.existsSync(CRON_DIR)) {
-    fs.mkdirSync(CRON_DIR, { recursive: true });
+  if (!fs.existsSync(ROUTINES_DIR)) {
+    fs.mkdirSync(ROUTINES_DIR, { recursive: true });
   }
   if (!fs.existsSync(RUNS_DIR)) {
     fs.mkdirSync(RUNS_DIR, { recursive: true });

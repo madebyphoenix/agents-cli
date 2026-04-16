@@ -118,6 +118,89 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     supportsHooks: true,
     capabilities: { hooks: true, mcp: true, allowlist: false, skills: true, commands: false, plugins: true },
   },
+  copilot: {
+    id: 'copilot',
+    name: 'Copilot',
+    cliCommand: 'copilot',
+    npmPackage: '@github/copilot',
+    configDir: path.join(HOME, '.copilot'),
+    commandsDir: path.join(HOME, '.copilot', 'commands'),
+    commandsSubdir: 'commands',
+    skillsDir: path.join(HOME, '.copilot', 'skills'),
+    hooksDir: 'hooks',
+    instructionsFile: 'AGENTS.md',
+    format: 'markdown',
+    variableSyntax: '$ARGUMENTS',
+    supportsHooks: false,
+    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true, commands: true, plugins: false },
+  },
+  amp: {
+    id: 'amp',
+    name: 'Amp',
+    cliCommand: 'amp',
+    npmPackage: '@sourcegraph/amp',
+    configDir: path.join(HOME, '.config', 'amp'),
+    commandsDir: path.join(HOME, '.config', 'amp', 'commands'),
+    commandsSubdir: 'commands',
+    skillsDir: path.join(HOME, '.config', 'amp', 'skills'),
+    hooksDir: 'hooks',
+    instructionsFile: 'AGENTS.md',
+    format: 'markdown',
+    variableSyntax: '$ARGUMENTS',
+    supportsHooks: false,
+    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true, commands: true, plugins: false },
+  },
+  kiro: {
+    id: 'kiro',
+    name: 'Kiro',
+    cliCommand: 'kiro-cli',
+    npmPackage: '',
+    installScript: 'brew install --cask kiro-cli',
+    configDir: path.join(HOME, '.kiro'),
+    commandsDir: path.join(HOME, '.kiro', 'commands'),
+    commandsSubdir: 'commands',
+    skillsDir: path.join(HOME, '.kiro', 'skills'),
+    hooksDir: 'hooks',
+    instructionsFile: 'AGENTS.md',
+    format: 'markdown',
+    variableSyntax: '$ARGUMENTS',
+    supportsHooks: false,
+    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true, commands: true, plugins: false },
+  },
+  goose: {
+    id: 'goose',
+    name: 'Goose',
+    cliCommand: 'goose',
+    npmPackage: '',
+    installScript: 'brew install block-goose-cli',
+    configDir: path.join(HOME, '.config', 'goose'),
+    commandsDir: path.join(HOME, '.config', 'goose', 'commands'),
+    commandsSubdir: 'commands',
+    skillsDir: path.join(HOME, '.config', 'goose', 'skills'),
+    hooksDir: 'hooks',
+    instructionsFile: 'AGENTS.md',
+    format: 'markdown',
+    variableSyntax: '$ARGUMENTS',
+    supportsHooks: false,
+    capabilities: { hooks: false, mcp: true, allowlist: false, skills: false, commands: false, plugins: false },
+  },
+  roo: {
+    id: 'roo',
+    name: 'Roo Code',
+    cliCommand: 'roo',
+    npmPackage: '',
+    installScript: 'curl -fsSL https://raw.githubusercontent.com/RooCodeInc/Roo-Code/main/apps/cli/install.sh | sh',
+    configDir: path.join(HOME, '.roo'),
+    commandsDir: path.join(HOME, '.roo', 'commands'),
+    commandsSubdir: 'commands',
+    skillsDir: path.join(HOME, '.roo', 'skills'),
+    hooksDir: 'hooks',
+    instructionsFile: 'AGENTS.md',
+    format: 'markdown',
+    variableSyntax: '$ARGUMENTS',
+    supportsHooks: false,
+    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true, commands: true, plugins: false },
+  },
 };
 
 export const ALL_AGENT_IDS: AgentId[] = Object.keys(AGENTS) as AgentId[];
@@ -581,6 +664,16 @@ export function getMcpConfigPathForHome(agentId: AgentId, home: string): string 
       return path.join(home, '.cursor', 'mcp.json');
     case 'openclaw':
       return path.join(home, '.openclaw', 'openclaw.json');
+    case 'copilot':
+      return path.join(home, '.copilot', 'mcp-config.json');
+    case 'amp':
+      return path.join(home, '.config', 'amp', 'settings.json');
+    case 'kiro':
+      return path.join(home, '.kiro', 'settings', 'mcp.json');
+    case 'goose':
+      return path.join(home, '.config', 'goose', 'config.yaml');
+    case 'roo':
+      return path.join(home, '.roo', 'mcp.json');
     default:
       return path.join(home, `.${agentId}`, 'settings.json');
   }
@@ -604,6 +697,16 @@ function getProjectMcpConfigPath(agentId: AgentId, cwd: string = process.cwd()):
       return path.join(cwd, `.${agentId}`, 'openclaw.json');
     case 'gemini':
       return path.join(cwd, `.${agentId}`, 'settings.json');
+    case 'copilot':
+      return path.join(cwd, '.copilot', 'mcp-config.json');
+    case 'amp':
+      return path.join(cwd, '.amp', 'settings.json');
+    case 'kiro':
+      return path.join(cwd, '.kiro', 'settings', 'mcp.json');
+    case 'goose':
+      return path.join(cwd, '.goose', 'config.yaml');
+    case 'roo':
+      return path.join(cwd, '.roo', 'mcp.json');
     default:
       return path.join(cwd, `.${agentId}`, 'settings.json');
   }
@@ -738,6 +841,19 @@ export const AGENT_NAME_ALIASES: Record<string, AgentId> = {
   openclaw: 'openclaw',
   claw: 'openclaw',
   ocl: 'openclaw',
+  copilot: 'copilot',
+  'copilot-cli': 'copilot',
+  'github-copilot': 'copilot',
+  gh: 'copilot',
+  amp: 'amp',
+  sourcegraph: 'amp',
+  kiro: 'kiro',
+  'kiro-cli': 'kiro',
+  goose: 'goose',
+  'block-goose': 'goose',
+  roo: 'roo',
+  'roo-code': 'roo',
+  roocode: 'roo',
 };
 
 export function resolveAgentName(input: string): AgentId | null {

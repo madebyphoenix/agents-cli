@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import type { AgentId } from './types.js';
-import { parseTimeout } from './cron.js';
+import { parseTimeout } from './routines.js';
 
 export type ExecMode = 'plan' | 'edit' | 'full';
 export type ExecEffort = 'fast' | 'default' | 'detailed';
@@ -49,6 +49,31 @@ export const EFFORT_MODELS: Record<AgentId, Record<ExecEffort, string>> = {
     detailed: 'zai-coding-plan/glm-4.7',
   },
   openclaw: {
+    fast: 'claude-haiku-4-5-20251001',
+    default: 'claude-sonnet-4-5',
+    detailed: 'claude-opus-4-5',
+  },
+  copilot: {
+    fast: 'gpt-4o-mini',
+    default: 'gpt-4o',
+    detailed: 'claude-sonnet-4-5',
+  },
+  amp: {
+    fast: 'claude-haiku-4-5-20251001',
+    default: 'claude-sonnet-4-5',
+    detailed: 'claude-opus-4-5',
+  },
+  kiro: {
+    fast: 'claude-haiku-4-5-20251001',
+    default: 'claude-sonnet-4-5',
+    detailed: 'claude-opus-4-5',
+  },
+  goose: {
+    fast: 'gpt-4o-mini',
+    default: 'gpt-4o',
+    detailed: 'claude-sonnet-4-5',
+  },
+  roo: {
     fast: 'claude-haiku-4-5-20251001',
     default: 'claude-sonnet-4-5',
     detailed: 'claude-opus-4-5',
@@ -137,6 +162,55 @@ export const AGENT_COMMANDS: Record<AgentId, AgentCommandTemplate> = {
       full: ['--mode', 'full'],
     },
     jsonFlags: ['--output-format', 'stream-json'],
+    modelFlag: '--model',
+  },
+  copilot: {
+    base: ['copilot'],
+    promptFlag: 'positional',
+    modeFlags: {
+      plan: [],
+      edit: [],
+      full: [],
+    },
+    modelFlag: '--model',
+  },
+  amp: {
+    base: ['amp'],
+    promptFlag: 'positional',
+    modeFlags: {
+      plan: ['--mode', 'plan'],
+      edit: ['--mode', 'edit'],
+      full: ['--mode', 'edit'],
+    },
+    modelFlag: '--model',
+  },
+  kiro: {
+    base: ['kiro-cli'],
+    promptFlag: 'positional',
+    modeFlags: {
+      plan: [],
+      edit: [],
+      full: [],
+    },
+    modelFlag: '--model',
+  },
+  goose: {
+    base: ['goose', 'run'],
+    promptFlag: 'positional',
+    modeFlags: {
+      plan: [],
+      edit: [],
+      full: [],
+    },
+  },
+  roo: {
+    base: ['roo'],
+    promptFlag: 'positional',
+    modeFlags: {
+      plan: ['--mode', 'architect'],
+      edit: ['--mode', 'code'],
+      full: ['--mode', 'code'],
+    },
     modelFlag: '--model',
   },
 };

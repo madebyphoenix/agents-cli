@@ -1,11 +1,15 @@
+import * as fs from 'fs';
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import type { SessionAgentId, ViewMode } from '../lib/session/types.js';
+import { select } from '@inquirer/prompts';
+import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types.js';
 import { SESSION_AGENTS } from '../lib/session/types.js';
 import { discoverSessions, resolveSessionById } from '../lib/session/discover.js';
 import { parseSession } from '../lib/session/parse.js';
 import { renderTranscript, renderSummary, renderTrace, renderJson } from '../lib/session/render.js';
+import { renderMarkdown } from '../lib/markdown.js';
+import { isPromptCancelled } from './utils.js';
 
 const AGENT_COLORS: Record<SessionAgentId, (s: string) => string> = {
   claude: chalk.magenta,
@@ -20,7 +24,7 @@ interface ListOptions {
 }
 
 interface ViewOptions {
-  summary?: boolean;
+  transcript?: boolean;
   trace?: boolean;
   json?: boolean;
 }
@@ -53,10 +57,10 @@ async function listAction(options: ListOptions): Promise<void> {
     console.log(
       chalk.gray(
         padRight('ID', 10) +
-        padRight('Agent', 8) +
-        padRight('Project', 20) +
-        padRight('When', 16) +
-        'Branch'
+        padRight('Agent', 18) +
+        padRight('Project', 16) +
+        padRight('When', 14) +
+        'Topic'
       )
     );
 
@@ -64,14 +68,17 @@ async function listAction(options: ListOptions): Promise<void> {
       const agentColor = AGENT_COLORS[session.agent] || chalk.white;
       const when = formatRelativeTime(session.timestamp);
       const project = session.project || '-';
-      const branch = session.gitBranch || '';
+      const agentLabel = session.version
+        ? `${session.agent}@${session.version}`
+        : session.agent;
+      const topic = session.topic || '';
 
       console.log(
         chalk.white(padRight(session.shortId, 10)) +
-        agentColor(padRight(session.agent, 8)) +
-        chalk.cyan(padRight(project.length > 18 ? project.slice(0, 17) + '.' : project, 20)) +
-        chalk.gray(padRight(when, 16)) +
-        chalk.gray(branch)
+        agentColor(padRight(truncate(agentLabel, 16), 18)) +
+        chalk.cyan(padRight(truncate(project, 14), 16)) +
+        chalk.gray(padRight(when, 14)) +
+        chalk.white(truncate(topic, 40))
       );
     }
 
@@ -83,57 +90,126 @@ async function listAction(options: ListOptions): Promise<void> {
   }
 }
 
-async function viewAction(idQuery: string, options: ViewOptions): Promise<void> {
-  // Determine output mode
-  let mode: ViewMode = 'transcript';
-  if (options.summary) mode = 'summary';
+async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void> {
+  if (!fs.existsSync(session.filePath)) {
+    console.log(chalk.yellow('Session transcript not available (file no longer exists).'));
+    console.log(chalk.gray(`Path: ${session.filePath}`));
+    if (session.version) console.log(chalk.gray(`Version: ${session.agent} ${session.version}`));
+    if (session.project) console.log(chalk.gray(`Project: ${session.project}`));
+    if (session.account) console.log(chalk.gray(`Account: ${session.account}`));
+    console.log(chalk.gray(`Time: ${session.timestamp}`));
+    return;
+  }
+
+  // Session header
+  const agentColor = AGENT_COLORS[session.agent] || chalk.white;
+  console.log('');
+  console.log(
+    agentColor(session.agent) +
+    (session.version ? chalk.yellow(` ${session.version}`) : '') +
+    (session.project ? chalk.cyan(` ${session.project}`) : '') +
+    chalk.gray(` ${formatRelativeTime(session.timestamp)}`) +
+    (session.account ? chalk.gray(` (${session.account})`) : '')
+  );
+  console.log(chalk.gray('─'.repeat(60)));
+
+  const spinner = ora(`Parsing ${session.agent} session...`).start();
+  const events = parseSession(session.filePath, session.agent);
+  spinner.stop();
+
+  let output: string;
+  switch (mode) {
+    case 'transcript': output = renderTranscript(events); break;
+    case 'summary': output = renderMarkdown(renderSummary(events)); break;
+    case 'trace': output = renderMarkdown(renderTrace(events)); break;
+    case 'json': output = renderJson(events); break;
+  }
+
+  process.stdout.write(output);
+}
+
+function formatPickerLabel(s: SessionMeta): string {
+  const agentColor = AGENT_COLORS[s.agent] || chalk.white;
+  const when = formatRelativeTime(s.timestamp);
+  const project = s.project || '-';
+  const version = s.version ? chalk.yellow(s.version) : '';
+
+  return (
+    chalk.white(padRight(s.shortId, 10)) +
+    agentColor(padRight(s.agent, 8)) +
+    chalk.cyan(padRight(truncate(project, 16), 18)) +
+    chalk.gray(padRight(when, 14)) +
+    version
+  );
+}
+
+async function pickSession(sessions: SessionMeta[]): Promise<SessionMeta | null> {
+  try {
+    return await select({
+      message: 'Select a session:',
+      choices: sessions.map(s => ({
+        name: formatPickerLabel(s),
+        value: s,
+      })),
+    });
+  } catch (err) {
+    if (isPromptCancelled(err)) return null;
+    throw err;
+  }
+}
+
+async function viewAction(idQuery: string | undefined, options: ViewOptions): Promise<void> {
+  // Default to summary, opt into full transcript
+  let mode: ViewMode = 'summary';
+  if (options.transcript) mode = 'transcript';
   else if (options.trace) mode = 'trace';
   else if (options.json) mode = 'json';
 
   const spinner = ora('Finding session...').start();
 
   try {
-    // Discover all sessions to resolve the ID
     const allSessions = await discoverSessions({ limit: 500 });
-    const matches = resolveSessionById(allSessions, idQuery);
+    let session: SessionMeta;
 
-    if (matches.length === 0) {
+    if (!idQuery) {
+      // No ID provided -- show interactive picker
       spinner.stop();
-      console.error(chalk.red(`No session found matching: ${idQuery}`));
-      console.error(chalk.gray('Run "agents sessions" to list available sessions.'));
-      process.exit(1);
-    }
 
-    if (matches.length > 1) {
-      spinner.stop();
-      console.error(chalk.yellow(`Multiple sessions match "${idQuery}":`));
-      for (const m of matches) {
-        const agentColor = AGENT_COLORS[m.agent] || chalk.white;
-        console.error(
-          `  ${chalk.white(m.id)} ${agentColor(m.agent)} ${chalk.cyan(m.project || '-')} ${chalk.gray(formatRelativeTime(m.timestamp))}`
-        );
+      if (allSessions.length === 0) {
+        console.log(chalk.gray('No sessions found.'));
+        return;
       }
-      console.error(chalk.gray('\nProvide a longer ID to narrow the match.'));
-      process.exit(1);
+
+      // Show at most 30 in the picker
+      const picked = await pickSession(allSessions.slice(0, 30));
+      if (!picked) return;
+      session = picked;
+    } else {
+      // Resolve by ID
+      const matches = resolveSessionById(allSessions, idQuery);
+
+      if (matches.length === 0) {
+        spinner.stop();
+        console.error(chalk.red(`No session found matching: ${idQuery}`));
+        console.error(chalk.gray('Run "agents sessions" to list available sessions.'));
+        process.exit(1);
+      }
+
+      if (matches.length > 1) {
+        spinner.stop();
+        // Multiple matches -- let the user pick
+        const picked = await pickSession(matches);
+        if (!picked) return;
+        session = picked;
+      } else {
+        session = matches[0];
+      }
     }
 
-    const session = matches[0];
-    spinner.text = `Parsing ${session.agent} session...`;
-
-    const events = parseSession(session.filePath, session.agent);
     spinner.stop();
-
-    // Render and output
-    let output: string;
-    switch (mode) {
-      case 'transcript': output = renderTranscript(events); break;
-      case 'summary': output = renderSummary(events); break;
-      case 'trace': output = renderTrace(events); break;
-      case 'json': output = renderJson(events); break;
-    }
-
-    console.log(output);
+    await renderSession(session, mode);
   } catch (err: any) {
+    if (isPromptCancelled(err)) return;
     spinner.stop();
     console.error(chalk.red(`Failed to read session: ${err.message}`));
     process.exit(1);
@@ -162,12 +238,12 @@ export function registerSessionsCommands(program: Command): void {
     });
 
   sessionsCmd
-    .command('view <id>')
-    .description('View a session')
-    .option('--summary', 'Show activity fingerprint (files, commands)')
+    .command('view [id]')
+    .description('View a session (interactive picker if no ID given)')
+    .option('--transcript', 'Show full conversation transcript')
     .option('--trace', 'Show reasoning trace as markdown')
     .option('--json', 'Output normalized events as JSON')
-    .action(async (id: string, options: ViewOptions) => {
+    .action(async (id: string | undefined, options: ViewOptions) => {
       await viewAction(id, options);
     });
 }
@@ -178,6 +254,10 @@ export function registerSessionsCommands(program: Command): void {
 
 function padRight(s: string, width: number): string {
   return s.length >= width ? s + ' ' : s + ' '.repeat(width - s.length);
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + '.' : s;
 }
 
 function formatRelativeTime(isoTimestamp: string): string {

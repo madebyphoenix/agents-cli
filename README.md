@@ -92,17 +92,17 @@ agents fork                       # Fork the default repo to your GitHub
 agents pull --upstream             # Merge updates from upstream
 ```
 
-### Schedule agents on cron
+### Schedule agents as routines
 
 ```bash
-agents cron add daily-digest \
+agents routines add daily-digest \
   --schedule "0 9 * * 1-5" \
   --agent claude \
   --prompt "Review yesterday's PRs and summarize key changes"
 
-agents daemon start               # Start the scheduler
-agents cron list                  # See all jobs
-agents cron logs daily-digest     # Check execution logs
+agents daemon start                    # Start the scheduler
+agents routines list                   # See all jobs
+agents routines logs daily-digest      # Check execution logs
 ```
 
 Jobs run sandboxed -- agents only see directories and tools you explicitly allow.
@@ -182,8 +182,8 @@ agents fork                       # Fork to your GitHub
 
 # Execution
 agents exec <agent> <prompt>      # Run agent
-agents cron add <name>            # Schedule a job
-agents cron list                  # Show all jobs
+agents routines add <name>        # Schedule a job
+agents routines list              # Show all jobs
 agents daemon start               # Start scheduler
 ```
 
@@ -213,8 +213,8 @@ Add rule files in a `rules/` subdirectory -- each rule is a markdown file with s
 
 ## Compatibility
 
-| Agent | Versions | MCP | Commands | Skills | Rules | Hooks | Permissions | Jobs |
-|-------|----------|-----|----------|--------|-------|-------|-------------|------|
+| Agent | Versions | MCP | Commands | Skills | Rules | Hooks | Permissions | Routines |
+|-------|----------|-----|----------|--------|-------|-------|-------------|----------|
 | Claude | yes | yes | yes | yes | CLAUDE.md | yes | yes | yes |
 | Codex | yes | yes | yes | yes | AGENTS.md | yes | yes | yes |
 | Gemini | yes | yes | yes | yes | GEMINI.md | yes | -- | yes |

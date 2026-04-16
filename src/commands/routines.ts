@@ -21,9 +21,9 @@ import {
   getRunDir,
   getJobPath,
   parseAtTime,
-} from '../lib/cron.js';
-import type { JobConfig } from '../lib/cron.js';
-import { getCronDir } from '../lib/state.js';
+} from '../lib/routines.js';
+import type { JobConfig } from '../lib/routines.js';
+import { getRoutinesDir } from '../lib/state.js';
 import { executeJob } from '../lib/runner.js';
 import { JobScheduler } from '../lib/scheduler.js';
 
@@ -65,17 +65,17 @@ async function pickJob(message: string, filter?: (job: JobConfig) => boolean): P
   }
 }
 
-export function registerCronCommands(program: Command): void {
-  const cronCmd = program.command('cron').description('Manage scheduled jobs');
+export function registerRoutinesCommands(program: Command): void {
+  const routinesCmd = program.command('routines').description('Manage scheduled jobs');
 
-  cronCmd
+  routinesCmd
     .command('list')
     .description('List all jobs')
     .action(() => {
       const jobs = listAllJobs();
       if (jobs.length === 0) {
         console.log(chalk.gray('No jobs configured'));
-        console.log(chalk.gray('  Add a job: agents cron add <path-to-job.yml>'));
+        console.log(chalk.gray('  Add a job: agents routines add <path-to-job.yml>'));
         return;
       }
 
@@ -106,7 +106,7 @@ export function registerCronCommands(program: Command): void {
       console.log();
     });
 
-  cronCmd
+  routinesCmd
     .command('add [nameOrPath]')
     .description('Add a job from YAML file or inline flags')
     .option('-s, --schedule <cron>', 'Cron schedule (e.g., "0 9 * * 1-5")')
@@ -126,7 +126,7 @@ export function registerCronCommands(program: Command): void {
         // Inline mode: create job from flags
         if (!nameOrPath) {
           console.log(chalk.red('Job name is required'));
-          console.log(chalk.gray('Usage: agents cron add <name> --schedule "..." --agent <agent> --prompt "..."'));
+          console.log(chalk.gray('Usage: agents routines add <name> --schedule "..." --agent <agent> --prompt "..."'));
           process.exit(1);
         }
 
@@ -196,8 +196,8 @@ export function registerCronCommands(program: Command): void {
         // File mode: load from YAML file
         if (!nameOrPath) {
           console.log(chalk.red('File path or job name with flags is required'));
-          console.log(chalk.gray('Usage: agents cron add <path-to-job.yml>'));
-          console.log(chalk.gray('   or: agents cron add <name> --schedule "..." --agent <agent> --prompt "..."'));
+          console.log(chalk.gray('Usage: agents routines add <path-to-job.yml>'));
+          console.log(chalk.gray('   or: agents routines add <name> --schedule "..." --agent <agent> --prompt "..."'));
           process.exit(1);
         }
 
@@ -246,9 +246,9 @@ export function registerCronCommands(program: Command): void {
       }
     });
 
-  cronCmd
+  routinesCmd
     .command('remove [name]')
-    .description('Remove a cron job')
+    .description('Remove a job')
     .action(async (name: string | undefined) => {
       if (!name) {
         name = await pickJob('Select job to remove') ?? undefined;
@@ -268,7 +268,7 @@ export function registerCronCommands(program: Command): void {
       }
     });
 
-  cronCmd
+  routinesCmd
     .command('view [name]')
     .description('Show job configuration')
     .action(async (name: string | undefined) => {
@@ -287,7 +287,7 @@ export function registerCronCommands(program: Command): void {
       console.log(yaml.stringify(job));
     });
 
-  cronCmd
+  routinesCmd
     .command('edit [name]')
     .description('Edit job configuration in $EDITOR')
     .action(async (name: string | undefined) => {
@@ -299,7 +299,7 @@ export function registerCronCommands(program: Command): void {
       const jobPath = getJobPath(name);
       if (!jobPath) {
         // Job doesn't exist - create a new one
-        const cronDir = getCronDir();
+        const cronDir = getRoutinesDir();
         const newPath = path.join(cronDir, `${name}.yml`);
 
         // Create template
@@ -313,7 +313,7 @@ export function registerCronCommands(program: Command): void {
         console.log(chalk.gray(`Created new job file: ${newPath}`));
       }
 
-      const targetPath = jobPath || path.join(getCronDir(), `${name}.yml`);
+      const targetPath = jobPath || path.join(getRoutinesDir(), `${name}.yml`);
       const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
 
       const { spawn: spawnSync } = await import('child_process');
@@ -345,7 +345,7 @@ export function registerCronCommands(program: Command): void {
       });
     });
 
-  cronCmd
+  routinesCmd
     .command('runs [name]')
     .description('Show execution history')
     .action(async (name: string | undefined) => {
@@ -371,7 +371,7 @@ export function registerCronCommands(program: Command): void {
       }
     });
 
-  cronCmd
+  routinesCmd
     .command('run [name]')
     .description('Run a job immediately in the foreground')
     .action(async (name: string | undefined) => {
@@ -413,7 +413,7 @@ export function registerCronCommands(program: Command): void {
       }
     });
 
-  cronCmd
+  routinesCmd
     .command('logs [name]')
     .description('Show stdout from the latest (or specific) run')
     .option('-r, --run <runId>', 'Specific run ID')
@@ -443,7 +443,7 @@ export function registerCronCommands(program: Command): void {
       console.log(fs.readFileSync(logPath, 'utf-8'));
     });
 
-  cronCmd
+  routinesCmd
     .command('report [name]')
     .description('Show report from the latest (or specific) run')
     .option('-r, --run <runId>', 'Specific run ID')
@@ -474,7 +474,7 @@ export function registerCronCommands(program: Command): void {
       console.log(fs.readFileSync(reportPath, 'utf-8'));
     });
 
-  cronCmd
+  routinesCmd
     .command('resume [name]')
     .description('Resume a paused job')
     .action(async (name: string | undefined) => {
@@ -497,7 +497,7 @@ export function registerCronCommands(program: Command): void {
       }
     });
 
-  cronCmd
+  routinesCmd
     .command('pause [name]')
     .description('Pause a job')
     .action(async (name: string | undefined) => {
