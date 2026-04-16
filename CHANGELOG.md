@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.1
+
+**Better sessions**
+
+- Sessions list and picker show `Agent@Version` combined column (e.g., `claude@2.1.85`)
+- Added `Topic` column showing first user message of each session
+- Account shows email instead of display name
+
 ## 1.9.0
 
 **New agents, routines, and better sessions**
