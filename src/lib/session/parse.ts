@@ -15,6 +15,7 @@ export function parseSession(filePath: string, agent?: SessionAgentId): SessionE
     case 'claude': return parseClaude(filePath);
     case 'codex': return parseCodex(filePath);
     case 'gemini': return parseGemini(filePath);
+    case 'openclaw': return []; // OpenClaw sessions don't have parseable files yet
   }
 }
 

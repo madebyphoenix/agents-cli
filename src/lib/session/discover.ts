@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import * as readline from 'readline';
+import { execSync } from 'child_process';
 import type { SessionAgentId, SessionMeta } from './types.js';
 import { SESSION_AGENTS } from './types.js';
 
@@ -32,6 +33,7 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
         case 'claude': return discoverClaudeSessions();
         case 'codex': return discoverCodexSessions();
         case 'gemini': return discoverGeminiSessions();
+        case 'openclaw': return discoverOpenClawSessions();
       }
     })
   );
@@ -530,6 +532,96 @@ function buildGeminiProjectMap(): Map<string, { name: string; path: string }> {
   }
 
   return map;
+}
+
+// ---------------------------------------------------------------------------
+// OpenClaw
+// ---------------------------------------------------------------------------
+
+async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
+  const sessions: SessionMeta[] = [];
+
+  // Check if openclaw is installed
+  try {
+    execSync('which openclaw', { stdio: 'ignore' });
+  } catch {
+    return sessions;
+  }
+
+  // Discover active channels
+  // Format: "- Telegram default (Jeff): enabled, configured, running, out:2h ago, mode:polling, token:config"
+  try {
+    const output = execSync('openclaw channels status', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    for (const line of output.split('\n')) {
+      // Match: "- Telegram <agentId> (<Name>): ..., running, ..."
+      const match = line.match(/^-\s+\w+\s+(\S+)\s+\((\w+)\):\s*(.+)/);
+      if (!match) continue;
+      const [, agentId, name, statusStr] = match;
+      const isRunning = statusStr.includes('running');
+      if (!isRunning) continue;
+
+      sessions.push({
+        id: `openclaw-${agentId}`,
+        shortId: agentId.slice(0, 8),
+        agent: 'openclaw',
+        timestamp: new Date().toISOString(),
+        project: name,
+        filePath: '',
+      });
+    }
+  } catch {
+    // Command failed or not available
+  }
+
+  // Discover cron jobs
+  // Output format (fixed-width columns, 1 space between UUID and name):
+  //   6ec2cffe-39f8-480b-821f-0b20a2062550 paul-hourly  cron */30 ...  in 7h  48m ago  ok  isolated  paul  -
+  // UUID is always 36 chars. Extract it first, then parse the rest.
+  try {
+    const output = execSync('openclaw cron list', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+
+    const lines = output.split('\n');
+    // Skip header row
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      // Extract UUID (36 chars) and name from start of line
+      const headMatch = line.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s+(\S+)/);
+      if (!headMatch) continue;
+      const jobId = headMatch[1];
+      const jobName = headMatch[2];
+
+      // Parse remaining columns (2+ whitespace separated)
+      // Schedule+Next merge (cron expressions have internal spaces), so cols are:
+      //   [schedule+next, last, status, target, agentId, model]
+      const rest = line.slice(headMatch[0].length).trim();
+      const cols = rest.split(/\s{2,}/);
+      const status = cols[2] || '';
+      const agentId = cols[4] || '';
+
+      sessions.push({
+        id: `openclaw-cron-${jobId}`,
+        shortId: jobId.slice(0, 8),
+        agent: 'openclaw',
+        timestamp: new Date().toISOString(),
+        project: `${jobName} (${agentId || 'unknown'})`,
+        cwd: status,
+        filePath: '',
+      });
+    }
+  } catch {
+    // Command failed or not available
+  }
+
+  return sessions;
 }
 
 // ---------------------------------------------------------------------------

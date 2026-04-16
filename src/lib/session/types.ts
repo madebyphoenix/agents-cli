@@ -1,6 +1,6 @@
-export type SessionAgentId = 'claude' | 'codex' | 'gemini';
+export type SessionAgentId = 'claude' | 'codex' | 'gemini' | 'openclaw';
 
-export const SESSION_AGENTS: SessionAgentId[] = ['claude', 'codex', 'gemini'];
+export const SESSION_AGENTS: SessionAgentId[] = ['claude', 'codex', 'gemini', 'openclaw'];
 
 export interface SessionEvent {
   type: 'message' | 'tool_use' | 'tool_result' | 'thinking' | 'error' | 'init' | 'result';
