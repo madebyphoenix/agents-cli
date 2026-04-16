@@ -59,47 +59,55 @@ program
 const originalHelpInformation = program.helpInformation.bind(program);
 program.helpInformation = function () {
   if (this.name() === 'agents' && !this.parent) {
-    return `Usage: agents [options] [command]
+    return `Usage: agents [command] [options]
 
-Environment manager for AI agents
+Install, configure, and sync AI coding agents from one place.
+Works with Claude, Codex, Gemini, Cursor, OpenCode, and OpenClaw.
 
-Agents
-  add <agent>[@version]           Install agent CLI
-  remove <agent>[@version]        Remove agent CLI
-  use <agent>@<version>           Set default version
-  view [agent[@version]]          View versions or resources
+Quick start:
+  agents add claude@latest        Install an agent CLI
+  agents use claude@2.1.79        Switch to a specific version
+  agents view                     See what's installed
+  agents pull gh:you/.agents      Set up all agents from a shared config repo
 
-Resources
-  rules                           Manage agent rules/instructions
-  commands                        Manage slash commands
-  subagents                       Manage subagent definitions
-  skills                          Manage skills (SKILL.md + rules/)
-  mcp                             Manage MCP servers
-  permissions                     Manage agent permissions
-  hooks                           Manage agent hooks
-  plugins                         Manage agent plugins
+Agent versions:
+  add <agent>[@version]           Install an agent CLI (e.g. agents add codex)
+  remove <agent>[@version]        Uninstall a version
+  use <agent>@<version>           Set the default version
+  view [agent[@version]]          List versions, or inspect one in detail
 
-Packages
-  search <query>                  Search MCP servers
-  install <pkg>                   Install mcp:name or skill:user/repo
+Agent configuration (synced across versions):
+  rules                           Instructions given to agents (CLAUDE.md, etc.)
+  commands                        Slash commands (/commit, /test, etc.)
+  skills                          Knowledge packs (SKILL.md + supporting files)
+  mcp                             MCP servers (stdio or HTTP)
+  permissions                     Allow/deny rules for tool calls
+  hooks                           Shell scripts that run on agent events
+  subagents                       Named sub-agent definitions
+  plugins                         Bundles of skills, hooks, and scripts
 
-Sessions
-  sessions                        List and view agent sessions
+Packages:
+  search <query>                  Find MCP servers and skills in registries
+  install <pkg>                   Install from registry (mcp:name, skill:user/repo)
 
-Automation
-  cron                            Manage scheduled jobs
-  daemon                          Manage the scheduler daemon
+Sessions:
+  sessions                        List and view past sessions across all agents
 
-Env
-  pull                            Sync from .agents repo
-  push                            Push config to your .agents repo
-  fork                            Fork system repo to your GitHub
+Automation:
+  cron                            Schedule agents to run on a timer
+  daemon                          Start/stop the cron scheduler
+  exec <agent> <prompt>           Run an agent non-interactively
+
+Config sync (portable setup via git):
+  pull [gh:user/repo]             Clone or pull a shared .agents config repo
+  push                            Commit and push your local config
+  fork                            Fork the default config repo to your GitHub
 
 Options:
   -V, --version                   Show version number
   -h, --help                      Show help
 
-Run 'agents <command> --help' for details.
+Config lives in ~/.agents/. Run 'agents <command> --help' for details.
 `;
   }
   return originalHelpInformation();
