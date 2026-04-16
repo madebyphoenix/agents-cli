@@ -57,6 +57,7 @@ async function listAction(options: ListOptions): Promise<void> {
     console.log(
       chalk.gray(
         padRight('ID', 10) +
+        padRight('Account', 20) +
         padRight('Agent', 18) +
         padRight('Project', 16) +
         padRight('When', 14) +
@@ -68,6 +69,7 @@ async function listAction(options: ListOptions): Promise<void> {
       const agentColor = AGENT_COLORS[session.agent] || chalk.white;
       const when = formatRelativeTime(session.timestamp);
       const project = session.project || '-';
+      const account = session.account || '';
       const agentLabel = session.version
         ? `${session.agent}@${session.version}`
         : session.agent;
@@ -75,6 +77,7 @@ async function listAction(options: ListOptions): Promise<void> {
 
       console.log(
         chalk.white(padRight(session.shortId, 10)) +
+        chalk.gray(padRight(truncate(account, 18), 20)) +
         agentColor(padRight(truncate(agentLabel, 16), 18)) +
         chalk.cyan(padRight(truncate(project, 14), 16)) +
         chalk.gray(padRight(when, 14)) +
@@ -132,14 +135,17 @@ function formatPickerLabel(s: SessionMeta): string {
   const agentColor = AGENT_COLORS[s.agent] || chalk.white;
   const when = formatRelativeTime(s.timestamp);
   const project = s.project || '-';
-  const version = s.version ? chalk.yellow(s.version) : '';
+  const account = s.account || '';
+  const agentLabel = s.version ? `${s.agent}@${s.version}` : s.agent;
+  const topic = s.topic || '';
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
-    agentColor(padRight(s.agent, 8)) +
-    chalk.cyan(padRight(truncate(project, 16), 18)) +
+    chalk.gray(padRight(truncate(account, 18), 20)) +
+    agentColor(padRight(truncate(agentLabel, 16), 18)) +
+    chalk.cyan(padRight(truncate(project, 14), 16)) +
     chalk.gray(padRight(when, 14)) +
-    version
+    chalk.white(truncate(topic, 30))
   );
 }
 
