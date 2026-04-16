@@ -420,7 +420,7 @@ export function convertToCodexFormat(set: PermissionSet, cwd?: string): CodexPer
     result.approval_policy = 'never';
     result.sandbox_mode = 'workspace-write';
   } else if (set.allow.length > 0) {
-    result.approval_policy = 'on-failure';
+    result.approval_policy = 'on-request';
     result.sandbox_mode = 'workspace-write';
   }
 

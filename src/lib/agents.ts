@@ -388,7 +388,22 @@ export async function getAccountInfo(
         if (!token) return empty;
         const payload = token.split('.')[1];
         const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString());
-        return { ...empty, email: decoded.email || null };
+        const email = decoded.email || null;
+
+        // Plan and subscription from OpenAI auth claim
+        const authClaim = decoded['https://api.openai.com/auth'] || {};
+        const rawPlan = authClaim.chatgpt_plan_type;
+        const plan = rawPlan ? rawPlan.charAt(0).toUpperCase() + rawPlan.slice(1) : null;
+
+        // Subscription status: expired = out_of_credits
+        let usageStatus: AccountInfo['usageStatus'] = null;
+        const activeUntil = authClaim.chatgpt_subscription_active_until;
+        if (activeUntil) {
+          const expired = new Date(activeUntil).getTime() < Date.now();
+          usageStatus = expired ? 'out_of_credits' : 'available';
+        }
+
+        return { email, plan, usageStatus, overageCredits: null };
       }
       case 'gemini': {
         const data = JSON.parse(await fs.promises.readFile(path.join(base, '.gemini', 'google_accounts.json'), 'utf-8'));

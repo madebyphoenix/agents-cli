@@ -217,14 +217,14 @@ describe('convertToCodexFormat', () => {
     expect(result.sandbox_mode).toBe('workspace-write');
   });
 
-  it('sets on-failure mode for limited permissions', () => {
+  it('sets on-request mode for limited permissions', () => {
     const set: PermissionSet = {
       name: 'test',
       allow: ['Bash(git *)'],
     };
 
     const result = convertToCodexFormat(set);
-    expect(result.approval_policy).toBe('on-failure');
+    expect(result.approval_policy).toBe('on-request');
     expect(result.sandbox_mode).toBe('workspace-write');
   });
 
