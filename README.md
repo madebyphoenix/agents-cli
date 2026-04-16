@@ -180,6 +180,14 @@ agents pull [source]              # Sync from repo
 agents push                       # Push changes back
 agents fork                       # Fork to your GitHub
 
+# Drive
+agents drive remote <user@host>   # Set sync target
+agents drive pull                  # Pull sessions from remote
+agents drive push                  # Push sessions to remote
+agents drive attach                # Use drive as active agent home
+agents drive detach                # Restore to version home
+agents drive status                # Show drive state
+
 # Execution
 agents exec <agent> <prompt>      # Run agent
 agents routines add <name>        # Schedule a job

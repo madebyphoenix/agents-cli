@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.10.0
+
+**Drive -- sync agent sessions across machines**
+
+- New `agents drive` command for syncing agent state between machines via rsync over SSH
+- `agents drive remote <user@host>` -- set sync target (syncs to `~/.agents/drive/` on remote)
+- `agents drive pull` / `push` -- additive rsync (no data loss, both sides accumulate)
+- `agents drive attach` -- swap `~/.claude` symlinks to the drive, so Claude reads/writes there
+- `agents drive detach` -- restore symlinks to the version home
+- `agents drive status` -- show remote, attached state, symlink targets, last sync times
+
 ## 1.9.1
 
 **Better sessions**

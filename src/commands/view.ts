@@ -8,10 +8,11 @@ import {
   AGENTS,
   ALL_AGENT_IDS,
   getAllCliStates,
-  getAccountEmail,
+  getAccountInfo,
   resolveAgentName,
   formatAgentError,
 } from '../lib/agents.js';
+import type { AccountInfo } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { readManifest } from '../lib/manifest.js';
 import {
@@ -36,6 +37,14 @@ import { getAgentsDir } from '../lib/state.js';
 import { isGitRepo, getGitSyncStatus } from '../lib/git.js';
 import { getCentralMemoryFileName } from '../lib/memory.js';
 import { formatPath, isPromptCancelled } from './utils.js';
+
+function formatUsageStatus(info: AccountInfo): string {
+  const parts: string[] = [];
+  if (info.plan) parts.push(chalk.gray(info.plan));
+  if (info.usageStatus === 'rate_limited') parts.push(chalk.yellow('rate limited'));
+  else if (info.usageStatus === 'out_of_credits') parts.push(chalk.red('out of credits'));
+  return parts.join('  ');
+}
 
 function compareVersions(a: string, b: string): number {
   const partsA = a.split('.').map(Number);
@@ -96,16 +105,16 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
     if (versions.length > 0) {
       for (const ver of versions) {
         emailFetches.push(
-          getAccountEmail(agentId, getVersionHomePath(agentId, ver)).then((email) => ({
+          getAccountInfo(agentId, getVersionHomePath(agentId, ver)).then((info) => ({
             agentId,
             version: ver,
-            email,
+            email: info.email,
           }))
         );
       }
     } else {
       globalEmailFetches.push(
-        getAccountEmail(agentId).then((email) => ({ agentId, email }))
+        getAccountInfo(agentId).then((info) => ({ agentId, email: info.email }))
       );
     }
   }
@@ -449,7 +458,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
 
   // 1. Agent CLI info
   console.log(chalk.bold('Agent CLIs\n'));
-  const email = await getAccountEmail(agentId, getVersionHomePath(agentId, version));
+  const email = (await getAccountInfo(agentId, getVersionHomePath(agentId, version))).email;
   const emailStr = email ? chalk.cyan(`  ${email}`) : '';
   const cli = cliStates[agentId];
   const status = cli?.installed

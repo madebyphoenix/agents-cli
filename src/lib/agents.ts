@@ -332,34 +332,73 @@ export function ensureSkillsDir(agentId: AgentId): void {
   }
 }
 
+export interface AccountInfo {
+  email: string | null;
+  plan: string | null;
+  usageStatus: 'available' | 'rate_limited' | 'out_of_credits' | null;
+  overageCredits: { amount: number; currency: string } | null;
+}
+
 export async function getAccountEmail(
   agentId: AgentId,
   home?: string
 ): Promise<string | null> {
+  const info = await getAccountInfo(agentId, home);
+  return info.email;
+}
+
+export async function getAccountInfo(
+  agentId: AgentId,
+  home?: string
+): Promise<AccountInfo> {
   const base = home || os.homedir();
+  const empty: AccountInfo = { email: null, plan: null, usageStatus: null, overageCredits: null };
   try {
     switch (agentId) {
       case 'claude': {
         const data = JSON.parse(await fs.promises.readFile(path.join(base, '.claude.json'), 'utf-8'));
-        return data.oauthAccount?.emailAddress || null;
+        const oa = data.oauthAccount;
+        const email = oa?.emailAddress || null;
+
+        let plan: string | null = null;
+        if (oa?.billingType === 'stripe_subscription') plan = 'Pro';
+        else if (oa?.billingType) plan = oa.billingType;
+
+        let usageStatus: AccountInfo['usageStatus'] = null;
+        const reason = data.cachedExtraUsageDisabledReason;
+        if (reason === 'out_of_credits') usageStatus = 'out_of_credits';
+        else if (reason) usageStatus = 'rate_limited';
+        else usageStatus = 'available';
+
+        let overageCredits: AccountInfo['overageCredits'] = null;
+        const orgId = oa?.organizationUuid;
+        const creditCache = orgId && data.overageCreditGrantCache?.[orgId];
+        if (creditCache?.info?.available && creditCache.info.amount_minor_units) {
+          overageCredits = {
+            amount: creditCache.info.amount_minor_units / 100,
+            currency: creditCache.info.currency || 'USD',
+          };
+        }
+
+        return { email, plan, usageStatus, overageCredits };
       }
       case 'codex': {
         const data = JSON.parse(await fs.promises.readFile(path.join(base, '.codex', 'auth.json'), 'utf-8'));
         const token = data.tokens?.id_token || data.tokens?.access_token;
-        if (!token) return null;
+        if (!token) return empty;
         const payload = token.split('.')[1];
         const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString());
-        return decoded.email || null;
+        return { ...empty, email: decoded.email || null };
       }
       case 'gemini': {
         const data = JSON.parse(await fs.promises.readFile(path.join(base, '.gemini', 'google_accounts.json'), 'utf-8'));
-        return data.active || null;
+        return { ...empty, email: data.active || null };
       }
       default:
-        return null;
+        return empty;
     }
   } catch {
-    return null;
+    return empty;
   }
 }
 
