@@ -361,58 +361,67 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
   }
 
   // Discover active channels
+  // Format: "- Telegram default (Jeff): enabled, configured, running, out:2h ago, mode:polling, token:config"
   try {
     const output = execSync('openclaw channels status', {
       encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore']
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const lines = output.split('\n').filter((line) => line.trim());
 
-    for (const line of lines) {
-      // Parse channel status output
-      // Expected format: channelId | project | status
-      const match = line.match(/^(\S+)\s+\|\s+(.+?)\s+\|\s+(\S+)/);
-      if (match) {
-        const [, channelId, project] = match;
-        sessions.push({
-          id: `openclaw-channel-${channelId}`,
-          shortId: channelId.slice(0, 8),
-          agent: 'openclaw',
-          timestamp: new Date().toISOString(),
-          project: project.trim(),
-          filePath: '',
-        });
-      }
+    for (const line of output.split('\n')) {
+      // Match: "- Telegram <agentId> (<Name>): ..., running, ..."
+      const match = line.match(/^-\s+\w+\s+(\S+)\s+\((\w+)\):\s*(.+)/);
+      if (!match) continue;
+      const [, agentId, name, statusStr] = match;
+      const isRunning = statusStr.includes('running');
+      if (!isRunning) continue;
+
+      sessions.push({
+        id: `openclaw-${agentId}`,
+        shortId: agentId.slice(0, 8),
+        agent: 'openclaw',
+        timestamp: new Date().toISOString(),
+        project: name,
+        filePath: '',
+      });
     }
   } catch {
-    // Command failed or no channels
+    // Command failed or not available
   }
 
   // Discover cron jobs
+  // Format: "6ec2cffe-...  paul-hourly  cron ...  in 6m  24m ago  ok  isolated  paul  -"
+  // Columns: ID  Name  Schedule  Next  Last  Status  Target  AgentID  Model
   try {
     const output = execSync('openclaw cron list', {
       encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore']
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const lines = output.split('\n').filter((line) => line.trim());
 
-    for (const line of lines) {
-      // Parse cron list output
-      // Expected format: jobId | schedule | prompt
-      const match = line.match(/^(\S+)\s+\|\s+(.+?)\s+\|\s+(.+)/);
-      if (match) {
-        const [, jobId] = match;
-        sessions.push({
-          id: `openclaw-cron-${jobId}`,
-          shortId: jobId.slice(0, 8),
-          agent: 'openclaw',
-          timestamp: new Date().toISOString(),
-          filePath: '',
-        });
-      }
+    const lines = output.split('\n');
+    // Skip header row
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      // Split on 2+ whitespace (columns are whitespace-separated)
+      const parts = line.split(/\s{2,}/);
+      if (parts.length < 6) continue;
+
+      const [jobId, jobName, , , lastRun, status, , agentId] = parts;
+      if (!jobId || !jobName) continue;
+
+      sessions.push({
+        id: `openclaw-cron-${jobId}`,
+        shortId: jobId.slice(0, 8),
+        agent: 'openclaw',
+        timestamp: new Date().toISOString(),
+        project: `${jobName} (${agentId || 'unknown'})`,
+        cwd: status === 'ok' ? 'ok' : status,
+        filePath: '',
+      });
     }
   } catch {
-    // Command failed or no cron jobs
+    // Command failed or not available
   }
 
   return sessions;

@@ -123,7 +123,7 @@ export function registerDaemonCommands(program: Command): void {
     .command('report')
     .description('Report local sessions to Factory Floor')
     .option('--node-token <token>', 'Node token from Factory Floor')
-    .option('--endpoint <url>', 'Factory Floor endpoint', 'https://agents.427yosemite.com')
+    .option('--endpoint <url>', 'Factory Floor endpoint (or AGENTS_FACTORY_URL env)', process.env.AGENTS_FACTORY_URL || 'https://agents.427yosemite.com')
     .option('--interval <seconds>', 'Sync interval in seconds', '30')
     .option('--once', 'Run once and exit (useful for testing)')
     .action(async (options) => {
@@ -133,7 +133,7 @@ export function registerDaemonCommands(program: Command): void {
   daemonCmd
     .command('register')
     .description('Register this machine with Factory Floor')
-    .option('--endpoint <url>', 'Factory Floor endpoint', 'https://agents.427yosemite.com')
+    .option('--endpoint <url>', 'Factory Floor endpoint (or AGENTS_FACTORY_URL env)', process.env.AGENTS_FACTORY_URL || 'https://agents.427yosemite.com')
     .option('--node-token <token>', 'API token for registration')
     .action(async (options) => {
       await registerNode(options);
@@ -243,7 +243,7 @@ async function runReportDaemon(options: {
     process.exit(1);
   }
 
-  const client = new FactoryClient(endpoint, nodeToken, nodeId);
+  let client = new FactoryClient(endpoint, nodeToken, nodeId);
 
   // Health check
   const healthy = await client.healthCheck();
@@ -264,6 +264,9 @@ async function runReportDaemon(options: {
         nodeToken: result.token,
         endpoint,
       });
+      // Recreate client with the returned node token (ntk_xxx)
+      // The initial token was the API token used for registration
+      client = new FactoryClient(endpoint, result.token, nodeId);
       console.log(chalk.green(`Registered as node ${nodeId}`));
     } catch (err) {
       console.error(chalk.red(`Registration failed: ${(err as Error).message}`));
