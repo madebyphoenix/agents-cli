@@ -4,12 +4,17 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { select } from '@inquirer/prompts';
 
 // Force exit on Ctrl+C when no interactive prompt is handling it.
 process.on('SIGINT', () => process.exit(130));
+
+// Ignore SIGPIPE — prevents exit code 13 crashes in piped environments
+// (e.g. `agents sessions list | head`, or when stdout is captured by another process).
+process.on('SIGPIPE', () => {});
 
 // Get version from package.json
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -157,7 +162,31 @@ async function showWhatsNew(fromVersion: string, toVersion: string): Promise<voi
   }
 }
 
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const UPDATE_CHECK_FILE = path.join(os.homedir(), '.agents', '.update-check');
+
+function shouldCheckForUpdates(): boolean {
+  try {
+    const data = JSON.parse(fs.readFileSync(UPDATE_CHECK_FILE, 'utf-8'));
+    return Date.now() - data.lastCheck > UPDATE_CHECK_INTERVAL_MS;
+  } catch {
+    return true; // No cache file or unreadable — check now
+  }
+}
+
+function saveUpdateCheck(latestVersion: string): void {
+  try {
+    const dir = path.dirname(UPDATE_CHECK_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(UPDATE_CHECK_FILE, JSON.stringify({ lastCheck: Date.now(), latestVersion }));
+  } catch {
+    // Best-effort
+  }
+}
+
 async function checkForUpdates(): Promise<void> {
+  if (!shouldCheckForUpdates()) return;
+
   try {
     const response = await fetch('https://registry.npmjs.org/@swarmify/agents-cli/latest', {
       signal: AbortSignal.timeout(2000),
@@ -166,8 +195,15 @@ async function checkForUpdates(): Promise<void> {
 
     const data = (await response.json()) as { version: string };
     const latestVersion = data.version;
+    saveUpdateCheck(latestVersion);
 
     if (latestVersion !== VERSION && compareVersions(latestVersion, VERSION) > 0) {
+      // Non-interactive environment — just print the notice
+      if (!process.stdout.isTTY) {
+        console.error(chalk.yellow(`Update available: ${VERSION} -> ${latestVersion}. Run: npm install -g @swarmify/agents-cli@latest`));
+        return;
+      }
+
       const answer = await select({
         message: `Update available: ${VERSION} -> ${latestVersion}`,
         choices: [
