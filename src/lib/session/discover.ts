@@ -390,8 +390,9 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
   }
 
   // Discover cron jobs
-  // Format: "6ec2cffe-...  paul-hourly  cron ...  in 6m  24m ago  ok  isolated  paul  -"
-  // Columns: ID  Name  Schedule  Next  Last  Status  Target  AgentID  Model
+  // Output format (fixed-width columns, 1 space between UUID and name):
+  //   6ec2cffe-39f8-480b-821f-0b20a2062550 paul-hourly  cron */30 ...  in 7h  48m ago  ok  isolated  paul  -
+  // UUID is always 36 chars. Extract it first, then parse the rest.
   try {
     const output = execSync('openclaw cron list', {
       encoding: 'utf-8',
@@ -403,12 +404,20 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
-      // Split on 2+ whitespace (columns are whitespace-separated)
-      const parts = line.split(/\s{2,}/);
-      if (parts.length < 6) continue;
 
-      const [jobId, jobName, , , lastRun, status, , agentId] = parts;
-      if (!jobId || !jobName) continue;
+      // Extract UUID (36 chars) and name from start of line
+      const headMatch = line.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s+(\S+)/);
+      if (!headMatch) continue;
+      const jobId = headMatch[1];
+      const jobName = headMatch[2];
+
+      // Parse remaining columns (2+ whitespace separated)
+      // Schedule+Next merge (cron expressions have internal spaces), so cols are:
+      //   [schedule+next, last, status, target, agentId, model]
+      const rest = line.slice(headMatch[0].length).trim();
+      const cols = rest.split(/\s{2,}/);
+      const status = cols[2] || '';
+      const agentId = cols[4] || '';
 
       sessions.push({
         id: `openclaw-cron-${jobId}`,
@@ -416,7 +425,7 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
         agent: 'openclaw',
         timestamp: new Date().toISOString(),
         project: `${jobName} (${agentId || 'unknown'})`,
-        cwd: status === 'ok' ? 'ok' : status,
+        cwd: status,
         filePath: '',
       });
     }
