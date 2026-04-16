@@ -24,6 +24,7 @@ const MCP_DIR = path.join(AGENTS_DIR, 'mcp');
 const BACKUPS_DIR = path.join(AGENTS_DIR, 'backups');
 const SUBAGENTS_DIR = path.join(AGENTS_DIR, 'subagents');
 const PLUGINS_DIR = path.join(AGENTS_DIR, 'plugins');
+const DRIVE_DIR = path.join(AGENTS_DIR, 'drive');
 
 const META_HEADER = `# agents-cli metadata
 # Auto-generated - do not edit manually
@@ -119,6 +120,10 @@ export function getPluginsDir(): string {
   return PLUGINS_DIR;
 }
 
+export function getDriveDir(): string {
+  return DRIVE_DIR;
+}
+
 export function getCommandsDir(): string {
   return COMMANDS_DIR;
 }
@@ -182,6 +187,9 @@ export function ensureAgentsDir(): void {
   }
   if (!fs.existsSync(SUBAGENTS_DIR)) {
     fs.mkdirSync(SUBAGENTS_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(DRIVE_DIR)) {
+    fs.mkdirSync(DRIVE_DIR, { recursive: true });
   }
 }
 
