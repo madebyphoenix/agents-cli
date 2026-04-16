@@ -297,6 +297,26 @@ describe('buildExecCommand', () => {
     });
   });
 
+  // --- Version pinning ---
+
+  describe('version pinning', () => {
+    it('appends @version to base command when version is set', () => {
+      const cmd = buildExecCommand(opts({ agent: 'claude', version: '2.1.98', mode: 'full' }));
+      expect(cmd[0]).toBe('claude@2.1.98');
+    });
+
+    it('does not append @version when version is undefined', () => {
+      const cmd = buildExecCommand(opts({ agent: 'claude', mode: 'full' }));
+      expect(cmd[0]).toBe('claude');
+    });
+
+    it('works for codex with version', () => {
+      const cmd = buildExecCommand(opts({ agent: 'codex', version: '0.98.0', mode: 'full' }));
+      expect(cmd[0]).toBe('codex@0.98.0');
+      expect(cmd[1]).toBe('exec');
+    });
+  });
+
   // --- Snapshot: agent-runner.sh patterns ---
 
   describe('agent-runner.sh compatibility', () => {

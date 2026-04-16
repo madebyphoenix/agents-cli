@@ -145,6 +145,11 @@ export function buildExecCommand(options: ExecOptions): string[] {
   const template = AGENT_COMMANDS[options.agent];
   const cmd: string[] = [...template.base];
 
+  // Use versioned alias if a specific version was requested (e.g., claude@2.1.98)
+  if (options.version && cmd.length > 0) {
+    cmd[0] = `${cmd[0]}@${options.version}`;
+  }
+
   // Add mode flags
   const modeFlags = template.modeFlags[options.mode];
   cmd.push(...modeFlags);
