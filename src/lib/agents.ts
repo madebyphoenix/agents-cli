@@ -337,6 +337,7 @@ export interface AccountInfo {
   plan: string | null;
   usageStatus: 'available' | 'rate_limited' | 'out_of_credits' | null;
   overageCredits: { amount: number; currency: string } | null;
+  lastActive: Date | null;
 }
 
 export async function getAccountEmail(

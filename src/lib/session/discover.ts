@@ -675,7 +675,7 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
         timestamp,
         project: directory ? path.basename(directory) : undefined,
         cwd: directory || undefined,
-        filePath: OPENCODE_DB,
+        filePath: `${OPENCODE_DB}#${id}`,
         version: version || undefined,
         account,
         topic,
