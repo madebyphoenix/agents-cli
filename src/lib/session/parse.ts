@@ -16,6 +16,7 @@ export function parseSession(filePath: string, agent?: SessionAgentId): SessionE
     case 'claude': return parseClaude(filePath);
     case 'codex': return parseCodex(filePath);
     case 'gemini': return parseGemini(filePath);
+    case 'opencode': return parseOpenCode(filePath);
     case 'openclaw': return []; // OpenClaw sessions don't have parseable files yet
   }
 }
@@ -24,6 +25,7 @@ export function detectAgent(filePath: string): SessionAgentId | null {
   if (filePath.includes('/.claude/') || filePath.includes('\\.claude\\')) return 'claude';
   if (filePath.includes('/.codex/') || filePath.includes('\\.codex\\')) return 'codex';
   if (filePath.includes('/.gemini/') || filePath.includes('\\.gemini\\')) return 'gemini';
+  if (filePath.includes('opencode.db')) return 'opencode';
 
   // Try file extension + content heuristic
   if (filePath.endsWith('.json')) return 'gemini';
