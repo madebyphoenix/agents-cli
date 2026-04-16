@@ -11,6 +11,7 @@ const AGENT_COLORS: Record<SessionAgentId, (s: string) => string> = {
   claude: chalk.magenta,
   codex: chalk.green,
   gemini: chalk.blue,
+  openclaw: chalk.cyan,
 };
 
 interface ListOptions {

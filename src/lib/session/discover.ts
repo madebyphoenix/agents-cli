@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import * as readline from 'readline';
+import { execSync } from 'child_process';
 import type { SessionAgentId, SessionMeta } from './types.js';
 import { SESSION_AGENTS } from './types.js';
 
@@ -28,6 +29,7 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
         case 'claude': return discoverClaudeSessions();
         case 'codex': return discoverCodexSessions();
         case 'gemini': return discoverGeminiSessions();
+        case 'openclaw': return discoverOpenClawSessions();
       }
     })
   );
@@ -342,6 +344,78 @@ function buildGeminiProjectMap(): Map<string, { name: string; path: string }> {
   }
 
   return map;
+}
+
+// ---------------------------------------------------------------------------
+// OpenClaw
+// ---------------------------------------------------------------------------
+
+async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
+  const sessions: SessionMeta[] = [];
+
+  // Check if openclaw is installed
+  try {
+    execSync('which openclaw', { stdio: 'ignore' });
+  } catch {
+    return sessions;
+  }
+
+  // Discover active channels
+  try {
+    const output = execSync('openclaw channels status', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    });
+    const lines = output.split('\n').filter((line) => line.trim());
+
+    for (const line of lines) {
+      // Parse channel status output
+      // Expected format: channelId | project | status
+      const match = line.match(/^(\S+)\s+\|\s+(.+?)\s+\|\s+(\S+)/);
+      if (match) {
+        const [, channelId, project] = match;
+        sessions.push({
+          id: `openclaw-channel-${channelId}`,
+          shortId: channelId.slice(0, 8),
+          agent: 'openclaw',
+          timestamp: new Date().toISOString(),
+          project: project.trim(),
+          filePath: '',
+        });
+      }
+    }
+  } catch {
+    // Command failed or no channels
+  }
+
+  // Discover cron jobs
+  try {
+    const output = execSync('openclaw cron list', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    });
+    const lines = output.split('\n').filter((line) => line.trim());
+
+    for (const line of lines) {
+      // Parse cron list output
+      // Expected format: jobId | schedule | prompt
+      const match = line.match(/^(\S+)\s+\|\s+(.+?)\s+\|\s+(.+)/);
+      if (match) {
+        const [, jobId] = match;
+        sessions.push({
+          id: `openclaw-cron-${jobId}`,
+          shortId: jobId.slice(0, 8),
+          agent: 'openclaw',
+          timestamp: new Date().toISOString(),
+          filePath: '',
+        });
+      }
+    }
+  } catch {
+    // Command failed or no cron jobs
+  }
+
+  return sessions;
 }
 
 // ---------------------------------------------------------------------------
