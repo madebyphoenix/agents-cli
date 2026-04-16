@@ -500,3 +500,134 @@ function extractGeminiContent(content: any): string {
   }
   return '';
 }
+
+// ---------------------------------------------------------------------------
+// OpenCode parser
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse an OpenCode session from its SQLite database.
+ * filePath format: "/path/to/opencode.db#session_id"
+ *
+ * Data model: session -> message -> part
+ * Messages have role (user/assistant) and metadata.
+ * Parts contain the actual content: text, tool, reasoning, patch, step-start/finish.
+ */
+export function parseOpenCode(filePath: string): SessionEvent[] {
+  const [dbPath, sessionId] = filePath.split('#');
+  if (!dbPath || !sessionId) return [];
+
+  const events: SessionEvent[] = [];
+
+  try {
+    // Query messages with their parts, ordered chronologically.
+    // Each row: msg_role ||| part_type ||| part_data (truncated for tool output) ||| msg_time
+    const query = `
+      SELECT
+        json_extract(m.data, '$.role'),
+        json_extract(p.data, '$.type'),
+        CASE
+          WHEN json_extract(p.data, '$.type') = 'tool'
+          THEN substr(p.data, 1, 2000)
+          ELSE p.data
+        END,
+        m.time_created
+      FROM message m
+      JOIN part p ON p.message_id = m.id AND p.session_id = m.session_id
+      WHERE m.session_id = '${sessionId.replace(/'/g, "''")}'
+      ORDER BY m.time_created ASC, p.time_created ASC;
+    `.replace(/\n/g, ' ');
+
+    const out = execSync(
+      `sqlite3 -separator '|||' "${dbPath}" "${query}"`,
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 },
+    );
+
+    for (const line of out.split('\n')) {
+      if (!line.trim()) continue;
+
+      const sepIdx1 = line.indexOf('|||');
+      if (sepIdx1 === -1) continue;
+      const sepIdx2 = line.indexOf('|||', sepIdx1 + 3);
+      if (sepIdx2 === -1) continue;
+      const sepIdx3 = line.lastIndexOf('|||');
+
+      const role = line.slice(0, sepIdx1);
+      const partType = line.slice(sepIdx1 + 3, sepIdx2);
+      const partDataStr = line.slice(sepIdx2 + 3, sepIdx3);
+      const timeStr = line.slice(sepIdx3 + 3);
+
+      const timeMs = parseInt(timeStr, 10);
+      const timestamp = isNaN(timeMs) ? new Date().toISOString() : new Date(timeMs).toISOString();
+
+      let partData: any;
+      try {
+        partData = JSON.parse(partDataStr);
+      } catch {
+        continue;
+      }
+
+      switch (partType) {
+        case 'text': {
+          const text = (partData.text || '').trim();
+          if (text) {
+            events.push({
+              type: 'message',
+              agent: 'opencode',
+              timestamp,
+              role: role === 'user' ? 'user' : 'assistant',
+              content: text,
+            });
+          }
+          break;
+        }
+        case 'reasoning': {
+          const text = (partData.text || '').trim();
+          if (text) {
+            events.push({
+              type: 'thinking',
+              agent: 'opencode',
+              timestamp,
+              content: text,
+            });
+          }
+          break;
+        }
+        case 'tool': {
+          const toolName = partData.tool || 'unknown';
+          const state = partData.state || {};
+          const input = state.input || {};
+          const output = state.output || '';
+
+          events.push({
+            type: 'tool_use',
+            agent: 'opencode',
+            timestamp,
+            tool: toolName,
+            args: input,
+            command: toolName === 'shell' ? input.command : undefined,
+            path: input.filePath || input.path || undefined,
+          });
+
+          if (state.status === 'completed' || state.status === 'error') {
+            const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
+            events.push({
+              type: state.status === 'error' ? 'error' : 'tool_result',
+              agent: 'opencode',
+              timestamp,
+              tool: toolName,
+              success: state.status === 'completed',
+              output: outputStr.length > 500 ? outputStr.slice(0, 497) + '...' : outputStr,
+            });
+          }
+          break;
+        }
+        // Skip step-start, step-finish, patch, file — not needed for transcript/trace
+      }
+    }
+  } catch {
+    // DB not accessible or query failed
+  }
+
+  return events;
+}

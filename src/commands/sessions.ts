@@ -15,6 +15,7 @@ const AGENT_COLORS: Record<SessionAgentId, (s: string) => string> = {
   claude: chalk.magenta,
   codex: chalk.green,
   gemini: chalk.blue,
+  opencode: chalk.yellow,
   openclaw: chalk.cyan,
 };
 
@@ -95,7 +96,9 @@ async function listAction(options: ListOptions): Promise<void> {
 }
 
 async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void> {
-  if (!fs.existsSync(session.filePath)) {
+  // OpenCode stores sessions in SQLite; filePath is "db_path#session_id"
+  const realPath = session.filePath.split('#')[0];
+  if (!fs.existsSync(realPath)) {
     console.log(chalk.yellow('Session transcript not available (file no longer exists).'));
     console.log(chalk.gray(`Path: ${session.filePath}`));
     if (session.version) console.log(chalk.gray(`Version: ${session.agent} ${session.version}`));

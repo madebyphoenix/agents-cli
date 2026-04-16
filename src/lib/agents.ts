@@ -353,7 +353,23 @@ export async function getAccountInfo(
   home?: string
 ): Promise<AccountInfo> {
   const base = home || os.homedir();
-  const empty: AccountInfo = { email: null, plan: null, usageStatus: null, overageCredits: null };
+  const empty: AccountInfo = { email: null, plan: null, usageStatus: null, overageCredits: null, lastActive: null };
+
+  // Resolve lastActive from config file mtime
+  const configFiles: Record<string, string> = {
+    claude: path.join(base, '.claude.json'),
+    codex: path.join(base, '.codex', 'auth.json'),
+    gemini: path.join(base, '.gemini', 'google_accounts.json'),
+  };
+  let lastActive: Date | null = null;
+  const configPath = configFiles[agentId];
+  if (configPath) {
+    try {
+      const stat = await fs.promises.stat(configPath);
+      lastActive = stat.mtime;
+    } catch {}
+  }
+
   try {
     switch (agentId) {
       case 'claude': {
@@ -381,12 +397,12 @@ export async function getAccountInfo(
           };
         }
 
-        return { email, plan, usageStatus, overageCredits };
+        return { email, plan, usageStatus, overageCredits, lastActive };
       }
       case 'codex': {
         const data = JSON.parse(await fs.promises.readFile(path.join(base, '.codex', 'auth.json'), 'utf-8'));
         const token = data.tokens?.id_token || data.tokens?.access_token;
-        if (!token) return empty;
+        if (!token) return { ...empty, lastActive };
         const payload = token.split('.')[1];
         const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString());
         const email = decoded.email || null;
@@ -404,17 +420,17 @@ export async function getAccountInfo(
           usageStatus = expired ? 'out_of_credits' : 'available';
         }
 
-        return { email, plan, usageStatus, overageCredits: null };
+        return { email, plan, usageStatus, overageCredits: null, lastActive };
       }
       case 'gemini': {
         const data = JSON.parse(await fs.promises.readFile(path.join(base, '.gemini', 'google_accounts.json'), 'utf-8'));
-        return { ...empty, email: data.active || null };
+        return { ...empty, email: data.active || null, lastActive };
       }
       default:
-        return empty;
+        return { ...empty, lastActive };
     }
   } catch {
-    return empty;
+    return { ...empty, lastActive };
   }
 }
 

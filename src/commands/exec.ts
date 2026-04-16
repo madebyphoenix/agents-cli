@@ -53,20 +53,20 @@ export function registerExecCommand(program: Command): void {
       const [agent, version] = agentSpec.split('@');
 
       if (!isValidAgent(agent)) {
-        console.log(chalk.red(`Unknown agent: ${agent}`));
-        console.log(chalk.gray(`Available: ${VALID_AGENTS.join(', ')}`));
+        console.error(chalk.red(`Unknown agent: ${agent}`));
+        console.error(chalk.gray(`Available: ${VALID_AGENTS.join(', ')}`));
         process.exit(1);
       }
 
       const mode = options.mode as ExecMode;
       if (!['plan', 'edit', 'full'].includes(mode)) {
-        console.log(chalk.red(`Invalid mode: ${mode}. Use 'plan', 'edit', or 'full'`));
+        console.error(chalk.red(`Invalid mode: ${mode}. Use 'plan', 'edit', or 'full'`));
         process.exit(1);
       }
 
       const effort = options.effort as ExecEffort;
       if (!['fast', 'default', 'detailed'].includes(effort)) {
-        console.log(chalk.red(`Invalid effort: ${effort}. Use 'fast', 'default', or 'detailed'`));
+        console.error(chalk.red(`Invalid effort: ${effort}. Use 'fast', 'default', or 'detailed'`));
         process.exit(1);
       }
 
@@ -86,9 +86,9 @@ export function registerExecCommand(program: Command): void {
         timeout: options.timeout,
       };
 
-      // Show what we're running
+      // Show what we're running (stderr so stdout stays clean for piping)
       const cmd = buildExecCommand(execOptions);
-      console.log(chalk.gray(`Running: ${cmd.join(' ')}\n`));
+      process.stderr.write(chalk.gray(`Running: ${cmd.join(' ')}\n\n`));
 
       try {
         const exitCode = await execAgent(execOptions);

@@ -280,12 +280,21 @@ export async function execAgent(options: ExecOptions): Promise<number> {
 
   const timeoutMs = options.timeout ? parseTimeout(options.timeout) : undefined;
 
+  // When stdout is piped, separate agent output (stdout) from status (stderr)
+  // so `agents exec claude "..." | agents exec codex "..."` works cleanly.
+  // When interactive (TTY), inherit everything for the full experience.
+  const piped = !process.stdout.isTTY;
+
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       cwd: options.cwd || process.cwd(),
-      stdio: 'inherit',
+      stdio: piped ? ['inherit', 'pipe', 'inherit'] : 'inherit',
       shell: false,
     });
+
+    if (piped && child.stdout) {
+      child.stdout.pipe(process.stdout);
+    }
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (timeoutMs) {

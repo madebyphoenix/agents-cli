@@ -62,6 +62,21 @@ function formatUsageStatus(info: AccountInfo, planWidth = 3): string {
   return `${planStr} ${barStr}`;
 }
 
+function formatLastActive(date: Date | null): string {
+  if (!date) return '';
+  const now = Date.now();
+  const diff = now - date.getTime();
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (mins < 1) return chalk.green('just now');
+  if (mins < 60) return chalk.green(`${mins}m ago`);
+  if (hours < 24) return chalk.white(`${hours}h ago`);
+  if (days < 7) return chalk.gray(`${days}d ago`);
+  return chalk.gray(`${days}d ago`);
+}
+
 function compareVersions(a: string, b: string): number {
   const partsA = a.split('.').map(Number);
   const partsB = b.split('.').map(Number);
@@ -199,10 +214,23 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
         const padded = base.padEnd(maxVerLabel);
         const label = isDefault ? `${version}${chalk.green(' (default)')}${' '.repeat(maxVerLabel - base.length)}` : padded;
         const vInfo = infoMap.get(`${agentId}:${version}`);
-        const emailCol = (vInfo?.email || '').padEnd(maxEmail);
-        const emailStr = vInfo?.email ? chalk.cyan(emailCol) : ' '.repeat(maxEmail);
+
+        // Build columns, trimming trailing whitespace when columns are empty
+        const parts = [`    ${label}`];
+        const hasEmail = !!vInfo?.email;
         const usageStr = vInfo ? formatUsageStatus(vInfo) : '';
-        console.log(`    ${label}  ${emailStr}  ${usageStr}`);
+        const activeStr = vInfo ? formatLastActive(vInfo.lastActive) : '';
+        const hasUsage = usageStr.length > 0;
+        const hasActive = activeStr.length > 0;
+
+        if (hasEmail || hasUsage || hasActive) {
+          const emailCol = (vInfo?.email || '').padEnd(maxEmail);
+          parts.push(hasEmail ? chalk.cyan(emailCol) : ' '.repeat(maxEmail));
+        }
+        if (hasUsage || hasActive) parts.push(usageStr || ' '.repeat(10));
+        if (hasActive) parts.push(activeStr);
+
+        console.log(parts.join('  '));
         if (showPaths) {
           const versionDir = getVersionDir(agentId, version);
           console.log(chalk.gray(`      ${versionDir}`));
@@ -240,10 +268,13 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       const verLabel = `${cliState?.version || 'installed'} ${chalk.gray('(global)')}`;
       const verLabelLen = `${cliState?.version || 'installed'} (global)`.length;
       const padding = ' '.repeat(Math.max(0, globalMaxVerLabel - verLabelLen));
-      const gEmailStr = gInfo?.email ? `  ${chalk.cyan(gInfo.email)}` : '';
+      const parts = [`    ${verLabel}${padding}`];
       const gUsageStr = gInfo ? formatUsageStatus(gInfo) : '';
-      const gUsagePart = gUsageStr ? `  ${gUsageStr}` : '';
-      console.log(`    ${verLabel}${padding}${gEmailStr}${gUsagePart}`);
+      const gActiveStr = gInfo ? formatLastActive(gInfo.lastActive) : '';
+      if (gInfo?.email || gUsageStr || gActiveStr) parts.push(gInfo?.email ? chalk.cyan(gInfo.email) : '');
+      if (gUsageStr || gActiveStr) parts.push(gUsageStr);
+      if (gActiveStr) parts.push(gActiveStr);
+      console.log(parts.join('  '));
       if (showPaths && cliState?.path) {
         console.log(chalk.gray(`      ${cliState.path}`));
       }
