@@ -38,12 +38,28 @@ import { isGitRepo, getGitSyncStatus } from '../lib/git.js';
 import { getCentralMemoryFileName } from '../lib/memory.js';
 import { formatPath, isPromptCancelled } from './utils.js';
 
-function formatUsageStatus(info: AccountInfo): string {
-  const parts: string[] = [];
-  if (info.plan) parts.push(chalk.gray(info.plan));
-  if (info.usageStatus === 'rate_limited') parts.push(chalk.yellow('rate limited'));
-  else if (info.usageStatus === 'out_of_credits') parts.push(chalk.red('out of credits'));
-  return parts.join('  ');
+function formatUsageBar(info: AccountInfo): string {
+  // 5-segment bar: filled = remaining, empty = consumed
+  const BAR_LEN = 5;
+  const FULL = '\u2588';   // █
+  const EMPTY = '\u2591';  // ░
+
+  if (info.usageStatus === 'out_of_credits') {
+    return chalk.red(EMPTY.repeat(BAR_LEN));
+  }
+  if (info.usageStatus === 'rate_limited') {
+    return chalk.yellow(FULL.repeat(2) + chalk.dim(EMPTY.repeat(BAR_LEN - 2)));
+  }
+  // available
+  return chalk.green(FULL.repeat(BAR_LEN));
+}
+
+function formatUsageStatus(info: AccountInfo, planWidth = 3): string {
+  if (!info.plan && !info.usageStatus) return '';
+  const planLabel = (info.plan || '').padEnd(planWidth);
+  const planStr = info.plan ? chalk.gray(planLabel) : planLabel;
+  const barStr = info.usageStatus ? formatUsageBar(info) : '';
+  return `${planStr} ${barStr}`;
 }
 
 function compareVersions(a: string, b: string): number {
@@ -97,38 +113,38 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
 
   console.log(chalk.bold('Installed Agent CLIs\n'));
 
-  // Pre-fetch emails for all versions in parallel
-  const emailFetches: Promise<{ agentId: AgentId; version: string; email: string | null }>[] = [];
-  const globalEmailFetches: Promise<{ agentId: AgentId; email: string | null }>[] = [];
+  // Pre-fetch account info for all versions in parallel
+  const infoFetches: Promise<{ agentId: AgentId; version: string; info: AccountInfo }>[] = [];
+  const globalInfoFetches: Promise<{ agentId: AgentId; info: AccountInfo }>[] = [];
   for (const agentId of agentsToShow) {
     const versions = listInstalledVersions(agentId);
     if (versions.length > 0) {
       for (const ver of versions) {
-        emailFetches.push(
+        infoFetches.push(
           getAccountInfo(agentId, getVersionHomePath(agentId, ver)).then((info) => ({
             agentId,
             version: ver,
-            email: info.email,
+            info,
           }))
         );
       }
     } else {
-      globalEmailFetches.push(
-        getAccountInfo(agentId).then((info) => ({ agentId, email: info.email }))
+      globalInfoFetches.push(
+        getAccountInfo(agentId).then((info) => ({ agentId, info }))
       );
     }
   }
-  const emailResults = await Promise.all(emailFetches);
-  const globalEmailResults = await Promise.all(globalEmailFetches);
+  const infoResults = await Promise.all(infoFetches);
+  const globalInfoResults = await Promise.all(globalInfoFetches);
 
-  // Build lookup: agentId:version -> email
-  const listEmailMap = new Map<string, string | null>();
-  for (const { agentId, version, email } of emailResults) {
-    listEmailMap.set(`${agentId}:${version}`, email);
+  // Build lookup: agentId:version -> AccountInfo
+  const infoMap = new Map<string, AccountInfo>();
+  for (const { agentId, version, info } of infoResults) {
+    infoMap.set(`${agentId}:${version}`, info);
   }
-  const globalListEmailMap = new Map<string, string | null>();
-  for (const { agentId, email } of globalEmailResults) {
-    globalListEmailMap.set(agentId, email);
+  const globalInfoMap = new Map<string, AccountInfo>();
+  for (const { agentId, info } of globalInfoResults) {
+    globalInfoMap.set(agentId, info);
   }
 
   // Separate version-managed from globally-installed agents
@@ -148,14 +164,17 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
 
   // Show version-managed agents
   if (versionManaged.length > 0) {
-    // Calculate global max version label width across all agents
-    let globalMaxVerLabel = 0;
+    // Calculate column widths across all agents for alignment
+    let maxVerLabel = 0;
+    let maxEmail = 0;
     for (const agentId of versionManaged) {
       const versions = listInstalledVersions(agentId);
       const globalDefault = getGlobalDefault(agentId);
       for (const v of versions) {
         const label = v === globalDefault ? `${v} (default)` : v;
-        globalMaxVerLabel = Math.max(globalMaxVerLabel, label.length);
+        maxVerLabel = Math.max(maxVerLabel, label.length);
+        const info = infoMap.get(`${agentId}:${v}`);
+        if (info?.email) maxEmail = Math.max(maxEmail, info.email.length);
       }
     }
 
@@ -177,11 +196,13 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       for (const version of sortedVersions) {
         const isDefault = version === globalDefault;
         const base = isDefault ? `${version} (default)` : version;
-        const padded = base.padEnd(globalMaxVerLabel);
-        const label = isDefault ? `${version}${chalk.green(' (default)')}${' '.repeat(globalMaxVerLabel - base.length)}` : padded;
-        const vEmail = listEmailMap.get(`${agentId}:${version}`);
-        const vEmailStr = vEmail ? `  ${chalk.cyan(vEmail)}` : '';
-        console.log(`    ${label}${vEmailStr}`);
+        const padded = base.padEnd(maxVerLabel);
+        const label = isDefault ? `${version}${chalk.green(' (default)')}${' '.repeat(maxVerLabel - base.length)}` : padded;
+        const vInfo = infoMap.get(`${agentId}:${version}`);
+        const emailCol = (vInfo?.email || '').padEnd(maxEmail);
+        const emailStr = vInfo?.email ? chalk.cyan(emailCol) : ' '.repeat(maxEmail);
+        const usageStr = vInfo ? formatUsageStatus(vInfo) : '';
+        console.log(`    ${label}  ${emailStr}  ${usageStr}`);
         if (showPaths) {
           const versionDir = getVersionDir(agentId, version);
           console.log(chalk.gray(`      ${versionDir}`));
@@ -215,12 +236,14 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       const cliState = cliStates[agentId];
 
       console.log(`  ${chalk.bold(agent.name)}`);
-      const gEmail = globalListEmailMap.get(agentId);
+      const gInfo = globalInfoMap.get(agentId);
       const verLabel = `${cliState?.version || 'installed'} ${chalk.gray('(global)')}`;
       const verLabelLen = `${cliState?.version || 'installed'} (global)`.length;
       const padding = ' '.repeat(Math.max(0, globalMaxVerLabel - verLabelLen));
-      const gEmailStr = gEmail ? `  ${chalk.cyan(gEmail)}` : '';
-      console.log(`    ${verLabel}${padding}${gEmailStr}`);
+      const gEmailStr = gInfo?.email ? `  ${chalk.cyan(gInfo.email)}` : '';
+      const gUsageStr = gInfo ? formatUsageStatus(gInfo) : '';
+      const gUsagePart = gUsageStr ? `  ${gUsageStr}` : '';
+      console.log(`    ${verLabel}${padding}${gEmailStr}${gUsagePart}`);
       if (showPaths && cliState?.path) {
         console.log(chalk.gray(`      ${cliState.path}`));
       }
@@ -458,13 +481,15 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
 
   // 1. Agent CLI info
   console.log(chalk.bold('Agent CLIs\n'));
-  const email = (await getAccountInfo(agentId, getVersionHomePath(agentId, version))).email;
-  const emailStr = email ? chalk.cyan(`  ${email}`) : '';
+  const accountInfo = await getAccountInfo(agentId, getVersionHomePath(agentId, version));
+  const emailStr = accountInfo.email ? chalk.cyan(`  ${accountInfo.email}`) : '';
   const cli = cliStates[agentId];
   const status = cli?.installed
     ? chalk.green(cli.version || 'installed')
     : chalk.gray('not installed');
-  console.log(`  ${AGENTS[agentId].name.padEnd(14)} ${status}${emailStr}`);
+  const usageStr = formatUsageStatus(accountInfo);
+  const usagePart = usageStr ? `  ${usageStr}` : '';
+  console.log(`  ${AGENTS[agentId].name.padEnd(14)} ${status}${emailStr}${usagePart}`);
 
   // 2. Resources
   renderSection('Commands', agentData.commands);

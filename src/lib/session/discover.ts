@@ -318,19 +318,66 @@ async function readClaudeMeta(filePath: string, sessionId: string, account?: str
 }
 
 // ---------------------------------------------------------------------------
+// Codex account info
+// ---------------------------------------------------------------------------
+
+let cachedCodexAccount: string | undefined;
+
+function getCodexAccount(): string | undefined {
+  if (cachedCodexAccount !== undefined) return cachedCodexAccount || undefined;
+
+  const candidates = [
+    path.join(HOME, '.codex', 'auth.json'),
+  ];
+
+  // Also check version homes
+  const versionsBase = path.join(AGENTS_DIR, 'versions', 'codex');
+  if (fs.existsSync(versionsBase)) {
+    try {
+      for (const version of fs.readdirSync(versionsBase)) {
+        candidates.push(path.join(versionsBase, version, 'home', '.codex', 'auth.json'));
+      }
+    } catch {}
+  }
+
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const data = JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+      // Extract email from JWT id_token payload
+      const idToken = data.tokens?.id_token;
+      if (idToken) {
+        const parts = idToken.split('.');
+        if (parts.length >= 2) {
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
+          if (payload.email) {
+            cachedCodexAccount = payload.email;
+            return payload.email;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  cachedCodexAccount = '';
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Codex
 // ---------------------------------------------------------------------------
 
 async function discoverCodexSessions(): Promise<SessionMeta[]> {
   const sessions: SessionMeta[] = [];
   const seen = new Set<string>();
+  const account = getCodexAccount();
 
   for (const sessionsDir of getAgentSessionDirs('codex', 'sessions')) {
     const jsonlFiles = walkForFiles(sessionsDir, '.jsonl', 200);
 
     for (const filePath of jsonlFiles) {
       try {
-        const meta = await readCodexMeta(filePath);
+        const meta = await readCodexMeta(filePath, account);
         if (meta && !seen.has(meta.id)) {
           seen.add(meta.id);
           sessions.push(meta);
@@ -342,7 +389,7 @@ async function discoverCodexSessions(): Promise<SessionMeta[]> {
   return sessions;
 }
 
-async function readCodexMeta(filePath: string): Promise<SessionMeta | null> {
+async function readCodexMeta(filePath: string, account?: string): Promise<SessionMeta | null> {
   const lines = await readFirstLines(filePath, 5);
   if (lines.length === 0) return null;
 
@@ -384,6 +431,7 @@ async function readCodexMeta(filePath: string): Promise<SessionMeta | null> {
     gitBranch: payload.git?.branch || undefined,
     version: payload.version || undefined,
     topic,
+    account,
   };
 }
 
