@@ -1,6 +1,8 @@
 # agents
 
-**One CLI for all your AI coding agents.**
+**The package manager and runtime for AI coding agents.**
+
+Install versions. Install skills. Run any agent through one interface. Build pipelines across Claude, Codex, Gemini, Cursor, OpenCode, and more.
 
 ```bash
 npm install -g @swarmify/agents-cli
@@ -8,23 +10,51 @@ npm install -g @swarmify/agents-cli
 
 Also available as `ag` -- all commands work with both `agents` and `ag`.
 
-## The Problem
+---
 
-You use Claude, Codex, Gemini, Cursor. Each has its own config location, MCP registration, command format, and version management. New machine? Redo everything. Teammate wants your setup? Good luck.
-
-## The Solution
+## Run any agent. Same interface.
 
 ```bash
-agents pull gh:yourname/.agents    # One command. Every agent configured.
+agents exec claude "Find all auth vulnerabilities in src/"
+agents exec codex "Fix the issues Claude found"
+agents exec gemini "Write tests for the fixed code"
 ```
 
-Your MCP servers, commands, skills, rules, hooks, and permissions -- synced to Claude, Codex, Gemini, Cursor, and OpenCode in one step.
+Each agent resolves to the project-pinned version, with the right skills, MCP servers, and permissions already synced. No setup between steps -- just run.
+
+This makes agent pipelines possible. Chain agents by strength, swap one for another, script them in CI -- the interface stays the same:
+
+```bash
+# Friday night code review
+agents exec claude "Review all PRs merged this week, summarize risks" \
+  | agents exec codex "Write regression tests for the top 3 risks"
+
+# Same pipeline, different project -- different agent versions, same commands
+cd ../other-project
+agents exec claude "Review all PRs merged this week, summarize risks"
+# ^ resolves to claude@2.0.0 here instead of claude@2.1.89
+```
+
+Supports plan (read-only) and edit modes, effort levels that map to the right model per agent, and JSON output for scripting.
 
 ---
 
-## What You Can Do
+## Pin agent versions per project
 
-### Manage skills across all agents
+```bash
+agents add claude@2.0.0             # Install specific version
+agents use claude@2.0.0 -p          # Pin to this project
+```
+
+Like `.nvmrc` for Node -- different projects use different agent versions. A shim system reads `.agents-version` and routes to the right binary automatically. No other tool does this for AI agents.
+
+When you switch versions, configs are backed up and resources are re-synced. Each version gets its own isolated home directory with the right skills, commands, and permissions already in place.
+
+---
+
+## Install skills, MCP servers, and commands once -- every agent gets them
+
+### Skills
 
 Skills are reusable knowledge packs -- rules, patterns, and expertise that make your agents better at specific tasks. Install once, available everywhere.
 
@@ -67,16 +97,6 @@ agents commands view review-pr              # View command content
 ```
 
 Commands are markdown files with a description. The CLI handles format conversion automatically -- markdown for Claude/Gemini/Cursor, TOML for Codex.
-
-### Version-lock agents per project
-
-```bash
-agents add claude@2.0.0           # Install specific version
-agents use claude@2.0.0 -p        # Pin to this project
-agents list                       # Show installed versions
-```
-
-Like `nvm` for Node -- different projects can use different agent versions. A shim system reads your project config and routes to the right version automatically.
 
 ### Sync your entire setup
 
