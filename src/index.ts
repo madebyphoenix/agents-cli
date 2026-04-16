@@ -310,6 +310,46 @@ for (const alias of ['jobs', 'cron']) {
     });
 }
 
+program
+    .command('upgrade')
+    .description('Upgrade agents-cli to the latest version')
+    .action(async () => {
+      const spinner = ora('Checking for updates...').start();
+      try {
+        const response = await fetch('https://registry.npmjs.org/@swarmify/agents-cli/latest', {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) {
+          spinner.fail('Could not reach npm registry');
+          process.exit(1);
+        }
+
+        const data = (await response.json()) as { version: string };
+        const latestVersion = data.version;
+
+        if (latestVersion === VERSION) {
+          spinner.succeed(`Already on latest version (${VERSION})`);
+          return;
+        }
+
+        if (compareVersions(latestVersion, VERSION) <= 0) {
+          spinner.succeed(`Already ahead of latest (${VERSION} >= ${latestVersion})`);
+          return;
+        }
+
+        spinner.text = `Upgrading ${VERSION} -> ${latestVersion}...`;
+        const { exec: execCb } = await import('child_process');
+        const { promisify } = await import('util');
+        const execAsync = promisify(execCb);
+        await execAsync('npm install -g @swarmify/agents-cli@latest');
+        spinner.succeed(`Upgraded to ${latestVersion}`);
+        await showWhatsNew(VERSION, latestVersion);
+      } catch (err) {
+        spinner.fail('Upgrade failed');
+        console.log(chalk.gray('Run manually: npm install -g @swarmify/agents-cli@latest'));
+      }
+    });
+
 registerPullCommand(program);
 registerPushCommand(program);
 registerForkCommand(program);
