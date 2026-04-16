@@ -36,6 +36,8 @@ export function saveDaemonConfig(config: DaemonConfig): void {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 }
 
+// NOTE: This interface must stay in sync with SyncSessionData in
+// infra/sandbox/service/src/nodes.ts
 export interface SessionData {
   id: string;
   agent: string;
@@ -49,6 +51,8 @@ export interface SessionData {
   summary?: string;
 }
 
+// NOTE: This interface must stay in sync with SyncRequest in
+// infra/sandbox/service/src/nodes.ts
 export interface SyncRequest {
   activeSessions: SessionData[];
   completedSessions?: SessionData[];
@@ -148,33 +152,28 @@ export function getMachineStats(): { cpuUsage?: number; memoryUsage?: number } {
   };
 }
 
-// Get installed agent versions
-export function getAgentVersions(): Record<string, string> {
+// Get installed agent versions (runs in parallel for efficiency)
+export async function getAgentVersions(): Promise<Record<string, string>> {
+  const { exec } = await import('child_process');
+  const { promisify } = await import('util');
+  const execAsync = promisify(exec);
+
+  const agents = ['claude', 'codex', 'gemini'];
+
+  const results = await Promise.allSettled(
+    agents.map(async (agent) => {
+      const { stdout } = await execAsync(`${agent} --version 2>/dev/null`);
+      const match = stdout.trim().match(/(\d+\.\d+\.\d+)/);
+      return { agent, version: match?.[1] };
+    })
+  );
+
   const versions: Record<string, string> = {};
-
-  // Claude Code
-  try {
-    const { execSync } = require('child_process');
-    const claudeVersion = execSync('claude --version 2>/dev/null', { encoding: 'utf-8' }).trim();
-    const match = claudeVersion.match(/(\d+\.\d+\.\d+)/);
-    if (match) versions.claude = match[1];
-  } catch {}
-
-  // Codex
-  try {
-    const { execSync } = require('child_process');
-    const codexVersion = execSync('codex --version 2>/dev/null', { encoding: 'utf-8' }).trim();
-    const match = codexVersion.match(/(\d+\.\d+\.\d+)/);
-    if (match) versions.codex = match[1];
-  } catch {}
-
-  // Gemini CLI
-  try {
-    const { execSync } = require('child_process');
-    const geminiVersion = execSync('gemini --version 2>/dev/null', { encoding: 'utf-8' }).trim();
-    const match = geminiVersion.match(/(\d+\.\d+\.\d+)/);
-    if (match) versions.gemini = match[1];
-  } catch {}
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value.version) {
+      versions[result.value.agent] = result.value.version;
+    }
+  }
 
   return versions;
 }

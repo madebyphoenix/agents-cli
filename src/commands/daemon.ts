@@ -211,6 +211,17 @@ async function registerNode(options: { endpoint: string; nodeToken?: string }): 
   }
 }
 
+// Track consecutive failures for exponential backoff
+let consecutiveFailures = 0;
+const MAX_BACKOFF_MS = 5 * 60 * 1000; // 5 minutes max
+
+function getBackoffMs(failures: number): number {
+  if (failures === 0) return 0;
+  // Exponential backoff: 2^failures seconds, capped at MAX_BACKOFF_MS
+  const backoffMs = Math.min(Math.pow(2, failures) * 1000, MAX_BACKOFF_MS);
+  return backoffMs;
+}
+
 async function runReportDaemon(options: {
   nodeToken?: string;
   endpoint: string;
@@ -286,13 +297,18 @@ async function runReportDaemon(options: {
   // Initial sync
   await syncOnce(client, nodeId!);
 
-  // Periodic sync
-  setInterval(async () => {
-    await syncOnce(client, nodeId!);
-  }, interval);
+  // Periodic sync with exponential backoff on failures
+  const runSyncLoop = async () => {
+    while (true) {
+      const backoffMs = getBackoffMs(consecutiveFailures);
+      const waitMs = interval + backoffMs;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      await syncOnce(client, nodeId!);
+    }
+  };
 
-  // Keep process alive
-  await new Promise(() => {});
+  // Run the sync loop (never resolves)
+  await runSyncLoop();
 }
 
 async function syncOnce(client: FactoryClient, nodeId: string): Promise<void> {
@@ -306,7 +322,7 @@ async function syncOnce(client: FactoryClient, nodeId: string): Promise<void> {
 
     // Get machine stats
     const stats = getMachineStats();
-    const versions = getAgentVersions();
+    const versions = await getAgentVersions();
 
     const request: SyncRequest = {
       activeSessions,
@@ -317,6 +333,9 @@ async function syncOnce(client: FactoryClient, nodeId: string): Promise<void> {
     };
 
     const response = await client.sync(nodeId, request);
+
+    // Reset failure counter on success
+    consecutiveFailures = 0;
 
     const config = loadDaemonConfig();
     saveDaemonConfig({ ...config, lastSync: Date.now() });
@@ -332,8 +351,14 @@ async function syncOnce(client: FactoryClient, nodeId: string): Promise<void> {
       }
     }
   } catch (err) {
+    consecutiveFailures++;
+    const backoffMs = getBackoffMs(consecutiveFailures);
     const timestamp = new Date().toLocaleTimeString();
+    const backoffSec = Math.round(backoffMs / 1000);
     console.error(chalk.red(`[${timestamp}] Sync failed: ${(err as Error).message}`));
+    if (backoffMs > 0) {
+      console.error(chalk.yellow(`  Next retry in ${backoffSec}s (failure #${consecutiveFailures})`));
+    }
     log('ERROR', `Sync failed: ${(err as Error).message}`);
   }
 }
