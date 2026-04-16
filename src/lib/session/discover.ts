@@ -33,6 +33,7 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
         case 'claude': return discoverClaudeSessions();
         case 'codex': return discoverCodexSessions();
         case 'gemini': return discoverGeminiSessions();
+        case 'opencode': return discoverOpenCodeSessions();
         case 'openclaw': return discoverOpenClawSessions();
       }
     })

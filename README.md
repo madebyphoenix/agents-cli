@@ -127,16 +127,6 @@ agents routines logs daily-digest      # Check execution logs
 
 Jobs run sandboxed -- agents only see directories and tools you explicitly allow.
 
-### Run any agent with a unified interface
-
-```bash
-agents exec claude "Find all TODO comments in src/"
-agents exec codex -m edit "Add error handling to auth.ts"
-agents exec gemini -e detailed "Analyze this architecture"
-```
-
-Same interface, every agent. Supports plan (read-only) and edit modes, effort levels that map to the right model per agent, and JSON output for scripting.
-
 ### Manage rules/instructions, hooks, and permissions
 
 Each agent has its own instruction file format -- Claude uses `CLAUDE.md`, Codex uses `AGENTS.md`, Cursor uses `.cursorrules`. The CLI manages all of them under one command.
