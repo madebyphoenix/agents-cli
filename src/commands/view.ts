@@ -164,6 +164,34 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
     globalInfoMap.set(agentId, info);
   }
 
+  // Usage status, plan, and overage credits belong to the account (email), not the
+  // version. Different versions cache these in their own .claude.json, so older
+  // versions show stale bars for the same email. Pick the freshest cache per
+  // (agentId, email) and reuse it for every row with that email. lastActive stays
+  // per-version — it reflects when that specific version was last used.
+  const canonicalByEmail = new Map<string, AccountInfo>();
+  for (const { agentId, info } of infoResults) {
+    if (!info.email) continue;
+    const key = `${agentId}:${info.email}`;
+    const existing = canonicalByEmail.get(key);
+    const existingMs = existing?.lastActive?.getTime() ?? -1;
+    const currentMs = info.lastActive?.getTime() ?? -1;
+    if (!existing || currentMs > existingMs) {
+      canonicalByEmail.set(key, info);
+    }
+  }
+  const mergeCanonical = (agentId: AgentId, info: AccountInfo): AccountInfo => {
+    if (!info.email) return info;
+    const canon = canonicalByEmail.get(`${agentId}:${info.email}`);
+    if (!canon) return info;
+    return {
+      ...info,
+      plan: canon.plan,
+      usageStatus: canon.usageStatus,
+      overageCredits: canon.overageCredits,
+    };
+  };
+
   // Separate version-managed from globally-installed agents
   const versionManaged: AgentId[] = [];
   const globallyInstalled: AgentId[] = [];
