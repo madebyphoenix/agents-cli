@@ -178,10 +178,14 @@ export function registerVersionsCommands(program: Command): void {
 
             // Prompt to set as default
             const currentDefault = getGlobalDefault(agent);
-            if (!currentDefault) {
+            if (currentDefault !== installedVersion) {
               try {
+                const message = currentDefault
+                  ? `Switch default from ${agentLabel(agentConfig.id)}@${currentDefault} to @${installedVersion}?`
+                  : `Set ${agentLabel(agentConfig.id)}@${installedVersion} as default?`;
+
                 const setAsDefault = await confirm({
-                  message: `Set ${agentLabel(agentConfig.id)}@${installedVersion} as default?`,
+                  message,
                   default: true,
                 });
 
