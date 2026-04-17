@@ -13,6 +13,7 @@ import {
   registerMcp,
   unregisterMcp,
   listInstalledMcpsWithScope,
+  agentLabel,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
@@ -65,7 +66,7 @@ export function registerMcpCommands(program: Command): void {
         const agent = AGENTS[agentId];
         if (!agent.capabilities.mcp) {
           const defaultLabel = isDefault ? ' default' : '';
-          console.log(`  ${chalk.bold(agent.name)} (${version}${defaultLabel}): ${chalk.gray('mcp not supported')}`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))} (${version}${defaultLabel}): ${chalk.gray('mcp not supported')}`);
           console.log();
           return;
         }
@@ -78,9 +79,9 @@ export function registerMcpCommands(program: Command): void {
         const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
         if (mcps.length === 0) {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}: ${chalk.gray('none')}`);
         } else {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}:`);
 
           const userMcps = mcps.filter((m) => m.scope === 'user');
           const projectMcps = mcps.filter((m) => m.scope === 'project');
@@ -113,24 +114,24 @@ export function registerMcpCommands(program: Command): void {
         const defaultVer = getGlobalDefault(agentId);
 
         if (!agent.capabilities.mcp) {
-          console.log(chalk.bold(`MCP Servers for ${agent.name}\n`));
+          console.log(chalk.bold(`MCP Servers for ${agentLabel(agent.id)}\n`));
           console.log(`  ${chalk.gray('mcp not supported')}`);
           return;
         }
 
         if (installedVersions.length === 0) {
           // Not version-managed
-          console.log(chalk.bold(`MCP Servers for ${agent.name}\n`));
+          console.log(chalk.bold(`MCP Servers for ${agentLabel(agent.id)}\n`));
           if (!cliStates[agentId]?.installed) {
-            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('CLI not installed')}`);
+            console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('CLI not installed')}`);
           } else {
             const mcps = listInstalledMcpsWithScope(agentId, cwd, { home: getEffectiveHome(agentId) }).filter(
               (m) => options.scope === 'all' || m.scope === options.scope
             );
             if (mcps.length === 0) {
-              console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+              console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('none')}`);
             } else {
-              console.log(`  ${chalk.bold(agent.name)}:`);
+              console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
               const userMcps = mcps.filter((m) => m.scope === 'user');
               if (userMcps.length > 0) {
                 console.log(`    ${chalk.gray('User:')}`);
@@ -144,7 +145,7 @@ export function registerMcpCommands(program: Command): void {
           return;
         }
 
-        console.log(chalk.bold(`MCP Servers for ${agent.name}\n`));
+        console.log(chalk.bold(`MCP Servers for ${agentLabel(agent.id)}\n`));
 
         let versionsToShow: string[];
         if (requestedVersion === 'default') {
@@ -189,17 +190,17 @@ export function registerMcpCommands(program: Command): void {
         } else {
           // Not version-managed or no default
           if (!cliStates[aid]?.installed) {
-            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('CLI not installed')}`);
+            console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('CLI not installed')}`);
           } else if (!agent.capabilities.mcp) {
-            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('mcp not supported')}`);
+            console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('mcp not supported')}`);
           } else {
             const mcps = listInstalledMcpsWithScope(aid, cwd, { home: getEffectiveHome(aid) }).filter(
               (m) => options.scope === 'all' || m.scope === options.scope
             );
             if (mcps.length === 0) {
-              console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+              console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('none')}`);
             } else {
-              console.log(`  ${chalk.bold(agent.name)}:`);
+              console.log(`  ${chalk.bold(agentLabel(aid))}:`);
               const userMcps = mcps.filter((m) => m.scope === 'user');
               if (userMcps.length > 0) {
                 console.log(`    ${chalk.gray('User:')}`);
@@ -355,7 +356,7 @@ export function registerMcpCommands(program: Command): void {
 
           const result = await unregisterMcp(agentId, mcpName);
           if (result.success) {
-            console.log(`  ${chalk.red('-')} ${AGENTS[agentId].name}: ${mcpName}`);
+            console.log(`  ${chalk.red('-')} ${agentLabel(agentId)}: ${mcpName}`);
             removed++;
           }
         }
@@ -464,9 +465,9 @@ export function registerMcpCommands(program: Command): void {
 
             const result = await registerMcp(agentId, mcpName, config.command, config.scope, config.transport || 'stdio');
             if (result.success) {
-              console.log(`    ${chalk.green('+')} ${AGENTS[agentId].name}`);
+              console.log(`    ${chalk.green('+')} ${agentLabel(agentId)}`);
             } else {
-              console.log(`    ${chalk.red('x')} ${AGENTS[agentId].name}: ${result.error}`);
+              console.log(`    ${chalk.red('x')} ${agentLabel(agentId)}: ${result.error}`);
             }
           }
         }

@@ -174,13 +174,18 @@ async function showWhatsNew(fromVersion: string, toVersion: string): Promise<voi
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_CHECK_FILE = path.join(os.homedir(), '.agents', '.update-check');
 
-function shouldCheckForUpdates(): boolean {
+function readUpdateCache(): { lastCheck: number; latestVersion: string } | null {
   try {
-    const data = JSON.parse(fs.readFileSync(UPDATE_CHECK_FILE, 'utf-8'));
-    return Date.now() - data.lastCheck > UPDATE_CHECK_INTERVAL_MS;
+    return JSON.parse(fs.readFileSync(UPDATE_CHECK_FILE, 'utf-8'));
   } catch {
-    return true; // No cache file or unreadable — check now
+    /* cache file missing or corrupt */
+    return null;
   }
+}
+
+function shouldFetchLatest(cache: { lastCheck: number } | null): boolean {
+  if (!cache) return true;
+  return Date.now() - cache.lastCheck > UPDATE_CHECK_INTERVAL_MS;
 }
 
 function saveUpdateCheck(latestVersion: string): void {
@@ -189,14 +194,61 @@ function saveUpdateCheck(latestVersion: string): void {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(UPDATE_CHECK_FILE, JSON.stringify({ lastCheck: Date.now(), latestVersion }));
   } catch {
-    // Best-effort
+    /* best-effort cache update */
+  }
+}
+
+async function promptUpgrade(latestVersion: string): Promise<void> {
+  if (!process.stdout.isTTY) {
+    console.error(chalk.yellow(`Update available: ${VERSION} -> ${latestVersion}. Run: npm install -g @swarmify/agents-cli@latest`));
+    return;
+  }
+
+  const answer = await select({
+    message: `Update available: ${VERSION} -> ${latestVersion}`,
+    choices: [
+      { value: 'now', name: 'Upgrade now' },
+      { value: 'later', name: 'Later' },
+    ],
+  });
+
+  if (answer === 'now') {
+    const { exec, spawnSync } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+    const spinner = ora('Upgrading...').start();
+    try {
+      await execAsync('npm install -g @swarmify/agents-cli@latest');
+      spinner.succeed(`Upgraded to ${latestVersion}`);
+      await showWhatsNew(VERSION, latestVersion);
+      console.log();
+      // Re-exec with new version and exit
+      const result = spawnSync('agents', process.argv.slice(2), {
+        stdio: 'inherit',
+        shell: true,
+      });
+      process.exit(result.status ?? 0);
+    } catch {
+      spinner.fail('Upgrade failed');
+      console.log(chalk.gray('Run manually: npm install -g @swarmify/agents-cli@latest'));
+    }
+    console.log();
   }
 }
 
 async function checkForUpdates(): Promise<void> {
-  if (!shouldCheckForUpdates()) return;
-
   try {
+    const cache = readUpdateCache();
+
+    // If cache is fresh, use cached version — still prompt if update available
+    if (!shouldFetchLatest(cache) && cache?.latestVersion) {
+      if (cache.latestVersion !== VERSION && compareVersions(cache.latestVersion, VERSION) > 0) {
+        await promptUpgrade(cache.latestVersion);
+      }
+      return;
+    }
+
+    // Cache stale or missing — fetch from registry
     const response = await fetch('https://registry.npmjs.org/@swarmify/agents-cli/latest', {
       signal: AbortSignal.timeout(2000),
     });
@@ -207,42 +259,7 @@ async function checkForUpdates(): Promise<void> {
     saveUpdateCheck(latestVersion);
 
     if (latestVersion !== VERSION && compareVersions(latestVersion, VERSION) > 0) {
-      // Non-interactive environment — just print the notice
-      if (!process.stdout.isTTY) {
-        console.error(chalk.yellow(`Update available: ${VERSION} -> ${latestVersion}. Run: npm install -g @swarmify/agents-cli@latest`));
-        return;
-      }
-
-      const answer = await select({
-        message: `Update available: ${VERSION} -> ${latestVersion}`,
-        choices: [
-          { value: 'now', name: 'Upgrade now' },
-          { value: 'later', name: 'Later' },
-        ],
-      });
-
-      if (answer === 'now') {
-        const { exec, spawnSync } = await import('child_process');
-        const { promisify } = await import('util');
-        const execAsync = promisify(exec);
-        const spinner = ora('Upgrading...').start();
-        try {
-          await execAsync('npm install -g @swarmify/agents-cli@latest');
-          spinner.succeed(`Upgraded to ${latestVersion}`);
-          await showWhatsNew(VERSION, latestVersion);
-          console.log();
-          // Re-exec with new version and exit
-          const result = spawnSync('agents', process.argv.slice(2), {
-            stdio: 'inherit',
-            shell: true,
-          });
-          process.exit(result.status ?? 0);
-        } catch {
-          spinner.fail('Upgrade failed');
-          console.log(chalk.gray('Run manually: npm install -g @swarmify/agents-cli@latest'));
-        }
-        console.log();
-      }
+      await promptUpgrade(latestVersion);
     }
   } catch (err) {
     if (isPromptCancelled(err)) {

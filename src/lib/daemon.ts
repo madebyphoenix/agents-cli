@@ -193,7 +193,7 @@ export function startDaemon(): { pid: number | null; method: string } {
 
       try {
         execSync(`launchctl unload "${plistPath}" 2>/dev/null`, { encoding: 'utf-8' });
-      } catch {}
+      } catch { /* not loaded, expected */ }
       execSync(`launchctl load "${plistPath}"`, { encoding: 'utf-8' });
 
       const pid = waitForPid(3000);
@@ -262,7 +262,11 @@ export function stopDaemon(): boolean {
       try {
         execSync(`launchctl unload "${plistPath}"`, { encoding: 'utf-8' });
         fs.unlinkSync(plistPath);
-      } catch {}
+      } catch (err: any) {
+        if (process.env.AGENTS_DEBUG) {
+          console.error(`[debug] launchctl unload failed: ${err.message}`);
+        }
+      }
     }
   }
 
@@ -270,10 +274,14 @@ export function stopDaemon(): boolean {
     try {
       execSync(`systemctl --user stop ${SYSTEMD_UNIT}`, { encoding: 'utf-8' });
       execSync(`systemctl --user disable ${SYSTEMD_UNIT}`, { encoding: 'utf-8' });
-    } catch {}
+    } catch (err: any) {
+      if (process.env.AGENTS_DEBUG) {
+        console.error(`[debug] systemctl stop failed: ${err.message}`);
+      }
+    }
     const unitPath = getSystemdUnitPath();
     if (fs.existsSync(unitPath)) {
-      try { fs.unlinkSync(unitPath); } catch {}
+      try { fs.unlinkSync(unitPath); } catch { /* unit file already removed */ }
     }
   }
 
@@ -281,13 +289,13 @@ export function stopDaemon(): boolean {
   if (pid) {
     try {
       process.kill(pid, 'SIGTERM');
-    } catch {}
+    } catch { /* process already exited */ }
 
     setTimeout(() => {
       try {
         process.kill(pid, 0);
         process.kill(pid, 'SIGKILL');
-      } catch {}
+      } catch { /* process already exited */ }
     }, 5000);
   }
 
@@ -307,7 +315,7 @@ export function getDaemonStatus(): {
   let jobCount = 0;
   try {
     jobCount = listAllJobs().filter((j) => j.enabled).length;
-  } catch {}
+  } catch { /* job listing failed */ }
 
   return { running, pid, jobCount, logPath: getLogPath() };
 }

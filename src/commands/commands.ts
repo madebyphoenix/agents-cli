@@ -12,6 +12,7 @@ import {
   getAllCliStates,
   resolveAgentName,
   formatAgentError,
+  agentLabel,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -84,9 +85,9 @@ export function registerCommandsCommands(program: Command): void {
         const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
         if (commands.length === 0) {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}: ${chalk.gray('none')}`);
         } else {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}:`);
 
           const userCommands = commands.filter((c) => c.scope === 'user');
           const projectCommands = commands.filter((c) => c.scope === 'project');
@@ -118,14 +119,14 @@ export function registerCommandsCommands(program: Command): void {
 
         if (installedVersions.length === 0) {
           // Not version-managed, show from effective home
-          console.log(chalk.bold(`Installed Commands for ${agent.name}\n`));
+          console.log(chalk.bold(`Installed Commands for ${agentLabel(agent.id)}\n`));
           const commands = listInstalledCommandsWithScope(agentId, cwd).filter(
             (c) => options.scope === 'all' || c.scope === options.scope
           );
           if (commands.length === 0) {
-            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+            console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('none')}`);
           } else {
-            console.log(`  ${chalk.bold(agent.name)}:`);
+            console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
             const userCommands = commands.filter((c) => c.scope === 'user');
             if (userCommands.length > 0) {
               console.log(`    ${chalk.gray('User:')}`);
@@ -137,18 +138,18 @@ export function registerCommandsCommands(program: Command): void {
           return;
         }
 
-        console.log(chalk.bold(`Installed Commands for ${agent.name}\n`));
+        console.log(chalk.bold(`Installed Commands for ${agentLabel(agent.id)}\n`));
 
         let versionsToShow: string[];
         if (requestedVersion === 'default') {
           if (!defaultVer) {
-            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
+            console.log(chalk.yellow(`  No default version set for ${agentLabel(agent.id)}. Run: agents use ${agentId}@<version>`));
             return;
           }
           versionsToShow = [defaultVer];
         } else if (requestedVersion) {
           if (!installedVersions.includes(requestedVersion)) {
-            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
+            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agentLabel(agent.id)}.`));
             console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
             return;
           }
@@ -185,9 +186,9 @@ export function registerCommandsCommands(program: Command): void {
             (c) => options.scope === 'all' || c.scope === options.scope
           );
           if (commands.length === 0) {
-            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+            console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('none')}`);
           } else {
-            console.log(`  ${chalk.bold(agent.name)}:`);
+            console.log(`  ${chalk.bold(agentLabel(aid))}:`);
             const userCommands = commands.filter((c) => c.scope === 'user');
             if (userCommands.length > 0) {
               console.log(`    ${chalk.gray('User:')}`);
@@ -420,7 +421,7 @@ export function registerCommandsCommands(program: Command): void {
         let removed = 0;
         for (const agentId of agents) {
           if (uninstallCommand(agentId, cmdName)) {
-            console.log(`  ${chalk.red('-')} ${AGENTS[agentId].name}: ${cmdName}`);
+            console.log(`  ${chalk.red('-')} ${agentLabel(agentId)}: ${cmdName}`);
             removed++;
           }
         }

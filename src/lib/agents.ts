@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as TOML from 'smol-toml';
+import chalk from 'chalk';
 import type { AgentConfig, AgentId } from './types.js';
 import { getVersionsDir, getShimsDir } from './state.js';
 import { resolveVersion } from './versions.js';
@@ -22,6 +23,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   claude: {
     id: 'claude',
     name: 'Claude',
+    color: 'magenta',
     cliCommand: 'claude',
     npmPackage: '@anthropic-ai/claude-code',
     configDir: path.join(HOME, '.claude'),
@@ -39,6 +41,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   codex: {
     id: 'codex',
     name: 'Codex',
+    color: 'green',
     cliCommand: 'codex',
     npmPackage: '@openai/codex',
     configDir: path.join(HOME, '.codex'),
@@ -55,6 +58,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   gemini: {
     id: 'gemini',
     name: 'Gemini',
+    color: 'blue',
     cliCommand: 'gemini',
     npmPackage: '@google/gemini-cli',
     configDir: path.join(HOME, '.gemini'),
@@ -72,6 +76,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   cursor: {
     id: 'cursor',
     name: 'Cursor',
+    color: 'cyan',
     cliCommand: 'cursor-agent',
     npmPackage: '',
     installScript: 'curl https://cursor.com/install -fsS | bash && mv ~/.local/bin/agent ~/.local/bin/cursor-agent && grep -q "/.local/bin" ~/.zshrc || echo \'export PATH="$HOME/.local/bin:$PATH"\' >> ~/.zshrc',
@@ -89,6 +94,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   opencode: {
     id: 'opencode',
     name: 'OpenCode',
+    color: 'yellowBright',
     cliCommand: 'opencode',
     npmPackage: 'opencode-ai',
     configDir: path.join(HOME, '.opencode'),
@@ -105,6 +111,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   openclaw: {
     id: 'openclaw',
     name: 'OpenClaw',
+    color: 'redBright',
     cliCommand: 'openclaw',
     npmPackage: 'openclaw',
     configDir: path.join(HOME, '.openclaw'),
@@ -121,6 +128,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   copilot: {
     id: 'copilot',
     name: 'Copilot',
+    color: 'whiteBright',
     cliCommand: 'copilot',
     npmPackage: '@github/copilot',
     configDir: path.join(HOME, '.copilot'),
@@ -137,6 +145,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   amp: {
     id: 'amp',
     name: 'Amp',
+    color: 'blueBright',
     cliCommand: 'amp',
     npmPackage: '@sourcegraph/amp',
     configDir: path.join(HOME, '.config', 'amp'),
@@ -153,6 +162,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   kiro: {
     id: 'kiro',
     name: 'Kiro',
+    color: 'greenBright',
     cliCommand: 'kiro-cli',
     npmPackage: '',
     installScript: 'brew install --cask kiro-cli',
@@ -170,6 +180,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   goose: {
     id: 'goose',
     name: 'Goose',
+    color: 'magentaBright',
     cliCommand: 'goose',
     npmPackage: '',
     installScript: 'brew install block-goose-cli',
@@ -187,6 +198,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   roo: {
     id: 'roo',
     name: 'Roo Code',
+    color: 'cyanBright',
     cliCommand: 'roo',
     npmPackage: '',
     installScript: 'curl -fsSL https://raw.githubusercontent.com/RooCodeInc/Roo-Code/main/apps/cli/install.sh | sh',
@@ -218,12 +230,27 @@ export const PLUGINS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
   (id) => AGENTS[id].capabilities.plugins
 );
 
+/** Get the chalk color function for an agent. Works for any AgentId or SessionAgentId. */
+export function colorAgent(agentId: string): (s: string) => string {
+  const agent = AGENTS[agentId as AgentId];
+  if (!agent) return chalk.white;
+  return chalk[agent.color];
+}
+
+/** Return the agent's display name, colored. */
+export function agentLabel(agentId: string): string {
+  const agent = AGENTS[agentId as AgentId];
+  if (!agent) return agentId;
+  return chalk[agent.color](agent.name);
+}
+
 export async function isCliInstalled(agentId: AgentId): Promise<boolean> {
   const agent = AGENTS[agentId];
   try {
     await execAsync(`which ${agent.cliCommand}`);
     return true;
   } catch {
+    /* CLI not found in PATH */
     return false;
   }
 }
@@ -240,6 +267,7 @@ export async function getCliVersion(agentId: AgentId): Promise<string | null> {
     const match = stdout.match(/(\d+\.\d+\.\d+)/);
     return match ? match[1] : stdout.trim();
   } catch {
+    /* version command failed or CLI not installed */
     return null;
   }
 }
@@ -250,6 +278,7 @@ export async function getCliPath(agentId: AgentId): Promise<string | null> {
     const { stdout } = await execAsync(`which ${agent.cliCommand}`);
     return stdout.trim();
   } catch {
+    /* CLI not found in PATH */
     return null;
   }
 }
@@ -367,7 +396,7 @@ export async function getAccountInfo(
     try {
       const stat = await fs.promises.stat(configPath);
       lastActive = stat.mtime;
-    } catch {}
+    } catch { /* config file not accessible */ }
   }
 
   try {
@@ -430,6 +459,7 @@ export async function getAccountInfo(
         return { ...empty, lastActive };
     }
   } catch {
+    /* auth/config file missing or unreadable */
     return { ...empty, lastActive };
   }
 }
@@ -443,6 +473,7 @@ export async function isMcpRegistered(agentId: AgentId, mcpName: string): Promis
     const { stdout } = await execAsync(`${agent.cliCommand} mcp list`);
     return stdout.toLowerCase().includes(mcpName.toLowerCase());
   } catch {
+    /* mcp list command failed */
     return false;
   }
 }
@@ -624,6 +655,7 @@ function parseMcpFromJsonConfig(configPath: string): Record<string, McpConfigEnt
     // Claude uses mcpServers, others may use mcp_servers or mcp
     return config.mcpServers || config.mcp_servers || config.mcp || {};
   } catch {
+    /* JSON config corrupt or unreadable */
     return {};
   }
 }
@@ -645,6 +677,7 @@ function parseMcpFromTomlConfig(configPath: string): Record<string, McpConfigEnt
     const mcpServers = config.mcp_servers as Record<string, McpConfigEntry> | undefined;
     return mcpServers || {};
   } catch {
+    /* TOML config corrupt or unreadable */
     return {};
   }
 }
@@ -688,6 +721,7 @@ function parseMcpFromOpenCodeConfig(configPath: string): Record<string, McpConfi
     }
     return result;
   } catch {
+    /* OpenCode JSONC config corrupt or unreadable */
     return {};
   }
 }
@@ -824,6 +858,7 @@ function parseMcpFromOpenClawConfig(configPath: string): Record<string, McpConfi
     }
     return result;
   } catch {
+    /* OpenClaw JSON config corrupt or unreadable */
     return {};
   }
 }

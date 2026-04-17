@@ -16,7 +16,6 @@ const MCP_CONFIG_FILE = path.join(AGENTS_DIR, 'mcp.json');
 const PACKAGES_DIR = path.join(AGENTS_DIR, 'packages');
 const ROUTINES_DIR = path.join(AGENTS_DIR, 'routines');
 const RUNS_DIR = path.join(AGENTS_DIR, 'runs');
-const DRIVES_DIR = path.join(AGENTS_DIR, 'drives');
 const VERSIONS_DIR = path.join(AGENTS_DIR, 'versions');
 const SHIMS_DIR = path.join(AGENTS_DIR, 'shims');
 const PERMISSIONS_DIR = path.join(AGENTS_DIR, 'permissions');
@@ -88,10 +87,6 @@ export function getRunsDir(): string {
   return RUNS_DIR;
 }
 
-export function getDrivesDir(): string {
-  return DRIVES_DIR;
-}
-
 export function getVersionsDir(): string {
   return VERSIONS_DIR;
 }
@@ -161,9 +156,6 @@ export function ensureAgentsDir(): void {
   if (!fs.existsSync(RUNS_DIR)) {
     fs.mkdirSync(RUNS_DIR, { recursive: true });
   }
-  if (!fs.existsSync(DRIVES_DIR)) {
-    fs.mkdirSync(DRIVES_DIR, { recursive: true });
-  }
   if (!fs.existsSync(VERSIONS_DIR)) {
     fs.mkdirSync(VERSIONS_DIR, { recursive: true });
   }
@@ -227,10 +219,10 @@ export function readMeta(): Meta {
 
       writeMeta(meta);
       // Remove old meta.yaml to prevent stale reads by shims
-      try { fs.unlinkSync(oldMetaFile); } catch {}
+      try { fs.unlinkSync(oldMetaFile); } catch { /* old meta file cleanup, non-critical */ }
       return meta;
     } catch {
-      // Ignore migration errors
+      /* meta.yaml migration failed, continue with fresh state */
     }
   }
 
@@ -240,6 +232,7 @@ export function readMeta(): Meta {
       const parsed = yaml.parse(content) as Meta;
       return parsed || createDefaultMeta();
     } catch {
+      /* agents.yaml corrupt or unreadable, use defaults */
       return createDefaultMeta();
     }
   }

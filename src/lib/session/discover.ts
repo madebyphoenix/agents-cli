@@ -107,9 +107,11 @@ function loadIndex(): Map<string, SessionMeta> {
       try {
         const entry = JSON.parse(line) as SessionMeta;
         if (entry.id) map.set(entry.id, entry);
-      } catch {}
+      } catch { /* malformed index entry, skip */ }
     }
-  } catch {}
+  } catch (err: any) {
+    console.error(`Warning: Could not load session cache (${err.message}). Rebuilding...`);
+  }
 
   return map;
 }
@@ -137,7 +139,9 @@ function saveIndex(sessions: SessionMeta[]): void {
       }));
     }
     fs.writeFileSync(INDEX_PATH, lines.join('\n') + '\n', 'utf-8');
-  } catch {}
+  } catch (err: any) {
+    console.error(`Warning: Could not save session cache: ${err.message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +180,7 @@ function getAgentSessionDirs(agent: string, subdir: string): string[] {
       for (const version of fs.readdirSync(versionsBase)) {
         addDir(path.join(versionsBase, version, 'home', `.${agent}`, subdir));
       }
-    } catch {}
+    } catch { /* dir unreadable or missing */ }
   }
 
   // 3. Backups (from before version management was enabled)
@@ -186,7 +190,7 @@ function getAgentSessionDirs(agent: string, subdir: string): string[] {
       for (const ts of fs.readdirSync(backupsBase)) {
         addDir(path.join(backupsBase, ts, subdir));
       }
-    } catch {}
+    } catch { /* dir unreadable or missing */ }
   }
 
   return dirs;
@@ -213,7 +217,7 @@ function getClaudeAccount(): string | undefined {
       for (const version of fs.readdirSync(versionsBase)) {
         candidates.push(path.join(versionsBase, version, 'home', '.claude.json'));
       }
-    } catch {}
+    } catch { /* versions dir unreadable */ }
   }
 
   for (const candidate of candidates) {
@@ -225,7 +229,7 @@ function getClaudeAccount(): string | undefined {
         cachedClaudeAccount = name;
         return name;
       }
-    } catch {}
+    } catch { /* auth file unreadable or malformed */ }
   }
 
   cachedClaudeAccount = '';
@@ -240,6 +244,7 @@ async function discoverClaudeSessions(): Promise<SessionMeta[]> {
   const sessions: SessionMeta[] = [];
   const seen = new Set<string>();
   const account = getClaudeAccount();
+  let skipped = 0;
 
   for (const projectsDir of getAgentSessionDirs('claude', 'projects')) {
     let projectDirs: string[];
@@ -270,9 +275,13 @@ async function discoverClaudeSessions(): Promise<SessionMeta[]> {
         try {
           const meta = await readClaudeMeta(filePath, sessionId, account);
           if (meta) sessions.push(meta);
-        } catch {}
+        } catch { skipped++; }
       }
     }
+  }
+
+  if (skipped > 0 && process.env.AGENTS_DEBUG) {
+    console.error(`[debug] Skipped ${skipped} unreadable Claude session(s)`);
   }
 
   return sessions;
@@ -349,7 +358,7 @@ function getCodexAccount(): string | undefined {
       for (const version of fs.readdirSync(versionsBase)) {
         candidates.push(path.join(versionsBase, version, 'home', '.codex', 'auth.json'));
       }
-    } catch {}
+    } catch { /* versions dir unreadable */ }
   }
 
   for (const candidate of candidates) {
@@ -368,7 +377,7 @@ function getCodexAccount(): string | undefined {
           }
         }
       }
-    } catch {}
+    } catch { /* auth file or JWT malformed */ }
   }
 
   cachedCodexAccount = '';
@@ -383,6 +392,7 @@ async function discoverCodexSessions(): Promise<SessionMeta[]> {
   const sessions: SessionMeta[] = [];
   const seen = new Set<string>();
   const account = getCodexAccount();
+  let skipped = 0;
 
   for (const sessionsDir of getAgentSessionDirs('codex', 'sessions')) {
     const jsonlFiles = walkForFiles(sessionsDir, '.jsonl', 200);
@@ -394,8 +404,12 @@ async function discoverCodexSessions(): Promise<SessionMeta[]> {
           seen.add(meta.id);
           sessions.push(meta);
         }
-      } catch {}
+      } catch { skipped++; }
     }
+  }
+
+  if (skipped > 0 && process.env.AGENTS_DEBUG) {
+    console.error(`[debug] Skipped ${skipped} unreadable Codex session(s)`);
   }
 
   return sessions;
@@ -428,7 +442,7 @@ async function readCodexMeta(filePath: string, account?: string): Promise<Sessio
           : Array.isArray(ev.content) ? ev.content.find((b: any) => b.type === 'input_text')?.text : undefined;
         if (text) { topic = extractTopic(text); break; }
       }
-    } catch {}
+    } catch { /* malformed event line */ }
   }
 
   const cwd = payload.cwd || '';
@@ -455,6 +469,7 @@ async function discoverGeminiSessions(): Promise<SessionMeta[]> {
   const projectMap = buildGeminiProjectMap();
   const sessions: SessionMeta[] = [];
   const seen = new Set<string>();
+  let skipped = 0;
 
   for (const tmpDir of getAgentSessionDirs('gemini', 'tmp')) {
     let hashDirs: string[];
@@ -483,9 +498,13 @@ async function discoverGeminiSessions(): Promise<SessionMeta[]> {
             seen.add(meta.id);
             sessions.push(meta);
           }
-        } catch {}
+        } catch { skipped++; }
       }
     }
+  }
+
+  if (skipped > 0 && process.env.AGENTS_DEBUG) {
+    console.error(`[debug] Skipped ${skipped} unreadable Gemini session(s)`);
   }
 
   return sessions;
@@ -564,9 +583,7 @@ function buildGeminiProjectMap(): Map<string, { name: string; path: string }> {
         }
       }
     }
-  } catch {
-    // Ignore parse errors
-  }
+  } catch { /* projects.json missing or malformed */ }
 
   // Also check ~/.gemini/history/*/.project_root for additional mappings
   const historyDir = path.join(HOME, '.gemini', 'history');
@@ -581,14 +598,10 @@ function buildGeminiProjectMap(): Map<string, { name: string; path: string }> {
               const hash = sha256(projectPath);
               map.set(hash, { name, path: projectPath });
             }
-          } catch {
-            // Skip
-          }
+          } catch { /* history entry unreadable */ }
         }
       }
-    } catch {
-      // Skip
-    }
+    } catch { /* history entry unreadable */ }
   }
 
   return map;
@@ -617,7 +630,7 @@ function getOpenCodeAccount(): string | undefined {
         return out;
       }
     }
-  } catch {}
+  } catch { /* sqlite3 unavailable or DB locked */ }
 
   cachedOpenCodeAccount = '';
   return undefined;
@@ -670,7 +683,10 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
     }
 
     return sessions;
-  } catch {
+  } catch (err: any) {
+    if (process.stderr.isTTY) {
+      console.error(`Warning: Could not query OpenCode sessions: ${err.message}`);
+    }
     return [];
   }
 }

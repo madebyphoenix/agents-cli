@@ -9,15 +9,8 @@ import { discoverSessions, resolveSessionById } from '../lib/session/discover.js
 import { parseSession } from '../lib/session/parse.js';
 import { renderTranscript, renderSummary, renderTrace, renderJson } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
+import { colorAgent } from '../lib/agents.js';
 import { isPromptCancelled } from './utils.js';
-
-const AGENT_COLORS: Record<SessionAgentId, (s: string) => string> = {
-  claude: chalk.magenta,
-  codex: chalk.green,
-  gemini: chalk.blue,
-  opencode: chalk.yellow,
-  openclaw: chalk.cyan,
-};
 
 interface ListOptions {
   agent?: string;
@@ -68,7 +61,7 @@ async function listAction(options: ListOptions): Promise<void> {
     );
 
     for (const session of sessions) {
-      const agentColor = AGENT_COLORS[session.agent] || chalk.white;
+      const agentColor = colorAgent(session.agent);
       const when = formatRelativeTime(session.timestamp);
       const project = session.project || '-';
       const account = session.account || '';
@@ -109,7 +102,7 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
   }
 
   // Session header
-  const agentColor = AGENT_COLORS[session.agent] || chalk.white;
+  const agentColor = colorAgent(session.agent);
   console.log('');
   console.log(
     agentColor(session.agent) +
@@ -136,7 +129,7 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
 }
 
 function formatPickerLabel(s: SessionMeta): string {
-  const agentColor = AGENT_COLORS[s.agent] || chalk.white;
+  const agentColor = colorAgent(s.agent);
   const when = formatRelativeTime(s.timestamp);
   const project = s.project || '-';
   const account = s.account || '';

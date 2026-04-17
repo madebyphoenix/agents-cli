@@ -11,6 +11,7 @@ import {
   ALL_AGENT_IDS,
   resolveAgentName,
   formatAgentError,
+  agentLabel,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -79,7 +80,7 @@ export function registerRulesCommands(program: Command): void {
         const defaultLabel = isDefault ? ' default' : '';
         const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
-        console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
+        console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}:`);
 
         if (hasUser) {
           console.log(`    ${chalk.gray('User:')}`);
@@ -99,7 +100,7 @@ export function registerRulesCommands(program: Command): void {
 
       if (agentId) {
         const agent = AGENTS[agentId];
-        console.log(chalk.bold(`Installed Rules for ${agent.name}\n`));
+        console.log(chalk.bold(`Installed Rules for ${agentLabel(agent.id)}\n`));
         const installedVersions = listInstalledVersions(agentId);
         const defaultVer = getGlobalDefault(agentId);
 
@@ -110,7 +111,7 @@ export function registerRulesCommands(program: Command): void {
           const hasUser = userInstr?.exists;
           const hasProject = projectInstr?.exists;
 
-          console.log(`  ${chalk.bold(agent.name)}:`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
           if (hasUser) {
             console.log(`    ${chalk.gray('User:')}`);
             console.log(`      ${chalk.cyan(agent.instructionsFile.padEnd(20))} ${chalk.gray(formatPath(userInstr.path, cwd))}`);
@@ -129,13 +130,13 @@ export function registerRulesCommands(program: Command): void {
         let versionsToShow: string[];
         if (requestedVersion === 'default') {
           if (!defaultVer) {
-            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
+            console.log(chalk.yellow(`  No default version set for ${agentLabel(agent.id)}. Run: agents use ${agentId}@<version>`));
             return;
           }
           versionsToShow = [defaultVer];
         } else if (requestedVersion) {
           if (!installedVersions.includes(requestedVersion)) {
-            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
+            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agentLabel(agent.id)}.`));
             console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
             return;
           }
@@ -171,7 +172,7 @@ export function registerRulesCommands(program: Command): void {
           const hasUser = userInstr?.exists;
           const hasProject = projectInstr?.exists;
 
-          console.log(`  ${chalk.bold(agent.name)}:`);
+          console.log(`  ${chalk.bold(agentLabel(aid))}:`);
           if (hasUser) {
             console.log(`    ${chalk.gray('User:')}`);
             console.log(`      ${chalk.cyan(agent.instructionsFile.padEnd(20))} ${chalk.gray(formatPath(userInstr.path, cwd))}`);
@@ -264,7 +265,7 @@ export function registerRulesCommands(program: Command): void {
           }
 
           for (const instr of agentInstructions) {
-            console.log(`  ${chalk.cyan(AGENTS[instr.agentId].instructionsFile)} (${AGENTS[instr.agentId].name})`);
+            console.log(`  ${chalk.cyan(AGENTS[instr.agentId].instructionsFile)} (${agentLabel(instr.agentId)})`);
           }
           for (const file of ruleFiles) {
             console.log(`  ${chalk.cyan(file)} (shared)`);
@@ -365,7 +366,7 @@ export function registerRulesCommands(program: Command): void {
         }
         agentId = await select({
           message: 'Select agent:',
-          choices: choices.map((id) => ({ name: AGENTS[id].name, value: id })),
+          choices: choices.map((id) => ({ name: agentLabel(id), value: id })),
         });
       }
 
@@ -398,25 +399,25 @@ export function registerRulesCommands(program: Command): void {
       if (requestedVersion && scope === 'user') {
         const installedVersions = listInstalledVersions(agentId);
         if (!installedVersions.includes(requestedVersion)) {
-          console.log(chalk.red(`Version ${requestedVersion} not installed for ${AGENTS[agentId].name}`));
+          console.log(chalk.red(`Version ${requestedVersion} not installed for ${agentLabel(agentId)}`));
           console.log(chalk.gray(`Installed versions: ${installedVersions.join(', ') || 'none'}`));
           return;
         }
         const home = getVersionHomePath(agentId, requestedVersion);
         const filePath = path.join(home, `.${agentId}`, AGENTS[agentId].instructionsFile);
         if (!fs.existsSync(filePath)) {
-          console.log(chalk.yellow(`No user rules found for ${AGENTS[agentId].name}@${requestedVersion}`));
+          console.log(chalk.yellow(`No user rules found for ${agentLabel(agentId)}@${requestedVersion}`));
           return;
         }
         const content = fs.readFileSync(filePath, 'utf-8');
-        await displayContent(content, `${AGENTS[agentId].name}@${requestedVersion} Rules (${scope})`, filePath);
+        await displayContent(content, `${agentLabel(agentId)}@${requestedVersion} Rules (${scope})`, filePath);
         return;
       }
 
       const content = getInstructionsContent(agentId, scope, cwd);
 
       if (!content) {
-        console.log(chalk.yellow(`No ${scope} rules found for ${AGENTS[agentId].name}`));
+        console.log(chalk.yellow(`No ${scope} rules found for ${agentLabel(agentId)}`));
         return;
       }
 
@@ -424,7 +425,7 @@ export function registerRulesCommands(program: Command): void {
       const instr = installed.find((i) => i.scope === scope);
       const filePath = instr?.path || '';
 
-      await displayContent(content, `${AGENTS[agentId].name} Rules (${scope})`, filePath);
+      await displayContent(content, `${agentLabel(agentId)} Rules (${scope})`, filePath);
     });
 
   rulesCmd
@@ -444,7 +445,7 @@ export function registerRulesCommands(program: Command): void {
       if (requestedVersion) {
         const installedVersions = listInstalledVersions(agentId);
         if (!installedVersions.includes(requestedVersion)) {
-          console.log(chalk.red(`Version ${requestedVersion} not installed for ${AGENTS[agentId].name}`));
+          console.log(chalk.red(`Version ${requestedVersion} not installed for ${agentLabel(agentId)}`));
           console.log(chalk.gray(`Installed versions: ${installedVersions.join(', ') || 'none'}`));
           process.exit(1);
         }
@@ -454,9 +455,9 @@ export function registerRulesCommands(program: Command): void {
 
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
-          console.log(chalk.green(`Removed ${agent.instructionsFile} from ${agent.name}@${requestedVersion}`));
+          console.log(chalk.green(`Removed ${agent.instructionsFile} from ${agentLabel(agent.id)}@${requestedVersion}`));
         } else {
-          console.log(chalk.yellow(`No rule file found for ${agent.name}@${requestedVersion}`));
+          console.log(chalk.yellow(`No rule file found for ${agentLabel(agent.id)}@${requestedVersion}`));
         }
         return;
       }
@@ -465,7 +466,7 @@ export function registerRulesCommands(program: Command): void {
       if (result) {
         console.log(chalk.green(`Removed ${AGENTS[agentId].instructionsFile}`));
       } else {
-        console.log(chalk.yellow(`No rule file found for ${AGENTS[agentId].name}`));
+        console.log(chalk.yellow(`No rule file found for ${agentLabel(agentId)}`));
       }
     });
 

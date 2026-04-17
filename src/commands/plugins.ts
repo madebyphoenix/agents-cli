@@ -2,7 +2,7 @@ import type { Command } from 'commander';
 import chalk from 'chalk';
 import { checkbox } from '@inquirer/prompts';
 
-import { AGENTS, PLUGINS_CAPABLE_AGENTS } from '../lib/agents.js';
+import { AGENTS, PLUGINS_CAPABLE_AGENTS, agentLabel } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { discoverPlugins, getPlugin, pluginSupportsAgent } from '../lib/plugins.js';
 import {
@@ -44,7 +44,7 @@ export function registerPluginsCommands(program: Command): void {
       for (const plugin of plugins) {
         const agents = PLUGINS_CAPABLE_AGENTS
           .filter(a => pluginSupportsAgent(plugin, a))
-          .map(a => AGENTS[a].name);
+          .map(a => agentLabel(a));
 
         console.log(`  ${chalk.cyan(plugin.name)} ${chalk.gray(`v${plugin.manifest.version}`)}`);
         console.log(`    ${plugin.manifest.description}`);
@@ -73,7 +73,7 @@ export function registerPluginsCommands(program: Command): void {
             }
           }
           if (synced.length > 0) {
-            console.log(`    ${chalk.green(`${AGENTS[agentId].name}: ${synced.join(', ')}`)}`);
+            console.log(`    ${chalk.green(`${agentLabel(agentId)}: ${synced.join(', ')}`)}`);
           }
         }
 
@@ -100,7 +100,7 @@ export function registerPluginsCommands(program: Command): void {
 
       const agents = PLUGINS_CAPABLE_AGENTS
         .filter(a => pluginSupportsAgent(plugin, a))
-        .map(a => AGENTS[a].name);
+        .map(a => agentLabel(a));
       console.log(`  ${chalk.gray(`Agents: ${agents.join(', ')}`)}`);
 
       if (plugin.skills.length > 0) {
@@ -138,7 +138,7 @@ export function registerPluginsCommands(program: Command): void {
           const defaultVer = getGlobalDefault(agentId);
           const label = v === defaultVer ? `${v} (active)` : v;
           const status = synced ? chalk.green('installed') : chalk.gray('not installed');
-          console.log(`    ${AGENTS[agentId].name}@${label}: ${status}`);
+          console.log(`    ${agentLabel(agentId)}@${label}: ${status}`);
           if (synced) anyInstalled = true;
         }
       }
@@ -170,7 +170,7 @@ export function registerPluginsCommands(program: Command): void {
           process.exit(1);
         }
         if (!pluginSupportsAgent(plugin, agentId)) {
-          console.log(chalk.red(`Plugin '${name}' does not support ${AGENTS[agentId].name}`));
+          console.log(chalk.red(`Plugin '${name}' does not support ${agentLabel(agentId)}`));
           process.exit(1);
         }
         targetAgents = [agentId];
@@ -188,9 +188,9 @@ export function registerPluginsCommands(program: Command): void {
         for (const version of targetVersions) {
           const syncResult = syncResourcesToVersion(agentId, version, { plugins: [name] });
           if (syncResult.plugins.length > 0) {
-            console.log(chalk.green(`Synced ${name} to ${AGENTS[agentId].name}@${version}`));
+            console.log(chalk.green(`Synced ${name} to ${agentLabel(agentId)}@${version}`));
           } else {
-            console.log(chalk.gray(`${name} already synced to ${AGENTS[agentId].name}@${version}`));
+            console.log(chalk.gray(`${name} already synced to ${agentLabel(agentId)}@${version}`));
           }
         }
       }

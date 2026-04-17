@@ -8,6 +8,7 @@ import {
   MCP_CAPABLE_AGENTS,
   getAllCliStates,
   registerMcp,
+  agentLabel,
 } from '../lib/agents.js';
 import type { AgentId, RegistryType } from '../lib/types.js';
 import { DEFAULT_REGISTRIES } from '../lib/types.js';
@@ -331,9 +332,9 @@ export function registerPackagesCommands(program: Command): void {
 
             const result = await registerMcp(agentId, entry.name, command, 'user');
             if (result.success) {
-              console.log(`  ${chalk.green('+')} ${AGENTS[agentId].name}`);
+              console.log(`  ${chalk.green('+')} ${agentLabel(agentId)}`);
             } else {
-              console.log(`  ${chalk.red('x')} ${AGENTS[agentId].name}: ${result.error}`);
+              console.log(`  ${chalk.red('x')} ${agentLabel(agentId)}: ${result.error}`);
             }
           }
 

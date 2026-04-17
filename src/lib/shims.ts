@@ -64,6 +64,7 @@ export function detectConflicts(src: string, dest: string, prefix = ''): string[
       return conflicts;
     }
   } catch {
+    /* dest not accessible, no conflicts to report */
     return conflicts;
   }
 
@@ -654,6 +655,7 @@ export function getConfigSymlinkVersion(agent: AgentId): string | null {
     const match = target.match(/versions\/[^/]+\/([^/]+)\/home/);
     return match ? match[1] : null;
   } catch {
+    /* config path not accessible or not a symlink */
     return null;
   }
 }
@@ -977,6 +979,7 @@ export function compareVersionResources(
     try {
       return fs.readdirSync(dir).filter(f => !f.startsWith('.'));
     } catch {
+      /* directory not readable */
       return [];
     }
   };
@@ -987,6 +990,7 @@ export function compareVersionResources(
     try {
       return fs.readFileSync(filePath, 'utf-8').split('\n').length;
     } catch {
+      /* file not readable */
       return 0;
     }
   };
@@ -1024,6 +1028,7 @@ export function compareVersionResources(
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
       return Object.keys(settings.mcpServers || {});
     } catch {
+      /* settings.json corrupt or unreadable */
       return [];
     }
   };
@@ -1134,7 +1139,7 @@ export function copyResourcesToVersion(
 
         fs.writeFileSync(toSettingsPath, JSON.stringify(toSettings, null, 2));
       } catch {
-        // Ignore JSON parse errors
+        /* settings.json parse error, skip MCP merge */
       }
     }
   }

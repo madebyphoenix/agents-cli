@@ -261,6 +261,7 @@ export async function getRepoCommit(repoPath: string): Promise<string> {
     const log = await git.log({ maxCount: 1 });
     return log.latest?.hash.slice(0, 8) || 'unknown';
   } catch {
+    /* not a git repo or no commits */
     return 'unknown';
   }
 }
@@ -277,6 +278,7 @@ export async function getGitHubUsername(): Promise<string | null> {
     const { stdout } = await execAsync('gh api user --jq ".login"');
     return stdout.trim() || null;
   } catch {
+    /* gh CLI not installed or not authenticated */
     return null;
   }
 }
@@ -291,6 +293,7 @@ export async function getRemoteUrl(repoPath: string): Promise<string | null> {
     const origin = remotes.find(r => r.name === 'origin');
     return origin?.refs?.fetch || origin?.refs?.push || null;
   } catch {
+    /* not a git repo or no remotes */
     return null;
   }
 }
@@ -321,6 +324,7 @@ export async function checkGitHubRepoExists(owner: string, repo: string): Promis
     await execAsync(`gh repo view ${owner}/${repo} --json name`);
     return true;
   } catch {
+    /* repo not found or gh CLI unavailable */
     return false;
   }
 }
@@ -362,6 +366,7 @@ export async function hasUncommittedChanges(repoPath: string): Promise<boolean> 
     const status = await git.status();
     return status.files.length > 0;
   } catch {
+    /* not a git repo */
     return false;
   }
 }
@@ -453,6 +458,7 @@ export async function isSystemRepoOrigin(dir: string): Promise<boolean> {
     const url = origin.refs.fetch.toLowerCase();
     return url.includes('muqsitnawaz/.agents') || url.includes('muqsitnawaz/agents');
   } catch {
+    /* not a git repo or no remotes */
     return false;
   }
 }
@@ -466,6 +472,7 @@ export async function hasLocalChanges(dir: string): Promise<boolean> {
     const status = await git.status();
     return !status.isClean();
   } catch {
+    /* not a git repo */
     return false;
   }
 }
@@ -582,6 +589,7 @@ export async function getGitSyncStatus(dir: string, subdir?: string): Promise<Gi
 
     return result;
   } catch {
+    /* git status failed */
     return null;
   }
 }
@@ -599,6 +607,7 @@ export async function getTrackedFiles(dir: string, subdir?: string): Promise<str
     const result = await git.raw(['ls-files', subdir || '.']);
     return result.split('\n').filter(Boolean);
   } catch {
+    /* git ls-files failed */
     return [];
   }
 }
@@ -612,6 +621,7 @@ export async function hasUpstreamRemote(dir: string): Promise<boolean> {
     const remotes = await git.getRemotes(true);
     return remotes.some(r => r.name === 'upstream');
   } catch {
+    /* not a git repo */
     return false;
   }
 }
@@ -696,7 +706,7 @@ export async function tryAutoPull(dir: string): Promise<{ pulled: boolean; error
       return { pulled: false };
     }
 
-    const remoteRef = await git.revparse([trackingBranch]).catch(() => null);
+    const remoteRef = await git.revparse([trackingBranch]).catch(() => null /* remote ref unavailable */);
     if (!remoteRef || localRef === remoteRef) {
       // Already up to date
       return { pulled: false };

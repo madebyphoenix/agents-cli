@@ -11,6 +11,7 @@ import {
   HOOKS_CAPABLE_AGENTS,
   resolveAgentName,
   formatAgentError,
+  agentLabel,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -88,7 +89,7 @@ export function registerHooksCommands(program: Command): void {
         const agent = AGENTS[agentId];
         if (!agent.supportsHooks) {
           const defaultLabel = isDefault ? ' default' : '';
-          console.log(`  ${chalk.bold(agent.name)} (${version}${defaultLabel}): ${chalk.gray('hooks not supported')}`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))} (${version}${defaultLabel}): ${chalk.gray('hooks not supported')}`);
           console.log();
           return;
         }
@@ -101,9 +102,9 @@ export function registerHooksCommands(program: Command): void {
         const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
         if (hooks.length === 0) {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}: ${chalk.gray('none')}`);
         } else {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}:`);
 
           const userHooks = hooks.filter((h) => h.scope === 'user');
           const projectHooks = hooks.filter((h) => h.scope === 'project');
@@ -143,17 +144,17 @@ export function registerHooksCommands(program: Command): void {
 
         if (installedVersions.length === 0) {
           // Not version-managed
-          console.log(chalk.bold(`Installed Hooks for ${agent.name}\n`));
+          console.log(chalk.bold(`Installed Hooks for ${agentLabel(agent.id)}\n`));
           if (!agent.supportsHooks) {
-            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('hooks not supported')}`);
+            console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('hooks not supported')}`);
           } else {
             const hooks = listInstalledHooksWithScope(agentId, cwd).filter(
               (h) => options.scope === 'all' || h.scope === options.scope
             );
             if (hooks.length === 0) {
-              console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+              console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('none')}`);
             } else {
-              console.log(`  ${chalk.bold(agent.name)}:`);
+              console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
               const userHooks = hooks.filter((h) => h.scope === 'user');
               if (userHooks.length > 0) {
                 console.log(`    ${chalk.gray('User:')}`);
@@ -166,18 +167,18 @@ export function registerHooksCommands(program: Command): void {
           return;
         }
 
-        console.log(chalk.bold(`Installed Hooks for ${agent.name}\n`));
+        console.log(chalk.bold(`Installed Hooks for ${agentLabel(agent.id)}\n`));
 
         let versionsToShow: string[];
         if (requestedVersion === 'default') {
           if (!defaultVer) {
-            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
+            console.log(chalk.yellow(`  No default version set for ${agentLabel(agent.id)}. Run: agents use ${agentId}@<version>`));
             return;
           }
           versionsToShow = [defaultVer];
         } else if (requestedVersion) {
           if (!installedVersions.includes(requestedVersion)) {
-            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
+            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agentLabel(agent.id)}.`));
             console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
             return;
           }
@@ -211,15 +212,15 @@ export function registerHooksCommands(program: Command): void {
         } else {
           // Not version-managed or no default
           if (!agent.supportsHooks) {
-            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('hooks not supported')}`);
+            console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('hooks not supported')}`);
           } else {
             const hooks = listInstalledHooksWithScope(aid, cwd).filter(
               (h) => options.scope === 'all' || h.scope === options.scope
             );
             if (hooks.length === 0) {
-              console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+              console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('none')}`);
             } else {
-              console.log(`  ${chalk.bold(agent.name)}:`);
+              console.log(`  ${chalk.bold(agentLabel(aid))}:`);
               const userHooks = hooks.filter((h) => h.scope === 'user');
               if (userHooks.length > 0) {
                 console.log(`    ${chalk.gray('User:')}`);
@@ -436,7 +437,7 @@ export function registerHooksCommands(program: Command): void {
         let removed = 0;
         for (const item of result.removed) {
           const [, agentId] = item.split(':') as [string, AgentId];
-          console.log(`  ${chalk.red('-')} ${AGENTS[agentId].name}: ${hookName}`);
+          console.log(`  ${chalk.red('-')} ${agentLabel(agentId)}: ${hookName}`);
           removed++;
         }
 

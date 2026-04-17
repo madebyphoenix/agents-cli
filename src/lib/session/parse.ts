@@ -108,6 +108,7 @@ export function parseClaude(filePath: string): SessionEvent[] {
     try {
       raw = JSON.parse(line);
     } catch {
+      /* malformed JSONL line, skip */
       continue;
     }
 
@@ -257,6 +258,7 @@ export function parseCodex(filePath: string): SessionEvent[] {
     try {
       raw = JSON.parse(line);
     } catch {
+      /* malformed JSONL line, skip */
       continue;
     }
 
@@ -315,6 +317,7 @@ export function parseCodex(filePath: string): SessionEvent[] {
             ? JSON.parse(payload.arguments)
             : (payload.arguments || {});
         } catch {
+          /* arguments not valid JSON, preserve raw */
           args = { raw: payload.arguments };
         }
 
@@ -379,6 +382,7 @@ export function parseGemini(filePath: string): SessionEvent[] {
   try {
     session = JSON.parse(content);
   } catch {
+    /* Gemini session file is not valid JSON */
     throw new Error(`Failed to parse Gemini session: ${filePath}`);
   }
 
@@ -564,6 +568,7 @@ export function parseOpenCode(filePath: string): SessionEvent[] {
       try {
         partData = JSON.parse(partDataStr);
       } catch {
+        /* malformed part data, skip */
         continue;
       }
 
@@ -626,7 +631,7 @@ export function parseOpenCode(filePath: string): SessionEvent[] {
       }
     }
   } catch {
-    // DB not accessible or query failed
+    /* DB not accessible or query failed */
   }
 
   return events;

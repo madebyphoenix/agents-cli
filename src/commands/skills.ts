@@ -12,6 +12,7 @@ import {
   resolveAgentName,
   getAllCliStates,
   formatAgentError,
+  agentLabel,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -90,9 +91,9 @@ export function registerSkillsCommands(program: Command): void {
         const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
         if (skills.length === 0) {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}: ${chalk.gray('none')}`);
         } else {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}:`);
 
           const userSkills = skills.filter((s) => s.scope === 'user');
           const projectSkills = skills.filter((s) => s.scope === 'project');
@@ -133,7 +134,7 @@ export function registerSkillsCommands(program: Command): void {
       const renderAgentSkillsDefault = (agentId: AgentId) => {
         const agent = AGENTS[agentId];
         if (!agent.capabilities.skills) {
-          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('skills not supported')}`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('skills not supported')}`);
           console.log();
           return;
         }
@@ -149,9 +150,9 @@ export function registerSkillsCommands(program: Command): void {
             (s) => options.scope === 'all' || s.scope === options.scope
           );
           if (skills.length === 0 && errors.length === 0) {
-            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+            console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('none')}`);
           } else {
-            console.log(`  ${chalk.bold(agent.name)}:`);
+            console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
             const userSkills = skills.filter((s) => s.scope === 'user');
             if (userSkills.length > 0) {
               console.log(`    ${chalk.gray('User:')}`);
@@ -178,7 +179,7 @@ export function registerSkillsCommands(program: Command): void {
       if (agentId) {
         const agent = AGENTS[agentId];
         if (!agent.capabilities.skills) {
-          console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('skills not supported')}`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('skills not supported')}`);
           return;
         }
 
@@ -194,9 +195,9 @@ export function registerSkillsCommands(program: Command): void {
               (s) => options.scope === 'all' || s.scope === options.scope
             );
             if (skills.length === 0) {
-              console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+              console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('none')}`);
             } else {
-              console.log(`  ${chalk.bold(agent.name)}:`);
+              console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
               const userSkills = skills.filter((s) => s.scope === 'user');
               if (userSkills.length > 0) {
                 console.log(`    ${chalk.gray('User:')}`);
@@ -209,26 +210,26 @@ export function registerSkillsCommands(program: Command): void {
               }
             }
           } else {
-            console.log(chalk.gray(`  ${agent.name} is not installed.`));
+            console.log(chalk.gray(`  ${agentLabel(agent.id)} is not installed.`));
           }
           return;
         }
 
-        console.log(chalk.bold(`Installed Agent Skills for ${agent.name}\n`));
+        console.log(chalk.bold(`Installed Agent Skills for ${agentLabel(agent.id)}\n`));
 
         // Determine which versions to show
         let versionsToShow: string[];
         if (requestedVersion === 'default') {
           // Show only default version
           if (!defaultVer) {
-            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
+            console.log(chalk.yellow(`  No default version set for ${agentLabel(agent.id)}. Run: agents use ${agentId}@<version>`));
             return;
           }
           versionsToShow = [defaultVer];
         } else if (requestedVersion) {
           // Show specific version
           if (!installedVersions.includes(requestedVersion)) {
-            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
+            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agentLabel(agent.id)}.`));
             console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
             return;
           }
@@ -279,9 +280,9 @@ export function registerSkillsCommands(program: Command): void {
             (s) => options.scope === 'all' || s.scope === options.scope
           );
           if (skills.length === 0) {
-            console.log(`  ${chalk.bold(agent.name)}: ${chalk.gray('none')}`);
+            console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('none')}`);
           } else {
-            console.log(`  ${chalk.bold(agent.name)}:`);
+            console.log(`  ${chalk.bold(agentLabel(aid))}:`);
             const userSkills = skills.filter((s) => s.scope === 'user');
             if (userSkills.length > 0) {
               console.log(`    ${chalk.gray('User:')}`);

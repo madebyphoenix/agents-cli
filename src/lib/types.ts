@@ -1,8 +1,11 @@
 export type AgentId = 'claude' | 'codex' | 'gemini' | 'cursor' | 'opencode' | 'openclaw' | 'copilot' | 'amp' | 'kiro' | 'goose' | 'roo';
 
+export type ChalkColor = 'magenta' | 'green' | 'blue' | 'cyan' | 'yellowBright' | 'redBright' | 'whiteBright' | 'blueBright' | 'greenBright' | 'magentaBright' | 'cyanBright';
+
 export interface AgentConfig {
   id: AgentId;
   name: string;
+  color: ChalkColor;
   cliCommand: string;
   npmPackage: string;
   installScript?: string;
@@ -66,16 +69,10 @@ export interface InstalledHook {
   agent: AgentId;
 }
 
-export interface DriveManifestEntry {
-  description?: string;
-  project?: string;
-}
-
 export interface Manifest {
   agents?: Partial<Record<AgentId, string>>;
   dependencies?: Record<string, string>;
   mcp?: Record<string, McpServerConfig>;
-  drives?: Record<string, DriveManifestEntry>;
   defaults?: {
     method?: 'symlink' | 'copy';
     scope?: 'global' | 'project';

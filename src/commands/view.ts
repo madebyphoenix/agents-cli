@@ -11,6 +11,8 @@ import {
   getAccountInfo,
   resolveAgentName,
   formatAgentError,
+  agentLabel,
+  colorAgent,
 } from '../lib/agents.js';
 import type { AccountInfo } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
@@ -117,7 +119,7 @@ interface ResourceWithSync {
  */
 async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
   const spinnerText = filterAgentId
-    ? `Checking ${AGENTS[filterAgentId].name} agents...`
+    ? `Checking ${agentLabel(filterAgentId)} agents...`
     : 'Checking installed agents...';
   const spinner = ora({ text: spinnerText, isSilent: !process.stdout.isTTY }).start();
   const cliStates = await getAllCliStates();
@@ -199,7 +201,7 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       const globalDefault = getGlobalDefault(agentId);
 
       const noDefaultLabel = !globalDefault ? chalk.yellow(' (no default)') : '';
-      console.log(`  ${chalk.bold(agent.name)}${noDefaultLabel}`);
+      console.log(`  ${chalk.bold(agentLabel(agentId))}${noDefaultLabel}`);
 
       // Sort versions with default first, then by semver descending
       const sortedVersions = [...versions].sort((a, b) => {
@@ -263,7 +265,7 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       const agent = AGENTS[agentId];
       const cliState = cliStates[agentId];
 
-      console.log(`  ${chalk.bold(agent.name)}`);
+      console.log(`  ${chalk.bold(agentLabel(agentId))}`);
       const gInfo = globalInfoMap.get(agentId);
       const verLabel = `${cliState?.version || 'installed'} ${chalk.gray('(global)')}`;
       const verLabelLen = `${cliState?.version || 'installed'} (global)`.length;
@@ -284,7 +286,7 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
 
   // If filtering to a specific agent and not found
   if (filterAgentId && versionManaged.length === 0 && globallyInstalled.length === 0) {
-    console.log(`  ${chalk.bold(AGENTS[filterAgentId].name)}: ${chalk.gray('not installed')}`);
+    console.log(`  ${chalk.bold(agentLabel(filterAgentId))}: ${chalk.gray('not installed')}`);
     console.log();
   }
 
@@ -329,7 +331,7 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
             if (result.plugins.length > 0) synced.push('plugins');
 
             if (synced.length > 0) {
-              console.log(chalk.green(`\nSynced to ${AGENTS[filterAgentId].name}@${defaultVersion}: ${synced.join(', ')}`));
+              console.log(chalk.green(`\nSynced to ${agentLabel(filterAgentId)}@${defaultVersion}: ${synced.join(', ')}`));
             }
           }
         } catch (err) {
@@ -358,7 +360,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
     version = getGlobalDefault(agentId);
     if (!version) {
       spinner.stop();
-      console.log(chalk.yellow(`No default version set for ${AGENTS[agentId].name}`));
+      console.log(chalk.yellow(`No default version set for ${agentLabel(agentId)}`));
       console.log(chalk.gray(`Run: agents use ${agentId}@<version>`));
       return;
     }
@@ -368,7 +370,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
       version = requestedVersion;
     } else {
       spinner.stop();
-      console.log(chalk.red(`Version ${requestedVersion} not installed for ${AGENTS[agentId].name}`));
+      console.log(chalk.red(`Version ${requestedVersion} not installed for ${agentLabel(agentId)}`));
       console.log(chalk.gray(`Installed versions: ${versions.join(', ') || 'none'}`));
       return;
     }
@@ -453,7 +455,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
 
   const agentData: AgentResourceDisplay = {
     agentId,
-    agentName: AGENTS[agentId].name,
+    agentName: agentLabel(agentId),
     version,
     commands: resources.commands.map(r => ({
       ...r,
@@ -520,7 +522,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
     : chalk.gray('not installed');
   const usageStr = formatUsageStatus(accountInfo);
   const usagePart = usageStr ? `  ${usageStr}` : '';
-  console.log(`  ${AGENTS[agentId].name.padEnd(14)} ${status}${emailStr}${usagePart}`);
+  console.log(`  ${colorAgent(agentId)(AGENTS[agentId].name.padEnd(14))} ${status}${emailStr}${usagePart}`);
 
   // 2. Resources
   renderSection('Commands', agentData.commands);

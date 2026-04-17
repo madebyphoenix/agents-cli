@@ -9,6 +9,7 @@ import {
   AGENTS,
   ALL_AGENT_IDS,
   getAccountEmail,
+  agentLabel,
 } from '../lib/agents.js';
 import { viewAction } from './view.js';
 import type { AgentId } from '../lib/types.js';
@@ -80,7 +81,7 @@ export function registerVersionsCommands(program: Command): void {
         const agentConfig = AGENTS[agent];
 
         if (!agentConfig.npmPackage) {
-          console.log(chalk.yellow(`${agentConfig.name} has no npm package. Install manually.`));
+          console.log(chalk.yellow(`${agentLabel(agentConfig.id)} has no npm package. Install manually.`));
           continue;
         }
 
@@ -98,19 +99,19 @@ export function registerVersionsCommands(program: Command): void {
         }
 
         if (alreadyInstalled) {
-          console.log(chalk.gray(`${agentConfig.name}@${installedAsVersion} already installed`));
+          console.log(chalk.gray(`${agentLabel(agentConfig.id)}@${installedAsVersion} already installed`));
 
           // Ensure shim exists (in case it was deleted or needs updating)
           createShim(agent);
         } else {
-          const spinner = ora(`Installing ${agentConfig.name}@${version}...`).start();
+          const spinner = ora(`Installing ${agentLabel(agentConfig.id)}@${version}...`).start();
 
           const result = await installVersion(agent, version, (msg) => {
             spinner.text = msg;
           });
 
           if (result.success) {
-            spinner.succeed(`Installed ${agentConfig.name}@${result.installedVersion}`);
+            spinner.succeed(`Installed ${agentLabel(agentConfig.id)}@${result.installedVersion}`);
 
             // Create shim if first install
             if (!shimExists(agent)) {
@@ -180,7 +181,7 @@ export function registerVersionsCommands(program: Command): void {
             if (!currentDefault) {
               try {
                 const setAsDefault = await confirm({
-                  message: `Set ${agentConfig.name}@${installedVersion} as default?`,
+                  message: `Set ${agentLabel(agentConfig.id)}@${installedVersion} as default?`,
                   default: true,
                 });
 
@@ -216,7 +217,7 @@ export function registerVersionsCommands(program: Command): void {
               }
             }
           } else {
-            spinner.fail(`Failed to install ${agentConfig.name}@${version}`);
+            spinner.fail(`Failed to install ${agentLabel(agentConfig.id)}@${version}`);
             console.error(chalk.gray(result.error || 'Unknown error'));
             continue;
           }
@@ -239,7 +240,7 @@ export function registerVersionsCommands(program: Command): void {
           manifest.agents[agent] = version === 'latest' ? (await getInstalledVersionForAgent(agent)) : version;
 
           writeManifest(process.cwd(), manifest);
-          console.log(chalk.green(`  Pinned ${agentConfig.name}@${version} in .agents/agents.yaml`));
+          console.log(chalk.green(`  Pinned ${agentLabel(agentConfig.id)}@${version} in .agents/agents.yaml`));
         }
       }
     });
@@ -266,7 +267,7 @@ export function registerVersionsCommands(program: Command): void {
           // Show picker for which versions to remove
           const versions = listInstalledVersions(agent);
           if (versions.length === 0) {
-            console.log(chalk.gray(`No versions of ${agentConfig.name} installed`));
+            console.log(chalk.gray(`No versions of ${agentLabel(agentConfig.id)} installed`));
             continue;
           }
 
@@ -281,7 +282,7 @@ export function registerVersionsCommands(program: Command): void {
 
           try {
             const toRemove = await checkbox({
-              message: `Select ${agentConfig.name} versions to remove:`,
+              message: `Select ${agentLabel(agentConfig.id)} versions to remove:`,
               choices: sortedVersions.map((v) => ({
                 name: v === globalDefault ? `${v} ${chalk.green('(default)')}` : v,
                 value: v,
@@ -296,7 +297,7 @@ export function registerVersionsCommands(program: Command): void {
 
             for (const v of toRemove) {
               removeVersion(agent, v);
-              console.log(chalk.green(`Removed ${agentConfig.name}@${v}`));
+              console.log(chalk.green(`Removed ${agentLabel(agentConfig.id)}@${v}`));
             }
 
             // Check if default was removed
@@ -320,10 +321,10 @@ export function registerVersionsCommands(program: Command): void {
         } else {
           // Remove specific version
           if (!isVersionInstalled(agent, version)) {
-            console.log(chalk.gray(`${agentConfig.name}@${version} not installed`));
+            console.log(chalk.gray(`${agentLabel(agentConfig.id)}@${version} not installed`));
           } else {
             removeVersion(agent, version);
-            console.log(chalk.green(`Removed ${agentConfig.name}@${version}`));
+            console.log(chalk.green(`Removed ${agentLabel(agentConfig.id)}@${version}`));
 
             // Remove shim if no versions left
             const remaining = listInstalledVersions(agent);
@@ -394,7 +395,7 @@ export function registerVersionsCommands(program: Command): void {
           // Interactive version picker
           const versions = listInstalledVersions(agentId);
           if (versions.length === 0) {
-            console.log(chalk.red(`No versions of ${agentConfig.name} installed`));
+            console.log(chalk.red(`No versions of ${agentLabel(agentConfig.id)} installed`));
             console.log(chalk.gray(`Run: agents add ${agentId}@latest`));
             return;
           }
@@ -418,7 +419,7 @@ export function registerVersionsCommands(program: Command): void {
 
           const maxLabelLen = Math.max(...sortedVersions.map((v) => (v === globalDefault ? `${v} (default)` : v).length));
           selectedVersion = await select({
-            message: `Select ${agentConfig.name} version:`,
+            message: `Select ${agentLabel(agentConfig.id)} version:`,
             choices: sortedVersions.map((v) => {
               let label = v === globalDefault ? `${v}${chalk.green(' (default)')}` : v;
               const padLen = maxLabelLen - (v === globalDefault ? `${v} (default)` : v).length;
@@ -431,7 +432,7 @@ export function registerVersionsCommands(program: Command): void {
         }
 
         if (!selectedVersion || !isVersionInstalled(agentId, selectedVersion)) {
-          console.log(chalk.red(`${agentConfig.name}@${selectedVersion ?? 'unknown'} not installed`));
+          console.log(chalk.red(`${agentLabel(agentConfig.id)}@${selectedVersion ?? 'unknown'} not installed`));
           console.log(chalk.gray(`Run: agents add ${agentId}@${selectedVersion ?? 'latest'}`));
           return;
         }
@@ -458,7 +459,7 @@ export function registerVersionsCommands(program: Command): void {
           writeManifest(process.cwd(), manifest);
           const projEmail = await getAccountEmail(agentId, getVersionHomePath(agentId, finalVersion));
           const projEmailStr = projEmail ? chalk.cyan(` (${projEmail})`) : '';
-          console.log(chalk.green(`Set ${agentConfig.name}@${finalVersion} for this project`) + projEmailStr);
+          console.log(chalk.green(`Set ${agentLabel(agentConfig.id)}@${finalVersion} for this project`) + projEmailStr);
         } else {
           // Smart resource detection: compare available vs ACTUALLY synced (source of truth: files, not tracking)
           const available = getAvailableResources();
@@ -476,7 +477,7 @@ export function registerVersionsCommands(program: Command): void {
           try {
             if (!hasAnySynced) {
               // First time: prompt for ALL resources
-              console.log(chalk.yellow(`\n${agentConfig.name}@${finalVersion} has no synced resources.`));
+              console.log(chalk.yellow(`\n${agentLabel(agentConfig.id)}@${finalVersion} has no synced resources.`));
               const userSelection = await promptResourceSelection(agentId);
               if (userSelection && Object.keys(userSelection).length > 0) {
                 const syncResult = syncResourcesToVersion(agentId, finalVersion, userSelection);
@@ -542,7 +543,7 @@ export function registerVersionsCommands(program: Command): void {
 
           const useEmail = await getAccountEmail(agentId, getVersionHomePath(agentId, finalVersion));
           const useEmailStr = useEmail ? chalk.cyan(` (${useEmail})`) : '';
-          console.log(chalk.green(`Set ${agentConfig.name}@${finalVersion} as global default`) + useEmailStr);
+          console.log(chalk.green(`Set ${agentLabel(agentConfig.id)}@${finalVersion} as global default`) + useEmailStr);
         }
       } catch (err) {
         if (isPromptCancelled(err)) return;

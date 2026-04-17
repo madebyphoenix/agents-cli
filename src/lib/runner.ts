@@ -140,12 +140,12 @@ export async function executeJob(config: JobConfig): Promise<RunResult> {
 
       try {
         if (child.pid) process.kill(-child.pid, 'SIGTERM');
-      } catch {}
+      } catch { /* process already exited */ }
 
       setTimeout(() => {
         try {
           if (child.pid) process.kill(-child.pid, 'SIGKILL');
-        } catch {}
+        } catch { /* process already exited */ }
       }, 5000);
 
       meta.status = 'timeout';
@@ -161,7 +161,7 @@ export async function executeJob(config: JobConfig): Promise<RunResult> {
       settled = true;
       clearTimeout(timeoutTimer);
 
-      try { fs.closeSync(stdoutFd); } catch {}
+      try { fs.closeSync(stdoutFd); } catch { /* fd already closed */ }
 
       meta.exitCode = code;
       meta.status = code === 0 ? 'completed' : 'failed';
@@ -177,7 +177,7 @@ export async function executeJob(config: JobConfig): Promise<RunResult> {
       settled = true;
       clearTimeout(timeoutTimer);
 
-      try { fs.closeSync(stdoutFd); } catch {}
+      try { fs.closeSync(stdoutFd); } catch { /* fd already closed */ }
 
       meta.status = 'failed';
       meta.completedAt = new Date().toISOString();
@@ -226,7 +226,7 @@ export async function executeJobDetached(config: JobConfig): Promise<RunMeta> {
   });
 
   child.unref();
-  try { fs.closeSync(stdoutFd); } catch {}
+  try { fs.closeSync(stdoutFd); } catch { /* fd already closed */ }
 
   meta.pid = child.pid || null;
   writeRunMeta(meta);
@@ -246,7 +246,11 @@ function extractAndSaveReport(
       fs.writeFileSync(reportPath, report, 'utf-8');
       return reportPath;
     }
-  } catch {}
+  } catch (err: any) {
+    if (process.env.AGENTS_DEBUG) {
+      console.error(`[debug] Could not extract report: ${err.message}`);
+    }
+  }
   return null;
 }
 
@@ -286,7 +290,7 @@ export function extractReport(stdoutPath: string, agentType: AgentId): string | 
             lastMessage = parsed.text;
           }
         }
-      } catch {}
+      } catch { /* malformed JSONL line */ }
     }
 
     return lastMessage || null;
@@ -318,7 +322,7 @@ export function monitorRunningJobs(): void {
 
         try {
           process.kill(meta.pid, 0);
-        } catch {
+        } catch { /* process no longer running */
           meta.status = 'failed';
           meta.completedAt = new Date().toISOString();
           writeRunMeta(meta);
@@ -326,7 +330,7 @@ export function monitorRunningJobs(): void {
           const stdoutPath = path.join(jobRunsPath, runDirEntry.name, 'stdout.log');
           extractAndSaveReport(stdoutPath, meta.agent, path.join(jobRunsPath, runDirEntry.name));
         }
-      } catch {}
+      } catch { /* corrupt or unreadable meta.json */ }
     }
   }
 }

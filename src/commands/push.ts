@@ -8,6 +8,7 @@ import {
   MCP_CAPABLE_AGENTS,
   getAllCliStates,
   listInstalledMcpsWithScope,
+  agentLabel,
 } from '../lib/agents.js';
 import {
   readManifest,
@@ -109,7 +110,7 @@ export function registerPushCommand(program: Command): void {
           const cli = cliStates[agentId];
           if (cli?.installed && cli.version) {
             manifest.agents[agentId] = cli.version;
-            console.log(`  ${chalk.cyan(AGENTS[agentId].name)} @ ${cli.version}`);
+            console.log(`  ${agentLabel(agentId)} @ ${cli.version}`);
           }
         }
 

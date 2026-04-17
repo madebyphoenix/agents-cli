@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { checkbox } from '@inquirer/prompts';
 
-import { AGENTS } from '../lib/agents.js';
+import { AGENTS, agentLabel } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
 import {
@@ -83,7 +83,7 @@ export function registerSubagentsCommands(program: Command): void {
           const defaultVer = getGlobalDefault(agentId);
           const agent = AGENTS[agentId];
 
-          console.log(`  ${chalk.bold(agent.name)}`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}`);
 
           for (const version of versions) {
             const isDefault = version === defaultVer;
@@ -217,7 +217,7 @@ export function registerSubagentsCommands(program: Command): void {
           }
         }
 
-        syncSpinner.succeed(`Synced to ${targetAgents.map(id => AGENTS[id].name).join(', ')}`);
+        syncSpinner.succeed(`Synced to ${targetAgents.map(id => agentLabel(id)).join(', ')}`);
       }
 
       console.log();

@@ -113,7 +113,7 @@ export function symlinkAllowedDirs(overlayHome: string, dirs: string[]): void {
     if (!fs.existsSync(symlinkTarget)) {
       try {
         fs.symlinkSync(realPath, symlinkTarget);
-      } catch {}
+      } catch { /* symlink already exists */ }
     }
   }
 }

@@ -10,6 +10,7 @@ import {
   getAccountEmail,
   isAgentName,
   resolveAgentName,
+  agentLabel,
 } from '../lib/agents.js';
 import {
   readManifest,
@@ -212,7 +213,7 @@ export function registerPullCommand(program: Command): void {
             const agent = AGENTS[agentId];
             if (!agent) continue;
 
-            const cliSpinner = ora(`Checking ${agent.name}...`).start();
+            const cliSpinner = ora(`Checking ${agentLabel(agent.id)}...`).start();
             const versions = listInstalledVersions(agentId);
             const targetVersion = manifest.agents[agentId] || 'latest';
 
@@ -220,16 +221,16 @@ export function registerPullCommand(program: Command): void {
             if (result.success) {
               const isNew = versions.length === 0;
               if (isNew) {
-                cliSpinner.succeed(`Installed ${agent.name}@${result.installedVersion}`);
+                cliSpinner.succeed(`Installed ${agentLabel(agent.id)}@${result.installedVersion}`);
               } else {
-                cliSpinner.succeed(`${agent.name}@${result.installedVersion}`);
+                cliSpinner.succeed(`${agentLabel(agent.id)}@${result.installedVersion}`);
               }
               // Ensure shim exists (repair if deleted)
               if (!shimExists(agentId)) {
                 createShim(agentId);
               }
             } else {
-              cliSpinner.warn(`${agent.name}: ${result.error}`);
+              cliSpinner.warn(`${agentLabel(agent.id)}: ${result.error}`);
             }
           }
         }
@@ -259,7 +260,7 @@ export function registerPullCommand(program: Command): void {
                   config.transport || 'stdio', { home, binary }
                 );
                 if (result.success) {
-                  console.log(`  ${chalk.green('+')} ${name} -> ${AGENTS[agentId].name}@${ver}`);
+                  console.log(`  ${chalk.green('+')} ${name} -> ${agentLabel(agentId)}@${ver}`);
                 }
               }
             }
@@ -300,12 +301,12 @@ export function registerPullCommand(program: Command): void {
               }
             } else if (!hasAnySynced) {
               // Nothing synced yet - prompt for ALL resources
-              console.log(chalk.yellow(`\n${AGENTS[agentId].name}@${defaultVer} has no synced resources.`));
+              console.log(chalk.yellow(`\n${agentLabel(agentId)}@${defaultVer} has no synced resources.`));
               const userSelection = await promptResourceSelection(agentId);
               if (userSelection) selection = userSelection;
             } else if (hasNewResources(newResources, agentId)) {
               // Has synced before, but NEW items available
-              console.log(chalk.cyan(`\n${AGENTS[agentId].name}@${defaultVer}:`));
+              console.log(chalk.cyan(`\n${agentLabel(agentId)}@${defaultVer}:`));
               const userSelection = await promptNewResourceSelection(agentId, newResources);
               if (userSelection) selection = userSelection;
             }
@@ -388,7 +389,7 @@ export function registerPullCommand(program: Command): void {
             const agent = AGENTS[agentId];
 
             const shouldSwitch = await select({
-              message: `${agent.name} has no default version. Set one now?`,
+              message: `${agentLabel(agent.id)} has no default version. Set one now?`,
               choices: [
                 { name: 'Yes, pick a version', value: 'pick' },
                 { name: 'Skip for now', value: 'skip' },
@@ -397,7 +398,7 @@ export function registerPullCommand(program: Command): void {
 
             if (shouldSwitch === 'pick') {
               const selectedVersion = await select({
-                message: `Select ${agent.name} version:`,
+                message: `Select ${agentLabel(agent.id)} version:`,
                 choices: versions.map((v) => ({ name: v, value: v })),
               });
 
@@ -416,7 +417,7 @@ export function registerPullCommand(program: Command): void {
               console.log(chalk.gray(`Backed up existing config to: ${symlinkResult.backupPath}`));
             }
             switchHomeFileSymlinks(agentId, version);
-            console.log(chalk.green(`Set ${agent.name}@${version} as default`));
+            console.log(chalk.green(`Set ${agentLabel(agent.id)}@${version} as default`));
           }
         }
 

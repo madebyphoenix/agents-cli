@@ -10,6 +10,7 @@ import {
   AGENTS,
   resolveAgentName,
   formatAgentError,
+  agentLabel,
 } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
@@ -62,12 +63,12 @@ export function registerPermissionsCommands(program: Command): void {
 
         const perms = readAgentPermissions(agentId, scope, cwd, { home });
         if (!perms) {
-          console.log(`  ${chalk.bold(agent.name)}${versionStr}: ${chalk.gray('none')}`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}: ${chalk.gray('none')}`);
           console.log();
           return;
         }
 
-        console.log(`  ${chalk.bold(agent.name)}${versionStr}:`);
+        console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}:`);
 
         if (agentId === 'claude') {
           const claudePerms = perms as { permissions: { allow: string[]; deny: string[] } };
@@ -139,7 +140,7 @@ export function registerPermissionsCommands(program: Command): void {
         const installedVersions = listInstalledVersions(agentId);
         const defaultVer = getGlobalDefault(agentId);
 
-        console.log(chalk.bold(`Installed Permissions for ${agent.name} (${options.scope}):\n`));
+        console.log(chalk.bold(`Installed Permissions for ${agentLabel(agent.id)} (${options.scope}):\n`));
 
         if (installedVersions.length === 0) {
           // Not version-managed - use default home
@@ -149,7 +150,7 @@ export function registerPermissionsCommands(program: Command): void {
             return;
           }
 
-          console.log(`  ${chalk.bold(agent.name)}:`);
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
 
           if (agentId === 'claude') {
             const claudePerms = perms as { permissions: { allow: string[]; deny: string[] } };
@@ -173,13 +174,13 @@ export function registerPermissionsCommands(program: Command): void {
         let versionsToShow: string[];
         if (requestedVersion === 'default') {
           if (!defaultVer) {
-            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
+            console.log(chalk.yellow(`  No default version set for ${agentLabel(agent.id)}. Run: agents use ${agentId}@<version>`));
             return;
           }
           versionsToShow = [defaultVer];
         } else if (requestedVersion) {
           if (!installedVersions.includes(requestedVersion)) {
-            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
+            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agentLabel(agent.id)}.`));
             console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
             return;
           }
@@ -281,11 +282,11 @@ export function registerPermissionsCommands(program: Command): void {
                 const versionHome = getVersionHomePath(agentId, version);
                 const applyResult = applyPermissionsToVersion(agentId, installed.set, versionHome, true);
                 if (applyResult.success) {
-                  console.log(chalk.green(`  Applied ${setName} to ${AGENTS[agentId].name}@${version}`));
+                  console.log(chalk.green(`  Applied ${setName} to ${agentLabel(agentId)}@${version}`));
                   recordVersionResources(agentId, version, 'permissions', [setName]);
                   applied++;
                 } else {
-                  console.log(chalk.red(`  Failed: ${AGENTS[agentId].name}@${version}: ${applyResult.error}`));
+                  console.log(chalk.red(`  Failed: ${agentLabel(agentId)}@${version}: ${applyResult.error}`));
                 }
               }
             }
@@ -450,11 +451,11 @@ export function registerPermissionsCommands(program: Command): void {
                 const versionHome = getVersionHomePath(agentId, version);
                 const applyResult = applyPermissionsToVersion(agentId, merged, versionHome, true);
                 if (applyResult.success) {
-                  console.log(chalk.green(`  Applied to ${AGENTS[agentId].name}@${version}`));
+                  console.log(chalk.green(`  Applied to ${agentLabel(agentId)}@${version}`));
                   recordVersionResources(agentId, version, 'permissions', [merged.name || 'default']);
                   applied++;
                 } else {
-                  console.log(chalk.red(`  Failed: ${AGENTS[agentId].name}@${version}: ${applyResult.error}`));
+                  console.log(chalk.red(`  Failed: ${agentLabel(agentId)}@${version}: ${applyResult.error}`));
                 }
               }
             }
@@ -574,11 +575,11 @@ export function registerPermissionsCommands(program: Command): void {
                   const versionHome = getVersionHomePath(agentId, version);
                   const applyResult = applyPermissionsToVersion(agentId, perm.set, versionHome, true);
                   if (applyResult.success) {
-                    console.log(chalk.green(`  Applied ${perm.name} to ${AGENTS[agentId].name}@${version}`));
+                    console.log(chalk.green(`  Applied ${perm.name} to ${agentLabel(agentId)}@${version}`));
                     recordVersionResources(agentId, version, 'permissions', [perm.name]);
                     applied++;
                   } else {
-                    console.log(chalk.red(`  Failed: ${AGENTS[agentId].name}@${version}: ${applyResult.error}`));
+                    console.log(chalk.red(`  Failed: ${agentLabel(agentId)}@${version}: ${applyResult.error}`));
                   }
                 }
               }

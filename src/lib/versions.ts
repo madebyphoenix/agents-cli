@@ -1315,7 +1315,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
       } else if (stat.isDirectory()) {
         fs.rmSync(p, { recursive: true, force: true });
       }
-    } catch {}
+    } catch { /* file already removed or inaccessible */ }
   };
 
   // Helper: copy a directory recursively
@@ -1535,7 +1535,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
             result.subagents.push(subagent.name);
           }
         }
-      } catch {}
+      } catch { /* resource sync failed for this item */ }
     }
 
     if (result.subagents.length > 0) {
