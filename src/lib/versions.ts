@@ -685,19 +685,31 @@ export async function promptResourceSelection(agent: AgentId): Promise<ResourceS
     return {};
   }
 
-  // Step 1: Select categories
+  // Step 1: Select categories (with "Select All" shortcut at the top)
   console.log();
+  const SELECT_ALL_KEY = '__select_all__' as CategoryKey;
   const selectedCategories = await checkbox<CategoryKey>({
     message: 'Which resources from ~/.agents/ would you like to sync?',
-    choices: availableCategories.map(c => ({
-      name: `${c.label} (${c.displayCount})`,
-      value: c.key,
-      checked: true, // Default all checked
-    })),
+    choices: [
+      { name: chalk.bold('Select All (sync everything)'), value: SELECT_ALL_KEY, checked: false },
+      ...availableCategories.map(c => ({
+        name: `${c.label} (${c.displayCount})`,
+        value: c.key,
+        checked: true, // Default all checked
+      })),
+    ],
   });
 
   if (selectedCategories.length === 0) {
     return {};
+  }
+
+  // If "Select All" was picked, sync everything without per-category prompts
+  if (selectedCategories.includes(SELECT_ALL_KEY)) {
+    for (const c of availableCategories) {
+      selection[c.key] = 'all';
+    }
+    return selection;
   }
 
   // Step 2: For each selected category, ask all/specific/skip
