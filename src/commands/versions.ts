@@ -9,8 +9,10 @@ import {
   AGENTS,
   ALL_AGENT_IDS,
   getAccountEmail,
+  getAccountInfo,
   agentLabel,
 } from '../lib/agents.js';
+import type { AccountInfo } from '../lib/agents.js';
 import { viewAction } from './view.js';
 import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
@@ -59,6 +61,23 @@ async function getInstalledVersionForAgent(agent: AgentId): Promise<string> {
     return versions[versions.length - 1];
   }
   throw new Error(`No versions of ${agent} installed`);
+}
+
+function formatAccountHint(info: AccountInfo): string {
+  const parts: string[] = [];
+  if (info.email) parts.push(info.email);
+  if (info.plan) {
+    const BAR_LEN = 5;
+    const FULL = '\u2588';
+    const EMPTY = '\u2591';
+    let bar = '';
+    if (info.usageStatus === 'out_of_credits') bar = EMPTY.repeat(BAR_LEN);
+    else if (info.usageStatus === 'rate_limited') bar = FULL.repeat(2) + EMPTY.repeat(BAR_LEN - 2);
+    else if (info.usageStatus) bar = FULL.repeat(BAR_LEN);
+    parts.push(info.plan + (bar ? ' ' + bar : ''));
+  }
+  if (parts.length === 0) return '';
+  return chalk.gray(` [${parts.join(', ')}]`);
 }
 
 export function registerVersionsCommands(program: Command): void {
@@ -180,9 +199,13 @@ export function registerVersionsCommands(program: Command): void {
             const currentDefault = getGlobalDefault(agent);
             if (currentDefault !== installedVersion) {
               try {
+                // Fetch account info for context in the prompt
+                const info = await getAccountInfo(agent, getVersionHomePath(agent, installedVersion));
+                const accountHint = formatAccountHint(info);
+
                 const message = currentDefault
-                  ? `Switch default from ${agentLabel(agentConfig.id)}@${currentDefault} to @${installedVersion}?`
-                  : `Set ${agentLabel(agentConfig.id)}@${installedVersion} as default?`;
+                  ? `Switch default from ${agentLabel(agentConfig.id)}@${currentDefault} to ${agentLabel(agentConfig.id)}@${installedVersion}${accountHint}?`
+                  : `Set ${agentLabel(agentConfig.id)}@${installedVersion}${accountHint} as default?`;
 
                 const setAsDefault = await confirm({
                   message,
