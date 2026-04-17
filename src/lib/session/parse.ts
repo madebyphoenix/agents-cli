@@ -539,8 +539,8 @@ export function parseOpenCode(filePath: string): SessionEvent[] {
     `.replace(/\n/g, ' ');
 
     const out = execSync(
-      `sqlite3 -separator '|||' "${dbPath}" "${query}"`,
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 },
+      `sqlite3 -separator '|||' "${dbPath}"`,
+      { encoding: 'utf-8', input: query, stdio: ['pipe', 'pipe', 'ignore'], timeout: 10000 },
     );
 
     for (const line of out.split('\n')) {

@@ -178,7 +178,7 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
   const spinner = ora('Finding session...').start();
 
   try {
-    const allSessions = await discoverSessions({ limit: 500 });
+    const allSessions = await discoverSessions({ limit: 5000 });
     let session: SessionMeta;
 
     if (!idQuery) {

@@ -240,6 +240,10 @@ Add rule files in a `rules/` subdirectory -- each rule is a markdown file with s
 | OpenCode | yes | yes | yes | yes | AGENTS.md | yes | yes | -- |
 | OpenClaw | yes | yes | -- | yes | workspace/AGENTS.md | yes | -- | -- |
 
+## How It Compares
+
+See [docs/04-landscape.md](docs/04-landscape.md) for a detailed comparison with other tools in the ecosystem -- Rivet, Agentloom, mise, skills.sh, cass, Microsoft APM, and more.
+
 ## License
 
 MIT

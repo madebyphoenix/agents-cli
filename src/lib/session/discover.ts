@@ -44,14 +44,21 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
   // Merge with persistent index (preserves sessions whose files were removed)
   const index = loadIndex();
   const liveIds = new Set(sessions.map(s => s.id));
+  const agentFilter = new Set(agents);
+
+  // Add matching index entries to display results
   index.forEach((entry, id) => {
-    if (!liveIds.has(id)) {
+    if (!liveIds.has(id) && agentFilter.has(entry.agent)) {
       sessions.push(entry);
     }
   });
 
-  // Persist updated index
-  saveIndex(sessions);
+  // Persist: merge live sessions into full index (don't drop unqueried agents)
+  const toSave = new Map(index);
+  for (const s of sessions) {
+    toSave.set(s.id, s);
+  }
+  saveIndex([...toSave.values()]);
 
   // Filter by project (case-insensitive substring match)
   if (options?.project) {
@@ -74,11 +81,15 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
  */
 export function resolveSessionById(sessions: SessionMeta[], idQuery: string): SessionMeta[] {
   const query = idQuery.toLowerCase();
-  // Exact match first
-  const exact = sessions.filter(s => s.id.toLowerCase() === query);
+  // Exact match first (full id or shortId)
+  const exact = sessions.filter(s =>
+    s.id.toLowerCase() === query || s.shortId.toLowerCase() === query
+  );
   if (exact.length > 0) return exact;
-  // Prefix match
-  return sessions.filter(s => s.id.toLowerCase().startsWith(query));
+  // Prefix match (against both id and shortId)
+  return sessions.filter(s =>
+    s.id.toLowerCase().startsWith(query) || s.shortId.toLowerCase().startsWith(query)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -618,55 +629,31 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
   const account = getOpenCodeAccount();
 
   try {
-    // Query sessions joined with first user message for topic.
-    // time_created is millisecond epoch. Limit to 200 most recent.
+    // Query sessions. time_created is millisecond epoch. Limit to 200 most recent.
+    // Use session.title as topic (OpenCode auto-generates good titles).
     const query = `
-      SELECT
-        s.id,
-        s.title,
-        s.directory,
-        s.version,
-        s.time_created,
-        s.parent_id,
-        (SELECT substr(p.data, 1, 300)
-         FROM message m
-         JOIN part p ON p.message_id = m.id AND p.session_id = m.session_id
-         WHERE m.session_id = s.id
-           AND json_extract(m.data, '$.role') = 'user'
-           AND json_extract(p.data, '$.type') = 'text'
-         ORDER BY m.time_created ASC
-         LIMIT 1) AS first_user_text
-      FROM session s
-      WHERE s.parent_id IS NULL
-      ORDER BY s.time_created DESC
+      SELECT id, title, directory, version, time_created
+      FROM session
+      WHERE parent_id IS NULL
+      ORDER BY time_created DESC
       LIMIT 200;
     `.replace(/\n/g, ' ');
 
     const out = execSync(
-      `sqlite3 -separator '|||' "${OPENCODE_DB}" "${query}"`,
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 },
+      `sqlite3 -separator '|||' "${OPENCODE_DB}"`,
+      { encoding: 'utf-8', input: query, stdio: ['pipe', 'pipe', 'ignore'], timeout: 5000 },
     );
 
     const sessions: SessionMeta[] = [];
 
     for (const line of out.split('\n')) {
       if (!line.trim()) continue;
-      const [id, title, directory, version, timeCreatedStr, _parentId, firstUserText] = line.split('|||');
+      const [id, title, directory, version, timeCreatedStr] = line.split('|||');
       if (!id) continue;
 
       const timeCreated = parseInt(timeCreatedStr, 10);
       const timestamp = isNaN(timeCreated) ? new Date().toISOString() : new Date(timeCreated).toISOString();
-
-      // Extract topic from the part data JSON or fall back to session title
-      let topic = title || undefined;
-      if (firstUserText) {
-        try {
-          const partData = JSON.parse(firstUserText);
-          if (partData.text) {
-            topic = extractTopic(partData.text);
-          }
-        } catch {}
-      }
+      const topic = title || undefined;
 
       sessions.push({
         id,
