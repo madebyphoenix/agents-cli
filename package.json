@@ -1,6 +1,6 @@
 {
   "name": "@swarmify/agents-cli",
-  "version": "1.10.4",
+  "version": "1.11.0",
   "description": "One CLI for all your AI coding agents - versions, skills, MCP servers, rules, hooks, and permissions",
   "type": "module",
   "main": "dist/index.js",
