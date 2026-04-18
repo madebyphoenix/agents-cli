@@ -33,6 +33,7 @@ import {
   syncResourcesToVersion,
   promptAgentVersionSelection,
   getVersionHomePath,
+  resolveAgentVersionTargets,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
 import {
@@ -312,7 +313,7 @@ export function registerSkillsCommands(program: Command): void {
   skillsCmd
     .command('add [source]')
     .description('Install skills from a repo or local path')
-    .option('-a, --agents <list>', 'Comma-separated agents to install to')
+    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to install to')
     .option('--names <list>', 'Comma-separated skill names from ~/.agents/skills/')
     .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (source: string | undefined, options) => {
@@ -475,15 +476,9 @@ export function registerSkillsCommands(program: Command): void {
         let versionSelections: Map<AgentId, string[]>;
 
         if (options.agents) {
-          selectedAgents = options.agents.split(',') as AgentId[];
-          versionSelections = new Map();
-          for (const agentId of selectedAgents) {
-            const versions = listInstalledVersions(agentId);
-            if (versions.length > 0) {
-              const defaultVer = getGlobalDefault(agentId);
-              versionSelections.set(agentId, defaultVer ? [defaultVer] : [versions[versions.length - 1]]);
-            }
-          }
+          const result = resolveAgentVersionTargets(options.agents, SKILLS_CAPABLE_AGENTS);
+          selectedAgents = result.selectedAgents;
+          versionSelections = result.versionSelections;
         } else {
           const result = await promptAgentVersionSelection(SKILLS_CAPABLE_AGENTS, {
             skipPrompts: options.yes || !isInteractiveTerminal(),

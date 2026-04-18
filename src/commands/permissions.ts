@@ -33,6 +33,7 @@ import {
   getGlobalDefault,
   getVersionHomePath,
   promptAgentVersionSelection,
+  resolveAgentVersionTargets,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
 import {
@@ -226,7 +227,7 @@ export function registerPermissionsCommands(program: Command): void {
   permissionsCmd
     .command('add [source]')
     .description('Install permissions from a repo, YAML file, or agent config file')
-    .option('-a, --agents <list>', 'Comma-separated agents to apply to')
+    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to apply to')
     .option('--names <list>', 'Comma-separated permission set names from ~/.agents/permissions/')
     .option('--all', 'Apply to all installed versions (not just default)')
     .option('-y, --yes', 'Skip prompts and use defaults')
@@ -430,19 +431,11 @@ export function registerPermissionsCommands(program: Command): void {
           let versionSelections: Map<AgentId, string[]>;
 
           if (options.agents) {
-            selectedAgents = options.agents.split(',') as AgentId[];
-            versionSelections = new Map();
-            for (const agentId of selectedAgents) {
-              const versions = listInstalledVersions(agentId);
-              if (versions.length > 0) {
-                if (options.all) {
-                  versionSelections.set(agentId, [...versions]);
-                } else {
-                  const defaultVer = getGlobalDefault(agentId);
-                  versionSelections.set(agentId, defaultVer ? [defaultVer] : [versions[versions.length - 1]]);
-                }
-              }
-            }
+            const result = resolveAgentVersionTargets(options.agents, PERMISSIONS_CAPABLE_AGENTS, {
+              allVersions: options.all,
+            });
+            selectedAgents = result.selectedAgents;
+            versionSelections = result.versionSelections;
           } else if (options.all) {
             selectedAgents = [...PERMISSIONS_CAPABLE_AGENTS];
             versionSelections = new Map();
@@ -553,19 +546,11 @@ export function registerPermissionsCommands(program: Command): void {
           let versionSelections: Map<AgentId, string[]>;
 
           if (options.agents) {
-            selectedAgents = options.agents.split(',') as AgentId[];
-            versionSelections = new Map();
-            for (const agentId of selectedAgents) {
-              const versions = listInstalledVersions(agentId);
-              if (versions.length > 0) {
-                if (options.all) {
-                  versionSelections.set(agentId, [...versions]);
-                } else {
-                  const defaultVer = getGlobalDefault(agentId);
-                  versionSelections.set(agentId, defaultVer ? [defaultVer] : [versions[versions.length - 1]]);
-                }
-              }
-            }
+            const result = resolveAgentVersionTargets(options.agents, PERMISSIONS_CAPABLE_AGENTS, {
+              allVersions: options.all,
+            });
+            selectedAgents = result.selectedAgents;
+            versionSelections = result.versionSelections;
           } else if (options.all) {
             selectedAgents = [...PERMISSIONS_CAPABLE_AGENTS];
             versionSelections = new Map();

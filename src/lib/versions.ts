@@ -8,7 +8,7 @@ import * as TOML from 'smol-toml';
 import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
 import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir, getProjectAgentsDir } from './state.js';
-import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig } from './agents.js';
+import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig, resolveAgentName, formatAgentError } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME } from './permissions.js';
 import { installMcpServers } from './mcp.js';
 import { markdownToToml } from './convert.js';
@@ -1590,6 +1590,108 @@ export function getEffectiveHome(agentId: AgentId): string {
 export interface VersionSelectionResult {
   selectedAgents: AgentId[];
   versionSelections: Map<AgentId, string[]>;
+}
+
+/**
+ * Resolve a comma-separated --agents list into concrete version selections.
+ * Bare agents target the default version, or the newest installed version when no default exists.
+ * Explicit agent@version targets only that installed version.
+ */
+export function resolveAgentVersionTargets(
+  value: string,
+  availableAgents: readonly AgentId[],
+  options: { allVersions?: boolean } = {}
+): VersionSelectionResult {
+  const selectedAgents: AgentId[] = [];
+  const versionSelections = new Map<AgentId, string[]>();
+  const explicitSelections = new Set<AgentId>();
+  const targets = value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  for (const target of targets) {
+    const atIndex = target.indexOf('@');
+    const agentToken = (atIndex === -1 ? target : target.slice(0, atIndex)).trim();
+    const versionToken = atIndex === -1 ? null : target.slice(atIndex + 1).trim();
+
+    if (!agentToken) {
+      continue;
+    }
+
+    if (atIndex !== -1 && !versionToken) {
+      throw new Error(`Missing version in --agents entry '${target}'. Use agent@x.y.z or agent@default.`);
+    }
+
+    const agentId = resolveAgentName(agentToken);
+    if (!agentId || !availableAgents.includes(agentId)) {
+      throw new Error(formatAgentError(agentToken, [...availableAgents]));
+    }
+
+    if (!selectedAgents.includes(agentId)) {
+      selectedAgents.push(agentId);
+    }
+
+    if (explicitSelections.has(agentId) && !versionToken) {
+      continue;
+    }
+
+    const installedVersions = listInstalledVersions(agentId);
+    const defaultVersion = getGlobalDefault(agentId);
+
+    if (!versionToken) {
+      if (installedVersions.length === 0) {
+        continue;
+      }
+
+      versionSelections.set(
+        agentId,
+        options.allVersions
+          ? [...installedVersions]
+          : [defaultVersion || installedVersions[installedVersions.length - 1]]
+      );
+      continue;
+    }
+
+    if (installedVersions.length === 0) {
+      throw new Error(`No managed versions are installed for ${AGENTS[agentId].name}. Run: agents add ${agentId}@latest`);
+    }
+
+    if (versionToken === 'default') {
+      if (!defaultVersion) {
+        throw new Error(`No default version set for ${AGENTS[agentId].name}. Run: agents use ${agentId}@<version>`);
+      }
+
+      const explicitVersions = explicitSelections.has(agentId)
+        ? (versionSelections.get(agentId) || [])
+        : [];
+
+      if (!explicitVersions.includes(defaultVersion)) {
+        explicitVersions.push(defaultVersion);
+      }
+      versionSelections.set(agentId, explicitVersions);
+      explicitSelections.add(agentId);
+      continue;
+    }
+
+    if (!installedVersions.includes(versionToken)) {
+      throw new Error(
+        `Version ${versionToken} is not installed for ${AGENTS[agentId].name}. Installed versions: ${installedVersions.join(', ')}`
+      );
+    }
+
+    const explicitVersions = explicitSelections.has(agentId)
+      ? (versionSelections.get(agentId) || [])
+      : [];
+
+    if (!explicitVersions.includes(versionToken)) {
+      explicitVersions.push(versionToken);
+    }
+    versionSelections.set(agentId, explicitVersions);
+    explicitSelections.add(agentId);
+  }
+
+  return { selectedAgents, versionSelections };
 }
 
 /**

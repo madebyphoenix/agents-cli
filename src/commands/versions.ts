@@ -13,6 +13,8 @@ import {
   agentLabel,
 } from '../lib/agents.js';
 import type { AccountInfo } from '../lib/agents.js';
+import type { UsageSnapshot } from '../lib/usage.js';
+import { formatUsageSummary, getUsageInfo } from '../lib/usage.js';
 import { viewAction } from './view.js';
 import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
@@ -64,19 +66,11 @@ async function getInstalledVersionForAgent(agent: AgentId): Promise<string> {
   throw new Error(`No versions of ${agent} installed`);
 }
 
-function formatAccountHint(info: AccountInfo): string {
+function formatAccountHint(info: AccountInfo, usage: UsageSnapshot | null): string {
   const parts: string[] = [];
   if (info.email) parts.push(info.email);
-  if (info.plan) {
-    const BAR_LEN = 5;
-    const FULL = '\u2588';
-    const EMPTY = '\u2591';
-    let bar = '';
-    if (info.usageStatus === 'out_of_credits') bar = EMPTY.repeat(BAR_LEN);
-    else if (info.usageStatus === 'rate_limited') bar = FULL.repeat(2) + EMPTY.repeat(BAR_LEN - 2);
-    else if (info.usageStatus) bar = FULL.repeat(BAR_LEN);
-    parts.push(info.plan + (bar ? ' ' + bar : ''));
-  }
+  const usageSummary = formatUsageSummary(info.plan, usage);
+  if (usageSummary) parts.push(usageSummary);
   if (parts.length === 0) return '';
   return chalk.gray(` [${parts.join(', ')}]`);
 }
@@ -240,8 +234,10 @@ export function registerVersionsCommands(program: Command): void {
               } else {
                 try {
                   // Fetch account info for context in the prompt
-                  const info = await getAccountInfo(agent, getVersionHomePath(agent, installedVersion));
-                  const accountHint = formatAccountHint(info);
+                  const home = getVersionHomePath(agent, installedVersion);
+                  const info = await getAccountInfo(agent, home);
+                  const usage = await getUsageInfo(agent, { home, cliVersion: installedVersion });
+                  const accountHint = formatAccountHint(info, usage.snapshot);
 
                   const message = currentDefault
                     ? `Switch default from ${agentLabel(agentConfig.id)}@${currentDefault} to ${agentLabel(agentConfig.id)}@${installedVersion}${accountHint}?`

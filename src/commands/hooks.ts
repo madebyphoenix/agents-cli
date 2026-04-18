@@ -30,6 +30,7 @@ import {
   syncResourcesToVersion,
   promptAgentVersionSelection,
   getVersionHomePath,
+  resolveAgentVersionTargets,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
 import {
@@ -244,7 +245,7 @@ export function registerHooksCommands(program: Command): void {
   hooksCmd
     .command('add [source]')
     .description('Install hooks from a repo or local path')
-    .option('-a, --agents <list>', 'Comma-separated agents to install to')
+    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to install to')
     .option('--names <list>', 'Comma-separated hook names from ~/.agents/hooks/')
     .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (source: string | undefined, options) => {
@@ -363,15 +364,9 @@ export function registerHooksCommands(program: Command): void {
         const hooksCapableAgents = Array.from(HOOKS_CAPABLE_AGENTS) as AgentId[];
 
         if (options.agents) {
-          selectedAgents = options.agents.split(',') as AgentId[];
-          versionSelections = new Map();
-          for (const agentId of selectedAgents) {
-            const versions = listInstalledVersions(agentId);
-            if (versions.length > 0) {
-              const defaultVer = getGlobalDefault(agentId);
-              versionSelections.set(agentId, defaultVer ? [defaultVer] : [versions[versions.length - 1]]);
-            }
-          }
+          const result = resolveAgentVersionTargets(options.agents, hooksCapableAgents);
+          selectedAgents = result.selectedAgents;
+          versionSelections = result.versionSelections;
         } else {
           const result = await promptAgentVersionSelection(hooksCapableAgents, {
             skipPrompts: options.yes || !isInteractiveTerminal(),

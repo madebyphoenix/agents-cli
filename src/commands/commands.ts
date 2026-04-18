@@ -31,6 +31,7 @@ import {
   syncResourcesToVersion,
   promptAgentVersionSelection,
   getVersionHomePath,
+  resolveAgentVersionTargets,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
 import {
@@ -212,7 +213,7 @@ export function registerCommandsCommands(program: Command): void {
   commandsCmd
     .command('add [source]')
     .description('Install commands from a repo or local path')
-    .option('-a, --agents <list>', 'Comma-separated agents to install to')
+    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to install to')
     .option('--names <list>', 'Comma-separated command names from ~/.agents/commands/')
     .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (source: string | undefined, options) => {
@@ -349,15 +350,9 @@ export function registerCommandsCommands(program: Command): void {
         let versionSelections: Map<AgentId, string[]>;
 
         if (options.agents) {
-          selectedAgents = options.agents.split(',') as AgentId[];
-          versionSelections = new Map();
-          for (const agentId of selectedAgents) {
-            const versions = listInstalledVersions(agentId);
-            if (versions.length > 0) {
-              const defaultVer = getGlobalDefault(agentId);
-              versionSelections.set(agentId, defaultVer ? [defaultVer] : [versions[versions.length - 1]]);
-            }
-          }
+          const result = resolveAgentVersionTargets(options.agents, ALL_AGENT_IDS);
+          selectedAgents = result.selectedAgents;
+          versionSelections = result.versionSelections;
         } else {
           const result = await promptAgentVersionSelection(ALL_AGENT_IDS, {
             skipPrompts: options.yes || !isInteractiveTerminal(),

@@ -131,7 +131,7 @@ export function formatUsageSummary(
     }
   }
 
-  return parts.join('  ').trim();
+  return parts.join('  ');
 }
 
 export function formatUsageSection(usage: UsageInfo): string[] {
