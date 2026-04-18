@@ -22,6 +22,18 @@ agents exec gemini "Write tests for the fixed code"
 
 Each agent resolves to the project-pinned version, with the right skills, MCP servers, and permissions already synced. No setup between steps -- just run.
 
+`agents exec` also passes through environment overrides to the spawned CLI, so Claude can target any Anthropic-compatible endpoint:
+
+```bash
+agents exec claude "Reply with exactly: agents-qwen route ok" \
+  --mode full \
+  --model qwen3.6:35b \
+  --env ANTHROPIC_BASE_URL=https://ollama.427yosemite.com \
+  --env ANTHROPIC_AUTH_TOKEN="$(security find-generic-password -a "$USER" -s yosemite-ollama-auth-token -w)" \
+  --env ANTHROPIC_MODEL=qwen3.6:35b \
+  --env ANTHROPIC_SMALL_FAST_MODEL=qwen3.6:35b
+```
+
 This makes agent pipelines possible. Chain agents by strength, swap one for another, script them in CI -- the interface stays the same:
 
 ```bash

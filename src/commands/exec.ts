@@ -2,6 +2,7 @@ import type { Command } from 'commander';
 import chalk from 'chalk';
 import {
   buildExecCommand,
+  parseExecEnv,
   execAgent,
   AGENT_COMMANDS,
   type ExecOptions,
@@ -18,6 +19,7 @@ interface ExecCommandActionOptions {
   model?: string;
   cwd?: string;
   addDir: string[];
+  env: string[];
   json?: boolean;
   headless?: boolean;
   sessionId?: string;
@@ -36,6 +38,12 @@ export function registerExecCommand(program: Command): void {
     .option('-m, --mode <mode>', 'Execution mode: plan (read-only), edit (write), or full (full autonomy)', 'plan')
     .option('-e, --effort <effort>', 'Effort level: fast, default, detailed', 'default')
     .option('--model <model>', 'Override model selection')
+    .option(
+      '--env <key=value>',
+      'Pass an environment variable to the spawned agent process (can repeat)',
+      (val: string, prev: string[]) => [...prev, val],
+      []
+    )
     .option('--cwd <dir>', 'Working directory')
     .option(
       '--add-dir <dir>',
@@ -70,6 +78,14 @@ export function registerExecCommand(program: Command): void {
         process.exit(1);
       }
 
+      let env: Record<string, string> | undefined;
+      try {
+        env = parseExecEnv(options.env);
+      } catch (err) {
+        console.error(chalk.red((err as Error).message));
+        process.exit(1);
+      }
+
       const execOptions: ExecOptions = {
         agent,
         version,
@@ -84,6 +100,7 @@ export function registerExecCommand(program: Command): void {
         sessionId: options.sessionId,
         verbose: options.verbose,
         timeout: options.timeout,
+        env,
       };
 
       // Show what we're running (stderr so stdout stays clean for piping)

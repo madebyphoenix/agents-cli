@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildExecCommand,
+  buildExecEnv,
   AGENT_COMMANDS,
   EFFORT_MODELS,
+  parseExecEnv,
   type ExecOptions,
   type ExecMode,
 } from '../exec.js';
@@ -294,6 +296,42 @@ describe('buildExecCommand', () => {
     it('codex ignores addDirs', () => {
       const cmd = buildExecCommand(opts({ agent: 'codex', addDirs: ['/a'] }));
       expect(cmd).not.toContain('--add-dir');
+    });
+  });
+
+  describe('exec env', () => {
+    it('parses repeated KEY=VALUE entries', () => {
+      expect(parseExecEnv(['ANTHROPIC_BASE_URL=https://ollama.427yosemite.com', 'ANTHROPIC_MODEL=qwen3.6:35b'])).toEqual({
+        ANTHROPIC_BASE_URL: 'https://ollama.427yosemite.com',
+        ANTHROPIC_MODEL: 'qwen3.6:35b',
+      });
+    });
+
+    it('preserves equals signs in values', () => {
+      expect(parseExecEnv(['AUTH_HEADER=Bearer abc=123'])).toEqual({
+        AUTH_HEADER: 'Bearer abc=123',
+      });
+    });
+
+    it('rejects malformed entries', () => {
+      expect(() => parseExecEnv(['NOT_VALID'])).toThrow('Invalid --env value "NOT_VALID". Use KEY=VALUE.');
+    });
+
+    it('merges explicit env over process env', () => {
+      const previous = process.env.ANTHROPIC_MODEL;
+      process.env.ANTHROPIC_MODEL = 'claude-sonnet-4-5';
+
+      try {
+        const env = buildExecEnv(opts({ env: { ANTHROPIC_MODEL: 'qwen3.6:35b', ANTHROPIC_BASE_URL: 'https://ollama.427yosemite.com' } }));
+        expect(env.ANTHROPIC_MODEL).toBe('qwen3.6:35b');
+        expect(env.ANTHROPIC_BASE_URL).toBe('https://ollama.427yosemite.com');
+      } finally {
+        if (previous === undefined) {
+          delete process.env.ANTHROPIC_MODEL;
+        } else {
+          process.env.ANTHROPIC_MODEL = previous;
+        }
+      }
     });
   });
 

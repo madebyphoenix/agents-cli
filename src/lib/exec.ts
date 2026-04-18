@@ -19,6 +19,40 @@ export interface ExecOptions {
   timeout?: string;
   sessionId?: string;
   verbose?: boolean;
+  env?: Record<string, string>;
+}
+
+const EXEC_ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function parseExecEnvEntry(entry: string): [string, string] {
+  const separatorIndex = entry.indexOf('=');
+  if (separatorIndex <= 0) {
+    throw new Error(`Invalid --env value "${entry}". Use KEY=VALUE.`);
+  }
+
+  const key = entry.slice(0, separatorIndex).trim();
+  const value = entry.slice(separatorIndex + 1);
+
+  if (!EXEC_ENV_KEY_PATTERN.test(key)) {
+    throw new Error(`Invalid environment variable name "${key}".`);
+  }
+
+  return [key, value];
+}
+
+export function parseExecEnv(entries: string[]): Record<string, string> | undefined {
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(entries.map(parseExecEnvEntry));
+}
+
+export function buildExecEnv(options: ExecOptions): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...options.env,
+  };
 }
 
 // Model mapping per agent per effort level
@@ -289,6 +323,7 @@ export async function execAgent(options: ExecOptions): Promise<number> {
     const child = spawn(executable, args, {
       cwd: options.cwd || process.cwd(),
       stdio: piped ? ['inherit', 'pipe', 'inherit'] : 'inherit',
+      env: buildExecEnv(options),
       shell: false,
     });
 
