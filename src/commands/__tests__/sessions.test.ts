@@ -537,4 +537,83 @@ describe('agents sessions view', () => {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
+
+  it('applies --project filters before resolving search queries', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-view-project-filter-'));
+
+    try {
+      writeUpdateCache(tempHome);
+
+      const workspaceDir = path.join(tempHome, 'work');
+      const agentsDir = path.join(workspaceDir, 'agents');
+      const agentsCliDir = path.join(workspaceDir, 'agents-cli');
+
+      writeCodexSession(
+        tempHome,
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        agentsDir,
+        'Filter scoped search target',
+        '2026-04-17T19:42:30.000Z'
+      );
+      writeCodexSession(
+        tempHome,
+        'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        agentsCliDir,
+        'Filter scoped search decoy',
+        '2026-04-17T19:43:30.000Z'
+      );
+
+      const result = runAgents(
+        ['sessions', 'view', '--project', 'agents-cli', 'scoped search', '--transcript'],
+        workspaceDir,
+        tempHome,
+      );
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain('Filter scoped search decoy');
+      expect(output).not.toContain('Filter scoped search target');
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('applies --agent filters before resolving search queries', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-view-agent-filter-'));
+
+    try {
+      writeUpdateCache(tempHome);
+
+      const projectDir = path.join(tempHome, 'work', 'agents-cli');
+
+      writeClaudeSession(
+        tempHome,
+        'agents-cli-claude',
+        'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        projectDir,
+        'Shared filter phrase from claude',
+        '2026-04-17T19:44:30.000Z'
+      );
+      writeCodexSession(
+        tempHome,
+        'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        projectDir,
+        'Shared filter phrase from codex',
+        '2026-04-17T19:45:30.000Z'
+      );
+
+      const result = runAgents(
+        ['sessions', 'view', '--agent', 'codex', 'shared filter phrase', '--transcript'],
+        projectDir,
+        tempHome,
+      );
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain('Shared filter phrase from codex');
+      expect(output).not.toContain('Shared filter phrase from claude');
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 });

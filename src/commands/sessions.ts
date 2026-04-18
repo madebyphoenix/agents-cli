@@ -423,8 +423,11 @@ export function registerSessionsCommands(program: Command): void {
     .option('--transcript', 'Show full conversation transcript')
     .option('--trace', 'Show reasoning trace as markdown')
     .option('--json', 'Output normalized events as JSON')
-    .action(async (id: string | undefined, options: ViewOptions) => {
-      await viewAction(id, options);
+    .action(async (id: string | undefined, options: ViewOptions, command) => {
+      const parentOptions = typeof command?.parent?.opts === 'function'
+        ? command.parent.opts()
+        : {};
+      await viewAction(id, { ...parentOptions, ...options });
     });
 }
 
