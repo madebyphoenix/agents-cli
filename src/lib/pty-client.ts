@@ -7,7 +7,7 @@
 
 import * as net from 'net';
 import * as fs from 'fs';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import * as path from 'path';
 import { getSocketPath, getPtyPidPath, isPtyServerRunning } from './pty-server.js';
@@ -41,13 +41,13 @@ export async function ptyRequest(action: string, id?: string, params?: Record<st
 async function ensureServer(): Promise<void> {
   if (isPtyServerRunning()) return;
 
-  // Find the agents binary to spawn the server
-  const agentsBin = getAgentsBin();
+  // Find the entry point to spawn the server
+  const { bin, args } = getServerSpawnArgs();
 
   const logPath = path.join(path.dirname(getSocketPath()), 'pty.log');
   const logFd = fs.openSync(logPath, 'a');
 
-  const child = spawn(agentsBin, ['pty', '_server'], {
+  const child = spawn(bin, args, {
     stdio: ['ignore', logFd, logFd],
     detached: true,
   });
@@ -73,24 +73,26 @@ async function ensureServer(): Promise<void> {
   throw new Error('PTY server failed to start within 5 seconds. Check ~/.agents/pty.log');
 }
 
-function getAgentsBin(): string {
-  // Use the current process's script path
+function getServerSpawnArgs(): { bin: string; args: string[] } {
+  // Prefer the dist/index.js from the same installation as this code.
+  // This avoids version mismatch when a globally installed `agents` is older.
   try {
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    // In dist: dist/lib/pty-client.js -> dist/index.js -> agents bin
     const distIndex = path.join(__dirname, '..', 'index.js');
     if (fs.existsSync(distIndex)) {
-      return distIndex;
+      return { bin: process.execPath, args: [distIndex, 'pty', '_server'] };
     }
   } catch {}
 
-  // Fallback: find agents in PATH
+  // Fallback: use the globally installed agents command
   try {
-    const { execSync } = await import('child_process') as any;
-    return (await import('child_process')).execSync('which agents', { encoding: 'utf-8' }).trim();
+    const agentsBin = execSync('which agents', { encoding: 'utf-8' }).trim();
+    if (agentsBin) {
+      return { bin: agentsBin, args: ['pty', '_server'] };
+    }
   } catch {}
 
-  return 'agents';
+  return { bin: 'agents', args: ['pty', '_server'] };
 }
 
 /**

@@ -93,6 +93,21 @@ export async function runPtyServer(): Promise<void> {
     nodePty = await import('node-pty');
     // Handle ESM default export
     if (nodePty.default?.spawn) nodePty = nodePty.default;
+
+    // Ensure spawn-helper is executable (bun install doesn't set +x on prebuilds)
+    try {
+      const __dirname = path.dirname(fileURLToPath(import.meta.url));
+      const ptyBase = path.resolve(__dirname, '..', '..', 'node_modules', 'node-pty');
+      const helpers = [
+        path.join(ptyBase, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper'),
+        path.join(ptyBase, 'build', 'Release', 'spawn-helper'),
+      ];
+      for (const h of helpers) {
+        if (fs.existsSync(h)) {
+          fs.chmodSync(h, 0o755);
+        }
+      }
+    } catch {}
   } catch (err) {
     console.error('node-pty is required for PTY support.');
     console.error('Install: cd ' + getAgentsDir() + '/../agents-cli && bun add node-pty');
@@ -101,7 +116,8 @@ export async function runPtyServer(): Promise<void> {
 
   try {
     const xterm = await import('@xterm/headless');
-    XtermTerminal = xterm.Terminal;
+    // Handle ESM default export wrapping
+    XtermTerminal = (xterm as any).Terminal || (xterm as any).default?.Terminal;
   } catch {
     console.error('@xterm/headless is required for PTY support.');
     console.error('Install: cd ' + getAgentsDir() + '/../agents-cli && bun add @xterm/headless');
@@ -139,7 +155,10 @@ export async function runPtyServer(): Promise<void> {
     const buf = session.terminal.buffer.active;
     for (let y = 0; y < session.rows; y++) {
       const line = buf.getLine(y);
-      lines.push(line ? line.translateToString(true) : '');
+      const text = line ? line.translateToString(true) : '';
+      // Strip lines containing the sentinel pattern
+      if (text.includes(SENTINEL)) continue;
+      lines.push(text);
     }
     // Trim trailing empty lines
     while (lines.length > 0 && lines[lines.length - 1] === '') {

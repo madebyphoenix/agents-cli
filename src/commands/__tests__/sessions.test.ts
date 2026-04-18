@@ -5,8 +5,7 @@ import * as path from 'path';
 import { spawnSync } from 'child_process';
 
 const repoRoot = process.cwd();
-const tsxPath = path.join(repoRoot, 'node_modules', '.bin', 'tsx');
-const cliEntry = path.join(repoRoot, 'src', 'index.ts');
+const cliEntry = path.join(repoRoot, 'dist', 'index.js');
 
 function writeUpdateCache(tempHome: string): void {
   const packageJson = JSON.parse(
@@ -48,7 +47,7 @@ function writeClaudeSession(
 }
 
 function runAgents(args: string[], cwd: string, home: string) {
-  return spawnSync(tsxPath, [cliEntry, ...args], {
+  return spawnSync(process.execPath, [cliEntry, ...args], {
     cwd,
     env: { ...process.env, HOME: home },
     encoding: 'utf-8',
