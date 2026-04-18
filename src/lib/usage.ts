@@ -131,7 +131,9 @@ export function formatUsageSummary(
   }
 
   if (snapshot) {
-    const windows = snapshot.windows.map((window) =>
+    const windows = snapshot.windows
+      .filter((window) => window.key !== 'sonnet_week')
+      .map((window) =>
       `${chalk.gray(window.shortLabel)} ${renderCompactUsageBar(window.usedPercent)}`
     );
     if (windows.length > 0) {

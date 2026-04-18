@@ -60,6 +60,9 @@ agents add codex@latest --yes
 agents use claude@2.1.79 --yes
 agents commands add --names review-pr,debug --agents codex@0.113.0
 agents skills add --names agents-cli --agents claude@default
+agents install ./team-agent-pack --agents codex@0.113.0
+agents mcp add postgres --agents claude@2.1.79 -- npx -y @modelcontextprotocol/server-postgres
+agents mcp register postgres
 agents sessions view <session-id>
 agents routines view <job-name>
 ```

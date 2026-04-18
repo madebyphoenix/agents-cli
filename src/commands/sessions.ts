@@ -14,15 +14,17 @@ import { renderMarkdown } from '../lib/markdown.js';
 import { colorAgent } from '../lib/agents.js';
 import { isInteractiveTerminal, isPromptCancelled, requireInteractiveSelection } from './utils.js';
 
-interface ListOptions {
+interface SessionFilterOptions {
   agent?: string;
   project?: string;
   all?: boolean;
+}
+
+interface ListOptions extends SessionFilterOptions {
   limit?: string;
 }
 
-interface ViewOptions {
-  all?: boolean;
+interface ViewOptions extends SessionFilterOptions {
   transcript?: boolean;
   trace?: boolean;
   json?: boolean;
@@ -45,11 +47,7 @@ interface ClaudeResumeMatch {
 const CLAUDE_RESUME_MATCH_WINDOW_MS = 10 * 60_000;
 
 async function listAction(options: ListOptions): Promise<void> {
-  const agent = options.agent as SessionAgentId | undefined;
-  if (agent && !SESSION_AGENTS.includes(agent)) {
-    console.error(chalk.red(`Unknown agent: ${agent}. Use: ${SESSION_AGENTS.join(', ')}`));
-    process.exit(1);
-  }
+  const agent = parseAgentFilter(options.agent);
 
   const limit = parseInt(options.limit || '20', 10);
   const spinner = ora('Scanning sessions...').start();
@@ -68,6 +66,14 @@ async function listAction(options: ListOptions): Promise<void> {
     if (sessions.length === 0) {
       console.log(chalk.gray(formatNoSessionsMessage(options.all, false, options.project)));
       return;
+    }
+
+    if (shouldUseFilteredSessionSearch(options)) {
+      const picked = await pickSession(sessions, formatSearchMessage(options));
+      if (picked) {
+        await renderSession(picked, 'summary');
+        return;
+      }
     }
 
     // Print header
@@ -174,10 +180,13 @@ function formatPickerLabel(s: SessionMeta): string {
   );
 }
 
-async function pickSession(sessions: SessionMeta[]): Promise<SessionMeta | null> {
+async function pickSession(
+  sessions: SessionMeta[],
+  message = 'Search sessions:',
+): Promise<SessionMeta | null> {
   try {
     return await search({
-      message: 'Search sessions:',
+      message,
       pageSize: 12,
       source: async (input) => {
         const matches = filterSessionsByQuery(sessions, input).slice(0, 30);
@@ -204,6 +213,27 @@ async function pickSession(sessions: SessionMeta[]): Promise<SessionMeta | null>
     if (isPromptCancelled(err)) return null;
     throw err;
   }
+}
+
+function parseAgentFilter(agentName?: string): SessionAgentId | undefined {
+  const agent = agentName as SessionAgentId | undefined;
+  if (agent && !SESSION_AGENTS.includes(agent)) {
+    console.error(chalk.red(`Unknown agent: ${agent}. Use: ${SESSION_AGENTS.join(', ')}`));
+    process.exit(1);
+  }
+  return agent;
+}
+
+function shouldUseFilteredSessionSearch(options: SessionFilterOptions): boolean {
+  return isInteractiveTerminal() && Boolean(options.agent || options.project);
+}
+
+function formatSearchMessage(options: SessionFilterOptions): string {
+  const filters: string[] = [];
+  if (options.agent) filters.push(`agent: ${options.agent}`);
+  if (options.project?.trim()) filters.push(`project: ${options.project.trim()}`);
+  if (filters.length === 0) return 'Search sessions:';
+  return `Search sessions (${filters.join(', ')}):`;
 }
 
 function formatSearchDescription(session: SessionMeta): string {
@@ -268,13 +298,16 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
   if (options.transcript) mode = 'transcript';
   else if (options.trace) mode = 'trace';
   else if (options.json) mode = 'json';
+  const agent = parseAgentFilter(options.agent);
 
   const spinner = ora('Finding session...').start();
 
   try {
     const allSessions = await discoverSessions({
+      agent,
       all: Boolean(idQuery) || options.all,
       cwd: process.cwd(),
+      project: options.project,
       limit: 5000,
     });
     let session: SessionMeta | undefined;
@@ -295,7 +328,7 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
         ]);
       }
 
-      const picked = await pickSession(allSessions);
+      const picked = await pickSession(allSessions, formatSearchMessage(options));
       if (!picked) return;
       session = picked;
     } else {
@@ -336,7 +369,7 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
           process.exit(1);
         }
         // Multiple matches -- let the user pick
-        const picked = await pickSession(queryMatches);
+        const picked = await pickSession(queryMatches, formatSearchMessage(options));
         if (!picked) return;
         session = picked;
       } else {
@@ -384,7 +417,9 @@ export function registerSessionsCommands(program: Command): void {
   sessionsCmd
     .command('view [id]')
     .description('View a session by ID or search query (picker defaults to live search)')
+    .option('--agent <agent>', 'Filter by agent (claude, codex, gemini)')
     .option('--all', 'Show sessions from every directory')
+    .option('--project <name>', 'Filter by project name across all directories')
     .option('--transcript', 'Show full conversation transcript')
     .option('--trace', 'Show reasoning trace as markdown')
     .option('--json', 'Output normalized events as JSON')

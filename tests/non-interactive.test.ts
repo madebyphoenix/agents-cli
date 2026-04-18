@@ -30,12 +30,44 @@ function writeCentralCommand(home: string, name: string, description = 'Test com
   );
 }
 
-function writeFakeManagedVersion(home: string, agent: string, version: string, cliName: string): void {
+function writeFakeManagedVersion(
+  home: string,
+  agent: string,
+  version: string,
+  cliName: string,
+  script: string = '#!/bin/sh\nexit 0\n',
+): void {
   const binaryDir = path.join(home, '.agents', 'versions', agent, version, 'node_modules', '.bin');
   fs.mkdirSync(binaryDir, { recursive: true });
   const binaryPath = path.join(binaryDir, cliName);
-  fs.writeFileSync(binaryPath, '#!/bin/sh\nexit 0\n');
+  fs.writeFileSync(binaryPath, script);
   fs.chmodSync(binaryPath, 0o755);
+}
+
+function writeLoggingManagedVersion(
+  home: string,
+  agent: string,
+  version: string,
+  cliName: string,
+  logPath: string,
+): void {
+  writeFakeManagedVersion(
+    home,
+    agent,
+    version,
+    cliName,
+    `#!/bin/sh\necho \"$HOME|$@\" >> \"${logPath}\"\nexit 0\n`,
+  );
+}
+
+function writeLocalPackageRepo(): string {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-cli-package-repo-'));
+  fs.mkdirSync(path.join(repo, 'commands'), { recursive: true });
+  fs.writeFileSync(
+    path.join(repo, 'commands', 'review.md'),
+    '---\ndescription: Review changes\n---\n\n# review\n',
+  );
+  return repo;
 }
 
 function runAgents(home: string, args: string[]) {
@@ -51,11 +83,16 @@ function runAgents(home: string, args: string[]) {
 }
 
 const tempHomes: string[] = [];
+const tempRepos: string[] = [];
 
 afterEach(() => {
   while (tempHomes.length > 0) {
     const home = tempHomes.pop()!;
     fs.rmSync(home, { recursive: true, force: true });
+  }
+  while (tempRepos.length > 0) {
+    const repo = tempRepos.pop()!;
+    fs.rmSync(repo, { recursive: true, force: true });
   }
 });
 
@@ -148,5 +185,81 @@ describe('non-interactive CLI usage', () => {
     expect(result.stdout).toContain('Set Codex@0.1.0 as global default');
     expect(agentsYaml).toContain('codex: 0.1.0');
     expect(fs.lstatSync(codexSymlink).isSymbolicLink()).toBe(true);
+  });
+
+  it('installs package repo contents only to the requested explicit version target', () => {
+    const home = makeTempHome();
+    const repo = writeLocalPackageRepo();
+    tempHomes.push(home);
+    tempRepos.push(repo);
+    writeFakeManagedVersion(home, 'codex', '0.1.0', 'codex');
+    writeFakeManagedVersion(home, 'codex', '0.2.0', 'codex');
+
+    const result = runAgents(home, ['install', repo, '--agents', 'codex@0.2.0']);
+    const requestedPath = path.join(
+      home,
+      '.agents',
+      'versions',
+      'codex',
+      '0.2.0',
+      'home',
+      '.codex',
+      'prompts',
+      'review.md',
+    );
+    const untouchedPath = path.join(
+      home,
+      '.agents',
+      'versions',
+      'codex',
+      '0.1.0',
+      'home',
+      '.codex',
+      'prompts',
+      'review.md',
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Package installed.');
+    expect(fs.existsSync(requestedPath)).toBe(true);
+    expect(fs.existsSync(untouchedPath)).toBe(false);
+  });
+
+  it('registers MCPs only against the requested explicit version target', () => {
+    const home = makeTempHome();
+    const logPath = path.join(home, 'mcp-register.log');
+    tempHomes.push(home);
+    writeLoggingManagedVersion(home, 'codex', '0.1.0', 'codex', logPath);
+    writeLoggingManagedVersion(home, 'codex', '0.2.0', 'codex', logPath);
+
+    const addResult = runAgents(home, ['mcp', 'add', 'demo', '--agents', 'codex@0.2.0', '--', 'demo-server']);
+    const registerResult = runAgents(home, ['mcp', 'register', 'demo']);
+    const manifest = fs.readFileSync(path.join(home, '.agents', 'agents.yaml'), 'utf-8');
+    const log = fs.readFileSync(logPath, 'utf-8');
+
+    expect(addResult.status).toBe(0);
+    expect(registerResult.status).toBe(0);
+    expect(manifest).toContain('agentVersions:');
+    expect(manifest).toContain('codex:');
+    expect(manifest).toContain('- 0.2.0');
+    expect(log).toContain(path.join(home, '.agents', 'versions', 'codex', '0.2.0', 'home'));
+    expect(log).toContain('mcp add demo -- demo-server');
+    expect(log).not.toContain(path.join(home, '.agents', 'versions', 'codex', '0.1.0', 'home'));
+  });
+
+  it('removes MCPs only from the requested explicit version target', () => {
+    const home = makeTempHome();
+    const logPath = path.join(home, 'mcp-remove.log');
+    tempHomes.push(home);
+    writeLoggingManagedVersion(home, 'codex', '0.1.0', 'codex', logPath);
+    writeLoggingManagedVersion(home, 'codex', '0.2.0', 'codex', logPath);
+
+    const result = runAgents(home, ['mcp', 'remove', 'demo', '--agents', 'codex@0.2.0']);
+    const log = fs.readFileSync(logPath, 'utf-8');
+
+    expect(result.status).toBe(0);
+    expect(log).toContain(path.join(home, '.agents', 'versions', 'codex', '0.2.0', 'home'));
+    expect(log).toContain('mcp remove demo');
+    expect(log).not.toContain(path.join(home, '.agents', 'versions', 'codex', '0.1.0', 'home'));
   });
 });

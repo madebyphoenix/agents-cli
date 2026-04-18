@@ -22,7 +22,11 @@ CLI for managing AI coding agent versions, config, and sessions (Claude, Codex, 
   versions/{agent}/{version}/ # Installed CLIs (local-only)
   shims/                      # Version switching scripts (local-only)
   backups/{agent}/{timestamp}/ # Config backups from version switches
-  routines/                   # Scheduled jobs
+  routines/                   # Scheduled job configs (YAML)
+  drive/                      # Drive-sync remote session data
+  plugins/                    # Agent plugins (discovery via agents plugins)
+  subagents/                  # Subagent definitions
+  runs/                       # Execution history for scheduled jobs
 ```
 
 ### Version Switching
@@ -124,10 +128,10 @@ agents install <pkg>         # Install mcp:name or skill:user/repo
 # Sessions
 agents sessions              # List sessions across all agents
 agents sessions list         # Same, with --agent/--project filters
-agents sessions view <id>    # View session (summary by default, --transcript for full transcript)
-agents sessions view <id> --summary   # Files touched, commands run
-agents sessions view <id> --trace     # Reasoning trace as markdown
-agents sessions view <id> --json      # Normalized events as JSON
+agents sessions view <id>    # View session (summary by default)
+agents sessions view <id> --transcript   # Full conversation transcript
+agents sessions view <id> --trace        # Reasoning trace as markdown
+agents sessions view <id> --json         # Normalized events as JSON
 
 # Execution
 agents exec <agent> <prompt> # Execute agent non-interactively
