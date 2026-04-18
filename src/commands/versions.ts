@@ -30,6 +30,7 @@ import {
   parseAgentSpec,
   promptResourceSelection,
   promptNewResourceSelection,
+  type AvailableResources,
   getAvailableResources,
   getActuallySyncedResources,
   getNewResources,
@@ -47,7 +48,7 @@ import {
   switchConfigSymlink,
   switchHomeFileSymlinks,
 } from '../lib/shims.js';
-import { isPromptCancelled } from './utils.js';
+import { isInteractiveTerminal, isPromptCancelled, requireInteractiveSelection } from './utils.js';
 import { tryAutoPull } from '../lib/git.js';
 import { getAgentsDir } from '../lib/state.js';
 
@@ -80,13 +81,43 @@ function formatAccountHint(info: AccountInfo): string {
   return chalk.gray(` [${parts.join(', ')}]`);
 }
 
+function buildAutomaticSelection(resources: AvailableResources): ResourceSelection {
+  const selection: ResourceSelection = {};
+  if (resources.commands.length > 0) selection.commands = resources.commands;
+  if (resources.skills.length > 0) selection.skills = resources.skills;
+  if (resources.hooks.length > 0) selection.hooks = resources.hooks;
+  if (resources.memory.length > 0) selection.memory = resources.memory;
+  if (resources.mcp.length > 0) selection.mcp = resources.mcp;
+  if (resources.permissions.length > 0) selection.permissions = resources.permissions;
+  if (resources.subagents.length > 0) selection.subagents = resources.subagents;
+  if (resources.plugins.length > 0) selection.plugins = resources.plugins;
+  return selection;
+}
+
+async function setDefaultVersion(
+  agent: AgentId,
+  installedVersion: string,
+): Promise<void> {
+  setGlobalDefault(agent, installedVersion);
+  const symlinkResult = await switchConfigSymlink(agent, installedVersion);
+  if (symlinkResult.success) {
+    console.log(chalk.green('  Set as default'));
+    if (symlinkResult.backupPath) {
+      console.log(chalk.gray(`  Backed up existing config to: ${symlinkResult.backupPath}`));
+    }
+  }
+  switchHomeFileSymlinks(agent, installedVersion);
+}
+
 export function registerVersionsCommands(program: Command): void {
   program
     .command('add <specs...>')
     .description('Install agent CLI versions')
     .option('-p, --project', 'Pin version in project manifest (.agents/agents.yaml)')
+    .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (specs: string[], options) => {
       const isProject = options.project;
+      const skipPrompts = options.yes || !isInteractiveTerminal();
 
       for (const spec of specs) {
         const parsed = parseAgentSpec(spec);
@@ -156,7 +187,13 @@ export function registerVersionsCommands(program: Command): void {
             let selection: ResourceSelection | undefined;
 
             try {
-              if (!hasAnySynced) {
+              if (skipPrompts) {
+                if (!hasAnySynced) {
+                  selection = buildAutomaticSelection(available);
+                } else if (hasNewResources(newResources, agent)) {
+                  selection = buildAutomaticSelection(newResources);
+                }
+              } else if (!hasAnySynced) {
                 // Nothing synced yet - prompt for ALL resources
                 const userSelection = await promptResourceSelection(agent);
                 if (userSelection) {
@@ -198,36 +235,32 @@ export function registerVersionsCommands(program: Command): void {
             // Prompt to set as default
             const currentDefault = getGlobalDefault(agent);
             if (currentDefault !== installedVersion) {
-              try {
-                // Fetch account info for context in the prompt
-                const info = await getAccountInfo(agent, getVersionHomePath(agent, installedVersion));
-                const accountHint = formatAccountHint(info);
+              if (skipPrompts) {
+                await setDefaultVersion(agent, installedVersion);
+              } else {
+                try {
+                  // Fetch account info for context in the prompt
+                  const info = await getAccountInfo(agent, getVersionHomePath(agent, installedVersion));
+                  const accountHint = formatAccountHint(info);
 
-                const message = currentDefault
-                  ? `Switch default from ${agentLabel(agentConfig.id)}@${currentDefault} to ${agentLabel(agentConfig.id)}@${installedVersion}${accountHint}?`
-                  : `Set ${agentLabel(agentConfig.id)}@${installedVersion}${accountHint} as default?`;
+                  const message = currentDefault
+                    ? `Switch default from ${agentLabel(agentConfig.id)}@${currentDefault} to ${agentLabel(agentConfig.id)}@${installedVersion}${accountHint}?`
+                    : `Set ${agentLabel(agentConfig.id)}@${installedVersion}${accountHint} as default?`;
 
-                const setAsDefault = await confirm({
-                  message,
-                  default: true,
-                });
+                  const setAsDefault = await confirm({
+                    message,
+                    default: true,
+                  });
 
-                if (setAsDefault) {
-                  setGlobalDefault(agent, installedVersion);
-                  const symlinkResult = await switchConfigSymlink(agent, installedVersion);
-                  if (symlinkResult.success) {
-                    console.log(chalk.green(`  Set as default`));
-                    if (symlinkResult.backupPath) {
-                      console.log(chalk.gray(`  Backed up existing config to: ${symlinkResult.backupPath}`));
-                    }
+                  if (setAsDefault) {
+                    await setDefaultVersion(agent, installedVersion);
                   }
-                  switchHomeFileSymlinks(agent, installedVersion);
-                }
-              } catch (err) {
-                if (isPromptCancelled(err)) {
-                  console.log(chalk.gray('Skipped setting default'));
-                } else {
-                  throw err;
+                } catch (err) {
+                  if (isPromptCancelled(err)) {
+                    console.log(chalk.gray('Skipped setting default'));
+                  } else {
+                    throw err;
+                  }
                 }
               }
             }
@@ -296,6 +329,12 @@ export function registerVersionsCommands(program: Command): void {
           if (versions.length === 0) {
             console.log(chalk.gray(`No versions of ${agentLabel(agentConfig.id)} installed`));
             continue;
+          }
+
+          if (!isInteractiveTerminal()) {
+            requireInteractiveSelection(`Selecting ${agentLabel(agentConfig.id)} versions to remove`, [
+              `agents remove ${agent}@${versions[0]}`,
+            ]);
           }
 
           const globalDefault = getGlobalDefault(agent);
@@ -380,8 +419,10 @@ export function registerVersionsCommands(program: Command): void {
     .command('use <agent> [version]')
     .description('Set the default agent CLI version')
     .option('-p, --project', 'Set in project manifest instead of global default')
+    .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (agentArg: string, versionArg: string | undefined, options) => {
       try {
+        const skipPrompts = options.yes || !isInteractiveTerminal();
         // Auto-pull ~/.agents if it's a git repo with remote (silent on success)
         const agentsDir = getAgentsDir();
         const pullResult = await tryAutoPull(agentsDir);
@@ -425,6 +466,13 @@ export function registerVersionsCommands(program: Command): void {
             console.log(chalk.red(`No versions of ${agentLabel(agentConfig.id)} installed`));
             console.log(chalk.gray(`Run: agents add ${agentId}@latest`));
             return;
+          }
+
+          if (!isInteractiveTerminal()) {
+            requireInteractiveSelection(`Selecting a ${agentLabel(agentConfig.id)} version`, [
+              `agents use ${agentId}@${versions[versions.length - 1]}`,
+              `agents view ${agentId}`,
+            ]);
           }
 
           const globalDefault = getGlobalDefault(agentId);
@@ -502,7 +550,30 @@ export function registerVersionsCommands(program: Command): void {
             actuallySynced.permissions.length > 0;
 
           try {
-            if (!hasAnySynced) {
+            if (skipPrompts) {
+              let selection: ResourceSelection | undefined;
+              if (!hasAnySynced) {
+                selection = buildAutomaticSelection(available);
+              } else if (hasNewResources(newResources, agentId)) {
+                selection = buildAutomaticSelection(newResources);
+              }
+
+              if (selection && Object.keys(selection).length > 0) {
+                const syncResult = syncResourcesToVersion(agentId, finalVersion, selection);
+                const syncedTypes: string[] = [];
+                if (syncResult.commands) syncedTypes.push('commands');
+                if (syncResult.skills) syncedTypes.push('skills');
+                if (syncResult.hooks) syncedTypes.push('hooks');
+                if (syncResult.memory.length > 0) syncedTypes.push('memory');
+                if (syncResult.permissions) syncedTypes.push('permissions');
+                if (syncResult.mcp.length > 0) syncedTypes.push('mcp');
+                if (syncResult.plugins.length > 0) syncedTypes.push('plugins');
+
+                if (syncedTypes.length > 0) {
+                  console.log(chalk.green(`Synced: ${syncedTypes.join(', ')}`));
+                }
+              }
+            } else if (!hasAnySynced) {
               // First time: prompt for ALL resources
               console.log(chalk.yellow(`\n${agentLabel(agentConfig.id)}@${finalVersion} has no synced resources.`));
               const userSelection = await promptResourceSelection(agentId);

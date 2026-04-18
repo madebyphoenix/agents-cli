@@ -19,7 +19,7 @@ import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
 import { getEffectiveHome, getGlobalDefault, listInstalledVersions, getVersionHomePath } from '../lib/versions.js';
 import { getAgentsDir } from '../lib/state.js';
-import { isPromptCancelled } from './utils.js';
+import { isPromptCancelled, isInteractiveTerminal, requireInteractiveSelection } from './utils.js';
 
 export function registerMcpCommands(program: Command): void {
   const mcpCmd = program
@@ -300,6 +300,13 @@ export function registerMcpCommands(program: Command): void {
           return;
         }
 
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting MCP servers to remove', [
+            'agents mcp remove my-server',
+            'agents mcp remove my-server --agents codex,claude',
+          ]);
+        }
+
         // Gather all unique MCPs across agents (with agent info for display)
         const mcpMap = new Map<string, { name: string; agents: string[]; command?: string }>();
         for (const agentId of installedAgents) {
@@ -403,6 +410,11 @@ export function registerMcpCommands(program: Command): void {
 
       // If no name provided, show interactive select
       if (!name) {
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting an MCP server to view', [
+            'agents mcp view my-server',
+          ]);
+        }
         try {
           const { select } = await import('@inquirer/prompts');
           name = await select({

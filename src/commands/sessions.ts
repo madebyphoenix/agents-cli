@@ -12,7 +12,7 @@ import { parseSession } from '../lib/session/parse.js';
 import { renderTranscript, renderSummary, renderTrace, renderJson } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
 import { colorAgent } from '../lib/agents.js';
-import { isPromptCancelled } from './utils.js';
+import { isInteractiveTerminal, isPromptCancelled, requireInteractiveSelection } from './utils.js';
 
 interface ListOptions {
   agent?: string;
@@ -201,6 +201,13 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
         return;
       }
 
+      if (!isInteractiveTerminal()) {
+        requireInteractiveSelection('Selecting a session to view', [
+          'agents sessions list',
+          'agents sessions view <id>',
+        ]);
+      }
+
       // Show at most 30 in the picker
       const picked = await pickSession(allSessions.slice(0, 30));
       if (!picked) return;
@@ -223,6 +230,14 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
 
       if (matches.length > 1) {
         spinner.stop();
+        if (!isInteractiveTerminal()) {
+          console.error(chalk.red(`Multiple sessions match: ${idQuery}`));
+          console.error(chalk.gray('Pass a longer ID or one of these exact IDs:'));
+          for (const match of matches.slice(0, 10)) {
+            console.error(chalk.cyan(`  ${match.id}`));
+          }
+          process.exit(1);
+        }
         // Multiple matches -- let the user pick
         const picked = await pickSession(matches);
         if (!picked) return;

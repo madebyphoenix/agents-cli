@@ -32,7 +32,13 @@ import {
   getVersionHomePath,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
-import { isPromptCancelled } from './utils.js';
+import {
+  isPromptCancelled,
+  isInteractiveTerminal,
+  parseCommaSeparatedList,
+  printWithPager,
+  requireInteractiveSelection,
+} from './utils.js';
 
 export function registerHooksCommands(program: Command): void {
   const hooksCmd = program.command('hooks').description('Manage agent hooks');
@@ -239,6 +245,7 @@ export function registerHooksCommands(program: Command): void {
     .command('add [source]')
     .description('Install hooks from a repo or local path')
     .option('-a, --agents <list>', 'Comma-separated agents to install to')
+    .option('--names <list>', 'Comma-separated hook names from ~/.agents/hooks/')
     .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (source: string | undefined, options) => {
       try {
@@ -254,27 +261,46 @@ export function registerHooksCommands(program: Command): void {
             return;
           }
 
-          const choices = centralHooks.map((hook) => ({
-            value: hook.name,
-            name: hook.name,
-          }));
+          const availableHooks = centralHooks.map((hook) => hook.name);
+          const requestedNames = parseCommaSeparatedList(options.names);
+          if (requestedNames.length > 0) {
+            const missing = requestedNames.filter((name) => !availableHooks.includes(name));
+            if (missing.length > 0) {
+              console.log(chalk.red(`Unknown hook(s): ${missing.join(', ')}`));
+              console.log(chalk.gray(`Available: ${availableHooks.join(', ')}`));
+              process.exit(1);
+            }
+            hooks = requestedNames;
+          } else {
+            if (!isInteractiveTerminal()) {
+              requireInteractiveSelection('Selecting hooks from ~/.agents/hooks/', [
+                'agents hooks add --names post-edit --agents claude',
+                'agents hooks add gh:user/repo --agents claude',
+              ]);
+            }
 
-          const selected = await checkbox({
-            message: 'Select hooks to install',
-            choices: [
-              { value: '__all__', name: chalk.bold('Select All') },
-              ...choices,
-            ],
-          });
+            const choices = centralHooks.map((hook) => ({
+              value: hook.name,
+              name: hook.name,
+            }));
 
-          if (selected.length === 0) {
-            console.log(chalk.gray('No hooks selected.'));
-            return;
+            const selected = await checkbox({
+              message: 'Select hooks to install',
+              choices: [
+                { value: '__all__', name: chalk.bold('Select All') },
+                ...choices,
+              ],
+            });
+
+            if (selected.length === 0) {
+              console.log(chalk.gray('No hooks selected.'));
+              return;
+            }
+
+            hooks = selected.includes('__all__')
+              ? availableHooks
+              : selected.filter((s) => s !== '__all__');
           }
-
-          hooks = selected.includes('__all__')
-            ? centralHooks.map((h) => h.name)
-            : selected.filter((s) => s !== '__all__');
         } else {
           // Source provided: fetch from repo or local path
           const spinner = ora('Fetching hooks...').start();
@@ -347,7 +373,9 @@ export function registerHooksCommands(program: Command): void {
             }
           }
         } else {
-          const result = await promptAgentVersionSelection(hooksCapableAgents, { skipPrompts: options.yes });
+          const result = await promptAgentVersionSelection(hooksCapableAgents, {
+            skipPrompts: options.yes || !isInteractiveTerminal(),
+          });
           selectedAgents = result.selectedAgents;
           versionSelections = result.versionSelections;
         }
@@ -402,6 +430,12 @@ export function registerHooksCommands(program: Command): void {
         if (centralHooks.length === 0) {
           console.log(chalk.yellow('No hooks installed.'));
           return;
+        }
+
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting hooks to remove', [
+            'agents hooks remove post-edit',
+          ]);
         }
 
         try {
@@ -465,6 +499,11 @@ export function registerHooksCommands(program: Command): void {
 
       // If no name provided, show interactive select
       if (!name) {
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting a hook to view', [
+            'agents hooks view post-edit',
+          ]);
+        }
         try {
           const { select } = await import('@inquirer/prompts');
           name = await select({
@@ -499,22 +538,7 @@ export function registerHooksCommands(program: Command): void {
 
         // For shell scripts, just display with line numbers
         const output = contentLines.map((line, i) => `  ${chalk.gray(String(i + 1).padStart(3))}  ${line}`).join('\n');
-
-        // Pipe through less for scrolling if content is large
-        if (contentLines.length > 40) {
-          const { spawnSync } = await import('child_process');
-          const less = spawnSync('less', ['-R'], {
-            input: output,
-            stdio: ['pipe', 'inherit', 'inherit'],
-          });
-
-          // Fallback to direct output if less fails
-          if (less.status !== 0) {
-            console.log(output);
-          }
-        } else {
-          console.log(output);
-        }
+        printWithPager(output, contentLines.length);
       }
     });
 }

@@ -33,7 +33,14 @@ import {
   getVersionHomePath,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
-import { isPromptCancelled, formatPath } from './utils.js';
+import {
+  isPromptCancelled,
+  formatPath,
+  isInteractiveTerminal,
+  parseCommaSeparatedList,
+  printWithPager,
+  requireInteractiveSelection,
+} from './utils.js';
 
 export function registerCommandsCommands(program: Command): void {
   const commandsCmd = program
@@ -206,6 +213,7 @@ export function registerCommandsCommands(program: Command): void {
     .command('add [source]')
     .description('Install commands from a repo or local path')
     .option('-a, --agents <list>', 'Comma-separated agents to install to')
+    .option('--names <list>', 'Comma-separated command names from ~/.agents/commands/')
     .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (source: string | undefined, options) => {
       try {
@@ -222,37 +230,57 @@ export function registerCommandsCommands(program: Command): void {
             return;
           }
 
-          // Build choices with descriptions
-          const choices = centralCommands.map((name) => {
-            const cmdPath = path.join(os.homedir(), '.agents', 'commands', `${name}.md`);
-            let description = '';
-            if (fs.existsSync(cmdPath)) {
-              const content = fs.readFileSync(cmdPath, 'utf-8');
-              const match = content.match(/description:\s*(.+)/i) || content.match(/description\s*=\s*"([^"]+)"/);
-              if (match) description = match[1].trim();
+          const requestedNames = parseCommaSeparatedList(options.names);
+          let selectedNames: string[];
+
+          if (requestedNames.length > 0) {
+            const missing = requestedNames.filter((name) => !centralCommands.includes(name));
+            if (missing.length > 0) {
+              console.log(chalk.red(`Unknown command(s): ${missing.join(', ')}`));
+              console.log(chalk.gray(`Available: ${centralCommands.join(', ')}`));
+              process.exit(1);
             }
-            return {
-              value: name,
-              name: description ? `${name}  ${chalk.gray(description.slice(0, 50))}` : name,
-            };
-          });
+            selectedNames = requestedNames;
+          } else {
+            if (!isInteractiveTerminal()) {
+              requireInteractiveSelection('Selecting commands from ~/.agents/commands/', [
+                'agents commands add --names README,debug --agents codex',
+                'agents commands add gh:user/repo --agents codex',
+              ]);
+            }
 
-          const selected = await checkbox({
-            message: 'Select commands to install',
-            choices: [
-              { value: '__all__', name: chalk.bold('Select All') },
-              ...choices,
-            ],
-          });
+            // Build choices with descriptions
+            const choices = centralCommands.map((name) => {
+              const cmdPath = path.join(os.homedir(), '.agents', 'commands', `${name}.md`);
+              let description = '';
+              if (fs.existsSync(cmdPath)) {
+                const content = fs.readFileSync(cmdPath, 'utf-8');
+                const match = content.match(/description:\s*(.+)/i) || content.match(/description\s*=\s*"([^"]+)"/);
+                if (match) description = match[1].trim();
+              }
+              return {
+                value: name,
+                name: description ? `${name}  ${chalk.gray(description.slice(0, 50))}` : name,
+              };
+            });
 
-          if (selected.length === 0) {
-            console.log(chalk.gray('No commands selected.'));
-            return;
+            const selected = await checkbox({
+              message: 'Select commands to install',
+              choices: [
+                { value: '__all__', name: chalk.bold('Select All') },
+                ...choices,
+              ],
+            });
+
+            if (selected.length === 0) {
+              console.log(chalk.gray('No commands selected.'));
+              return;
+            }
+
+            selectedNames = selected.includes('__all__')
+              ? centralCommands
+              : selected.filter((s) => s !== '__all__');
           }
-
-          const selectedNames = selected.includes('__all__')
-            ? centralCommands
-            : selected.filter((s) => s !== '__all__');
 
           commands = selectedNames.map((name) => ({ name, description: '' }));
           fromCentral = true;
@@ -331,7 +359,9 @@ export function registerCommandsCommands(program: Command): void {
             }
           }
         } else {
-          const result = await promptAgentVersionSelection(ALL_AGENT_IDS, { skipPrompts: options.yes });
+          const result = await promptAgentVersionSelection(ALL_AGENT_IDS, {
+            skipPrompts: options.yes || !isInteractiveTerminal(),
+          });
           selectedAgents = result.selectedAgents;
           versionSelections = result.versionSelections;
         }
@@ -389,6 +419,12 @@ export function registerCommandsCommands(program: Command): void {
           return;
         }
 
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting commands to remove', [
+            'agents commands remove README',
+          ]);
+        }
+
         try {
           const selected = await checkbox({
             message: 'Select commands to remove',
@@ -444,6 +480,12 @@ export function registerCommandsCommands(program: Command): void {
           return;
         }
 
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting a command to view', [
+            'agents commands view README',
+          ]);
+        }
+
         try {
           const { select } = await import('@inquirer/prompts');
           name = await select({
@@ -481,22 +523,7 @@ export function registerCommandsCommands(program: Command): void {
       if (command.content) {
         const rendered = renderMarkdown(command.content);
         const contentLines = command.content.split('\n');
-
-        // Pipe through less for scrolling if content is large
-        if (contentLines.length > 40) {
-          const { spawnSync } = await import('child_process');
-          const less = spawnSync('less', ['-R'], {
-            input: rendered,
-            stdio: ['pipe', 'inherit', 'inherit'],
-          });
-
-          // Fallback to direct output if less fails
-          if (less.status !== 0) {
-            console.log(rendered);
-          }
-        } else {
-          console.log(rendered);
-        }
+        printWithPager(rendered, contentLines.length);
       }
     });
 }

@@ -24,7 +24,7 @@ import {
   getVersionHomePath,
 } from '../lib/versions.js';
 import { getSubagentsDir } from '../lib/state.js';
-import { isPromptCancelled } from './utils.js';
+import { isInteractiveTerminal, isPromptCancelled, requireInteractiveSelection } from './utils.js';
 
 function formatPath(p: string): string {
   const home = process.env.HOME || '';
@@ -177,6 +177,12 @@ export function registerSubagentsCommands(program: Command): void {
           console.log(chalk.gray('Subagents will be stored centrally and synced when you install claude or openclaw'));
           targetAgents = [];
         } else {
+          if (!isInteractiveTerminal()) {
+            requireInteractiveSelection('Selecting target agents for subagents', [
+              'agents subagents add <source> --agents claude openclaw',
+              'agents subagents add <source> --yes',
+            ]);
+          }
           try {
             targetAgents = await checkbox({
               message: 'Install to which agents?',

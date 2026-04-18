@@ -35,7 +35,13 @@ import {
   promptAgentVersionSelection,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
-import { isPromptCancelled } from './utils.js';
+import {
+  isPromptCancelled,
+  isInteractiveTerminal,
+  parseCommaSeparatedList,
+  printWithPager,
+  requireInteractiveSelection,
+} from './utils.js';
 
 export function registerPermissionsCommands(program: Command): void {
   const permissionsCmd = program
@@ -221,10 +227,13 @@ export function registerPermissionsCommands(program: Command): void {
     .command('add [source]')
     .description('Install permissions from a repo, YAML file, or agent config file')
     .option('-a, --agents <list>', 'Comma-separated agents to apply to')
+    .option('--names <list>', 'Comma-separated permission set names from ~/.agents/permissions/')
     .option('--all', 'Apply to all installed versions (not just default)')
     .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (source: string | undefined, options) => {
       try {
+        const skipPrompts = options.yes || !isInteractiveTerminal();
+
         // Interactive mode: pick from central storage
         if (!source) {
           const installedSets = listInstalledPermissions();
@@ -236,34 +245,55 @@ export function registerPermissionsCommands(program: Command): void {
             return;
           }
 
-          const choices = installedSets.map((installed) => ({
-            value: installed.name,
-            name: installed.set.description
-              ? `${installed.name}  ${chalk.gray(installed.set.description.slice(0, 40))}`
-              : `${installed.name}  ${chalk.gray(`${installed.set.allow.length} allow, ${installed.set.deny?.length || 0} deny`)}`,
-          }));
+          const availableSetNames = installedSets.map((set) => set.name);
+          const requestedNames = parseCommaSeparatedList(options.names);
+          let selectedNames: string[];
 
-          const selected = await checkbox({
-            message: 'Select permission sets to apply',
-            choices: [
-              { value: '__all__', name: chalk.bold('Select All') },
-              ...choices,
-            ],
-          });
+          if (requestedNames.length > 0) {
+            const missing = requestedNames.filter((name) => !availableSetNames.includes(name));
+            if (missing.length > 0) {
+              console.log(chalk.red(`Unknown permission set(s): ${missing.join(', ')}`));
+              console.log(chalk.gray(`Available: ${availableSetNames.join(', ')}`));
+              process.exit(1);
+            }
+            selectedNames = requestedNames;
+          } else {
+            if (!isInteractiveTerminal()) {
+              requireInteractiveSelection('Selecting permission sets from ~/.agents/permissions/', [
+                'agents permissions add --names default --agents codex',
+                'agents permissions add ./permissions/default.yml --agents codex',
+              ]);
+            }
 
-          if (selected.length === 0) {
-            console.log(chalk.gray('No permission sets selected.'));
-            return;
+            const choices = installedSets.map((installed) => ({
+              value: installed.name,
+              name: installed.set.description
+                ? `${installed.name}  ${chalk.gray(installed.set.description.slice(0, 40))}`
+                : `${installed.name}  ${chalk.gray(`${installed.set.allow.length} allow, ${installed.set.deny?.length || 0} deny`)}`,
+            }));
+
+            const selected = await checkbox({
+              message: 'Select permission sets to apply',
+              choices: [
+                { value: '__all__', name: chalk.bold('Select All') },
+                ...choices,
+              ],
+            });
+
+            if (selected.length === 0) {
+              console.log(chalk.gray('No permission sets selected.'));
+              return;
+            }
+
+            selectedNames = selected.includes('__all__')
+              ? availableSetNames
+              : selected.filter((s) => s !== '__all__');
           }
-
-          const selectedNames = selected.includes('__all__')
-            ? installedSets.map((s) => s.name)
-            : selected.filter((s) => s !== '__all__');
 
           // Get agent and version selection
           const result = await promptAgentVersionSelection(
             PERMISSIONS_CAPABLE_AGENTS,
-            { skipPrompts: options.yes }
+            { skipPrompts }
           );
 
           if (result.selectedAgents.length === 0) {
@@ -373,7 +403,7 @@ export function registerPermissionsCommands(program: Command): void {
           console.log();
 
           // Confirm
-          if (!options.yes) {
+          if (!skipPrompts) {
             const proceed = await confirm({
               message: `Add ${totalNew} new permission rule${totalNew === 1 ? '' : 's'}?`,
               default: true,
@@ -422,7 +452,7 @@ export function registerPermissionsCommands(program: Command): void {
                 versionSelections.set(agentId, [...versions]);
               }
             }
-          } else if (!options.yes) {
+          } else if (!skipPrompts) {
             const applyNow = await confirm({
               message: 'Apply permissions to agent versions now?',
               default: true,
@@ -491,7 +521,7 @@ export function registerPermissionsCommands(program: Command): void {
           }
 
           // Confirm installation
-          if (!options.yes) {
+          if (!skipPrompts) {
             const proceed = await confirm({
               message: 'Install these permission sets?',
               default: true,
@@ -545,7 +575,7 @@ export function registerPermissionsCommands(program: Command): void {
                 versionSelections.set(agentId, [...versions]);
               }
             }
-          } else if (!options.yes) {
+          } else if (!skipPrompts) {
             const applyNow = await confirm({
               message: 'Apply these permissions to agent versions now?',
               default: true,
@@ -612,6 +642,12 @@ export function registerPermissionsCommands(program: Command): void {
           return;
         }
 
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting permission sets to remove', [
+            'agents permissions remove default',
+          ]);
+        }
+
         try {
           const selected = await checkbox({
             message: 'Select permission sets to remove',
@@ -660,6 +696,11 @@ export function registerPermissionsCommands(program: Command): void {
 
       // If no name provided, show interactive select
       if (!name) {
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting a permission set to view', [
+            'agents permissions view default',
+          ]);
+        }
         try {
           const { select } = await import('@inquirer/prompts');
           name = await select({
@@ -710,18 +751,7 @@ export function registerPermissionsCommands(program: Command): void {
       lines.push('');
 
       const output = lines.join('\n');
-
-      // Pipe through less for scrolling (q to quit)
-      const { spawnSync } = await import('child_process');
-      const less = spawnSync('less', ['-R'], {
-        input: output,
-        stdio: ['pipe', 'inherit', 'inherit'],
-      });
-
-      // Fallback to direct output if less fails
-      if (less.status !== 0) {
-        console.log(output);
-      }
+      printWithPager(output, lines.length);
     });
 
   // Deprecated alias handler for 'perms'

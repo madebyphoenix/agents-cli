@@ -26,6 +26,7 @@ import type { JobConfig } from '../lib/routines.js';
 import { getRoutinesDir } from '../lib/state.js';
 import { executeJob } from '../lib/runner.js';
 import { JobScheduler } from '../lib/scheduler.js';
+import { isInteractiveTerminal, requireInteractiveSelection } from './utils.js';
 
 function isPromptCancelled(err: unknown): boolean {
   return (
@@ -36,7 +37,11 @@ function isPromptCancelled(err: unknown): boolean {
   );
 }
 
-async function pickJob(message: string, filter?: (job: JobConfig) => boolean): Promise<string | null> {
+async function pickJob(
+  message: string,
+  filter?: (job: JobConfig) => boolean,
+  alternatives: string[] = [],
+): Promise<string | null> {
   let jobs = listAllJobs();
   if (filter) {
     jobs = jobs.filter(filter);
@@ -45,6 +50,10 @@ async function pickJob(message: string, filter?: (job: JobConfig) => boolean): P
   if (jobs.length === 0) {
     console.log(chalk.yellow('No jobs available'));
     return null;
+  }
+
+  if (!isInteractiveTerminal()) {
+    requireInteractiveSelection(message.replace(/:$/, ''), alternatives);
   }
 
   try {
@@ -251,7 +260,7 @@ export function registerRoutinesCommands(program: Command): void {
     .description('Remove a job')
     .action(async (name: string | undefined) => {
       if (!name) {
-        name = await pickJob('Select job to remove') ?? undefined;
+        name = await pickJob('Select job to remove', undefined, ['agents routines remove <name>']) ?? undefined;
         if (!name) return;
       }
 
@@ -273,7 +282,7 @@ export function registerRoutinesCommands(program: Command): void {
     .description('Show job configuration')
     .action(async (name: string | undefined) => {
       if (!name) {
-        name = await pickJob('Select job to view') ?? undefined;
+        name = await pickJob('Select job to view', undefined, ['agents routines view <name>']) ?? undefined;
         if (!name) return;
       }
 
@@ -292,7 +301,7 @@ export function registerRoutinesCommands(program: Command): void {
     .description('Edit job configuration in $EDITOR')
     .action(async (name: string | undefined) => {
       if (!name) {
-        name = await pickJob('Select job to edit') ?? undefined;
+        name = await pickJob('Select job to edit', undefined, ['agents routines edit <name>']) ?? undefined;
         if (!name) return;
       }
 
@@ -350,7 +359,7 @@ export function registerRoutinesCommands(program: Command): void {
     .description('Show execution history')
     .action(async (name: string | undefined) => {
       if (!name) {
-        name = await pickJob('Select job to view runs') ?? undefined;
+        name = await pickJob('Select job to view runs', undefined, ['agents routines runs <name>']) ?? undefined;
         if (!name) return;
       }
 
@@ -376,7 +385,7 @@ export function registerRoutinesCommands(program: Command): void {
     .description('Run a job immediately in the foreground')
     .action(async (name: string | undefined) => {
       if (!name) {
-        name = await pickJob('Select job to run') ?? undefined;
+        name = await pickJob('Select job to run', undefined, ['agents routines run <name>']) ?? undefined;
         if (!name) return;
       }
 
@@ -419,7 +428,7 @@ export function registerRoutinesCommands(program: Command): void {
     .option('-r, --run <runId>', 'Specific run ID')
     .action(async (name: string | undefined, options) => {
       if (!name) {
-        name = await pickJob('Select job to view logs') ?? undefined;
+        name = await pickJob('Select job to view logs', undefined, ['agents routines logs <name>', 'agents routines logs <name> --run <run-id>']) ?? undefined;
         if (!name) return;
       }
 
@@ -449,7 +458,7 @@ export function registerRoutinesCommands(program: Command): void {
     .option('-r, --run <runId>', 'Specific run ID')
     .action(async (name: string | undefined, options) => {
       if (!name) {
-        name = await pickJob('Select job to view report') ?? undefined;
+        name = await pickJob('Select job to view report', undefined, ['agents routines report <name>', 'agents routines report <name> --run <run-id>']) ?? undefined;
         if (!name) return;
       }
 
@@ -480,7 +489,7 @@ export function registerRoutinesCommands(program: Command): void {
     .action(async (name: string | undefined) => {
       if (!name) {
         // Only show paused jobs
-        name = await pickJob('Select job to resume', (job) => !job.enabled) ?? undefined;
+        name = await pickJob('Select job to resume', (job) => !job.enabled, ['agents routines resume <name>']) ?? undefined;
         if (!name) return;
       }
 
@@ -503,7 +512,7 @@ export function registerRoutinesCommands(program: Command): void {
     .action(async (name: string | undefined) => {
       if (!name) {
         // Only show enabled jobs
-        name = await pickJob('Select job to pause', (job) => job.enabled) ?? undefined;
+        name = await pickJob('Select job to pause', (job) => job.enabled, ['agents routines pause <name>']) ?? undefined;
         if (!name) return;
       }
 

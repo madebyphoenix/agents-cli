@@ -1,0 +1,199 @@
+/**
+ * PTY Client
+ *
+ * Thin client that connects to the PTY sidecar server over unix socket.
+ * Each call opens a connection, sends a JSON request, reads the JSON response, and closes.
+ */
+
+import * as net from 'net';
+import * as fs from 'fs';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import * as path from 'path';
+import { getSocketPath, getPtyPidPath, isPtyServerRunning } from './pty-server.js';
+
+const CONNECT_TIMEOUT_MS = 5000;
+const RESPONSE_TIMEOUT_MS = 30000;
+
+export interface PtyResponse {
+  ok: boolean;
+  error?: string;
+  [key: string]: any;
+}
+
+/**
+ * Send a request to the PTY server and return the response.
+ * Auto-starts the server if not running.
+ */
+export async function ptyRequest(action: string, id?: string, params?: Record<string, any>): Promise<PtyResponse> {
+  await ensureServer();
+
+  const req: any = { action };
+  if (id) req.id = id;
+  if (params) req.params = params;
+
+  return sendRequest(req);
+}
+
+/**
+ * Ensure the PTY server is running. Start it if not.
+ */
+async function ensureServer(): Promise<void> {
+  if (isPtyServerRunning()) return;
+
+  // Find the agents binary to spawn the server
+  const agentsBin = getAgentsBin();
+
+  const logPath = path.join(path.dirname(getSocketPath()), 'pty.log');
+  const logFd = fs.openSync(logPath, 'a');
+
+  const child = spawn(agentsBin, ['pty', '_server'], {
+    stdio: ['ignore', logFd, logFd],
+    detached: true,
+  });
+  child.unref();
+  fs.closeSync(logFd);
+
+  // Wait for socket to appear
+  const socketPath = getSocketPath();
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(socketPath)) {
+      // Verify we can connect
+      try {
+        await sendRequest({ action: 'ping' });
+        return;
+      } catch {
+        // Not ready yet
+      }
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  throw new Error('PTY server failed to start within 5 seconds. Check ~/.agents/pty.log');
+}
+
+function getAgentsBin(): string {
+  // Use the current process's script path
+  try {
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    // In dist: dist/lib/pty-client.js -> dist/index.js -> agents bin
+    const distIndex = path.join(__dirname, '..', 'index.js');
+    if (fs.existsSync(distIndex)) {
+      return distIndex;
+    }
+  } catch {}
+
+  // Fallback: find agents in PATH
+  try {
+    const { execSync } = await import('child_process') as any;
+    return (await import('child_process')).execSync('which agents', { encoding: 'utf-8' }).trim();
+  } catch {}
+
+  return 'agents';
+}
+
+/**
+ * Send a JSON request over the unix socket and return the parsed response.
+ */
+function sendRequest(req: any): Promise<PtyResponse> {
+  return new Promise((resolve, reject) => {
+    const socketPath = getSocketPath();
+
+    if (!fs.existsSync(socketPath)) {
+      reject(new Error('PTY server socket not found. Is the server running?'));
+      return;
+    }
+
+    const conn = net.createConnection({ path: socketPath });
+    let data = '';
+    let settled = false;
+
+    const connectTimeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        conn.destroy();
+        reject(new Error('Connection to PTY server timed out'));
+      }
+    }, CONNECT_TIMEOUT_MS);
+
+    const responseTimeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        conn.destroy();
+        reject(new Error('PTY server response timed out'));
+      }
+    }, RESPONSE_TIMEOUT_MS);
+
+    conn.on('connect', () => {
+      clearTimeout(connectTimeout);
+      conn.write(JSON.stringify(req) + '\n');
+    });
+
+    conn.on('data', (chunk) => {
+      data += chunk.toString();
+      const nlIndex = data.indexOf('\n');
+      if (nlIndex !== -1) {
+        if (!settled) {
+          settled = true;
+          clearTimeout(connectTimeout);
+          clearTimeout(responseTimeout);
+          try {
+            resolve(JSON.parse(data.slice(0, nlIndex)));
+          } catch (err) {
+            reject(new Error(`Invalid JSON from PTY server: ${data.slice(0, 200)}`));
+          }
+        }
+        conn.end();
+      }
+    });
+
+    conn.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(connectTimeout);
+        clearTimeout(responseTimeout);
+        reject(new Error(`PTY server connection error: ${err.message}`));
+      }
+    });
+
+    conn.on('end', () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(connectTimeout);
+        clearTimeout(responseTimeout);
+        if (data.trim()) {
+          try {
+            resolve(JSON.parse(data.trim()));
+          } catch {
+            reject(new Error('PTY server closed connection with invalid response'));
+          }
+        } else {
+          reject(new Error('PTY server closed connection without response'));
+        }
+      }
+    });
+  });
+}
+
+/**
+ * Parse escape sequences in user input strings.
+ * Handles: \n \r \t \e \xHH \\
+ */
+export function unescapeInput(input: string): string {
+  return input.replace(/\\(n|r|t|e|\\|x[0-9a-fA-F]{2})/g, (match, seq) => {
+    switch (seq) {
+      case 'n': return '\n';
+      case 'r': return '\r';
+      case 't': return '\t';
+      case 'e': return '\x1b';
+      case '\\': return '\\';
+      default:
+        // \xHH
+        if (seq.startsWith('x')) {
+          return String.fromCharCode(parseInt(seq.slice(1), 16));
+        }
+        return match;
+    }
+  });
+}

@@ -61,7 +61,7 @@ import {
 } from '../lib/shims.js';
 import { parseHookManifest, registerHooksToSettings } from '../lib/hooks.js';
 import { select } from '@inquirer/prompts';
-import { isPromptCancelled } from './utils.js';
+import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
 
 export function registerPullCommand(program: Command): void {
   program
@@ -71,6 +71,7 @@ export function registerPullCommand(program: Command): void {
     .option('--skip-clis', 'Do not sync CLI versions')
     .option('--upstream', 'Pull from upstream (system repo) instead of origin')
     .action(async (arg1: string | undefined, arg2: string | undefined, options) => {
+      const skipPrompts = options.yes || !isInteractiveTerminal();
       // Parse source and agent filter from positional args
       let targetSource: string | undefined;
       let agentFilter: AgentId | undefined;
@@ -291,7 +292,7 @@ export function registerPullCommand(program: Command): void {
           try {
             let selection: ResourceSelection | undefined;
 
-            if (options.yes) {
+            if (skipPrompts) {
               // -y flag: sync all without prompting
               if (!hasAnySynced || hasNewResources(newResources, agentId)) {
                 selection = {
@@ -372,7 +373,7 @@ export function registerPullCommand(program: Command): void {
         }
 
         // Check for agents without a default version - offer to switch
-        if (!options.yes) {
+        if (!skipPrompts) {
           const agentsNeedingDefault: AgentId[] = [];
           for (const agentId of agentsToSync) {
             const versions = listInstalledVersions(agentId);

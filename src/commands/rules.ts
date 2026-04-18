@@ -33,7 +33,14 @@ import {
   getVersionHomePath,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
-import { isPromptCancelled, formatPath } from './utils.js';
+import {
+  isPromptCancelled,
+  formatPath,
+  isInteractiveTerminal,
+  parseCommaSeparatedList,
+  printWithPager,
+  requireInteractiveSelection,
+} from './utils.js';
 
 export function registerRulesCommands(program: Command): void {
   const rulesCmd = program
@@ -194,6 +201,7 @@ export function registerRulesCommands(program: Command): void {
     .command('add [source]')
     .description('Install rule files from a repo or local path')
     .option('-a, --agents <list>', 'Comma-separated agents to install to')
+    .option('--names <list>', 'Comma-separated rule file names from ~/.agents/memory/')
     .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (source: string | undefined, options) => {
       try {
@@ -208,27 +216,45 @@ export function registerRulesCommands(program: Command): void {
             return;
           }
 
-          const choices = centralRules.map((name) => ({
-            value: name,
-            name,
-          }));
+          const requestedNames = parseCommaSeparatedList(options.names);
+          if (requestedNames.length > 0) {
+            const missing = requestedNames.filter((name) => !centralRules.includes(name));
+            if (missing.length > 0) {
+              console.log(chalk.red(`Unknown rule file(s): ${missing.join(', ')}`));
+              console.log(chalk.gray(`Available: ${centralRules.join(', ')}`));
+              process.exit(1);
+            }
+            ruleNames = requestedNames;
+          } else {
+            if (!isInteractiveTerminal()) {
+              requireInteractiveSelection('Selecting rule files from ~/.agents/memory/', [
+                'agents rules add --names AGENTS.md --agents codex',
+                'agents rules add gh:team/rules --agents codex',
+              ]);
+            }
 
-          const selected = await checkbox({
-            message: 'Select rule files to install',
-            choices: [
-              { value: '__all__', name: chalk.bold('Select All') },
-              ...choices,
-            ],
-          });
+            const choices = centralRules.map((name) => ({
+              value: name,
+              name,
+            }));
 
-          if (selected.length === 0) {
-            console.log(chalk.gray('No rule files selected.'));
-            return;
+            const selected = await checkbox({
+              message: 'Select rule files to install',
+              choices: [
+                { value: '__all__', name: chalk.bold('Select All') },
+                ...choices,
+              ],
+            });
+
+            if (selected.length === 0) {
+              console.log(chalk.gray('No rule files selected.'));
+              return;
+            }
+
+            ruleNames = selected.includes('__all__')
+              ? centralRules
+              : selected.filter((s) => s !== '__all__');
           }
-
-          ruleNames = selected.includes('__all__')
-            ? centralRules
-            : selected.filter((s) => s !== '__all__');
         } else {
           const spinner = ora('Fetching rule files...').start();
 
@@ -300,7 +326,9 @@ export function registerRulesCommands(program: Command): void {
             }
           }
         } else {
-          const result = await promptAgentVersionSelection(ALL_AGENT_IDS, { skipPrompts: options.yes });
+          const result = await promptAgentVersionSelection(ALL_AGENT_IDS, {
+            skipPrompts: options.yes || !isInteractiveTerminal(),
+          });
           selectedAgents = result.selectedAgents;
           versionSelections = result.versionSelections;
         }
@@ -364,6 +392,12 @@ export function registerRulesCommands(program: Command): void {
           console.log(chalk.yellow('No rule files found.'));
           return;
         }
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting an agent rule file to view', [
+            'agents rules view claude',
+            'agents rules view codex@0.113.0 --scope user',
+          ]);
+        }
         agentId = await select({
           message: 'Select agent:',
           choices: choices.map((id) => ({ name: agentLabel(id), value: id })),
@@ -380,20 +414,7 @@ export function registerRulesCommands(program: Command): void {
 
         const rendered = renderMarkdown(content);
         const contentLines = content.split('\n');
-
-        if (contentLines.length > 40) {
-          const { spawnSync } = await import('child_process');
-          const less = spawnSync('less', ['-R'], {
-            input: rendered,
-            stdio: ['pipe', 'inherit', 'inherit'],
-          });
-
-          if (less.status !== 0) {
-            console.log(rendered);
-          }
-        } else {
-          console.log(rendered);
-        }
+        printWithPager(rendered, contentLines.length);
       };
 
       if (requestedVersion && scope === 'user') {

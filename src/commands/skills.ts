@@ -35,7 +35,13 @@ import {
   getVersionHomePath,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
-import { isPromptCancelled } from './utils.js';
+import {
+  isPromptCancelled,
+  isInteractiveTerminal,
+  parseCommaSeparatedList,
+  printWithPager,
+  requireInteractiveSelection,
+} from './utils.js';
 
 export function registerSkillsCommands(program: Command): void {
   const skillsCmd = program
@@ -307,6 +313,7 @@ export function registerSkillsCommands(program: Command): void {
     .command('add [source]')
     .description('Install skills from a repo or local path')
     .option('-a, --agents <list>', 'Comma-separated agents to install to')
+    .option('--names <list>', 'Comma-separated skill names from ~/.agents/skills/')
     .option('-y, --yes', 'Skip prompts and use defaults')
     .action(async (source: string | undefined, options) => {
       try {
@@ -322,29 +329,50 @@ export function registerSkillsCommands(program: Command): void {
             return;
           }
 
-          const choices = Array.from(installedSkills.entries()).map(([name, skill]) => ({
-            value: name,
-            name: skill.metadata.description
-              ? `${name}  ${chalk.gray(skill.metadata.description.slice(0, 50))}`
-              : name,
-          }));
+          const availableSkills = Array.from(installedSkills.keys());
+          const requestedNames = parseCommaSeparatedList(options.names);
+          let selectedNames: string[];
 
-          const selected = await checkbox({
-            message: 'Select skills to install',
-            choices: [
-              { value: '__all__', name: chalk.bold('Select All') },
-              ...choices,
-            ],
-          });
+          if (requestedNames.length > 0) {
+            const missing = requestedNames.filter((name) => !installedSkills.has(name));
+            if (missing.length > 0) {
+              console.log(chalk.red(`Unknown skill(s): ${missing.join(', ')}`));
+              console.log(chalk.gray(`Available: ${availableSkills.join(', ')}`));
+              process.exit(1);
+            }
+            selectedNames = requestedNames;
+          } else {
+            if (!isInteractiveTerminal()) {
+              requireInteractiveSelection('Selecting skills from ~/.agents/skills/', [
+                'agents skills add --names agents-cli --agents codex',
+                'agents skills add gh:user/repo --agents codex',
+              ]);
+            }
 
-          if (selected.length === 0) {
-            console.log(chalk.gray('No skills selected.'));
-            return;
+            const choices = Array.from(installedSkills.entries()).map(([name, skill]) => ({
+              value: name,
+              name: skill.metadata.description
+                ? `${name}  ${chalk.gray(skill.metadata.description.slice(0, 50))}`
+                : name,
+            }));
+
+            const selected = await checkbox({
+              message: 'Select skills to install',
+              choices: [
+                { value: '__all__', name: chalk.bold('Select All') },
+                ...choices,
+              ],
+            });
+
+            if (selected.length === 0) {
+              console.log(chalk.gray('No skills selected.'));
+              return;
+            }
+
+            selectedNames = selected.includes('__all__')
+              ? availableSkills
+              : selected.filter((s) => s !== '__all__');
           }
-
-          const selectedNames = selected.includes('__all__')
-            ? Array.from(installedSkills.keys())
-            : selected.filter((s) => s !== '__all__');
 
           skills = selectedNames.map((name) => {
             const skill = installedSkills.get(name);
@@ -457,7 +485,9 @@ export function registerSkillsCommands(program: Command): void {
             }
           }
         } else {
-          const result = await promptAgentVersionSelection(SKILLS_CAPABLE_AGENTS, { skipPrompts: options.yes });
+          const result = await promptAgentVersionSelection(SKILLS_CAPABLE_AGENTS, {
+            skipPrompts: options.yes || !isInteractiveTerminal(),
+          });
           selectedAgents = result.selectedAgents;
           versionSelections = result.versionSelections;
         }
@@ -512,6 +542,12 @@ export function registerSkillsCommands(program: Command): void {
         if (installedSkills.size === 0) {
           console.log(chalk.yellow('No skills installed.'));
           return;
+        }
+
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting skills to remove', [
+            'agents skills remove agents-cli',
+          ]);
         }
 
         try {
@@ -580,6 +616,12 @@ export function registerSkillsCommands(program: Command): void {
           return;
         }
 
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Selecting a skill to view', [
+            'agents skills view agents-cli',
+          ]);
+        }
+
         try {
           name = await select({
             message: 'Select a skill to view',
@@ -637,18 +679,7 @@ export function registerSkillsCommands(program: Command): void {
       lines.push('');
 
       const output = lines.join('\n');
-
-      // Pipe through less for scrolling (q to quit)
-      const { spawnSync } = await import('child_process');
-      const less = spawnSync('less', ['-R'], {
-        input: output,
-        stdio: ['pipe', 'inherit', 'inherit'],
-      });
-
-      // Fallback to direct output if less fails
-      if (less.status !== 0) {
-        console.log(output);
-      }
+      printWithPager(output, lines.length);
     });
 
   // Deprecated alias for 'view'

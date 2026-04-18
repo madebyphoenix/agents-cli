@@ -39,6 +39,30 @@ Supports plan (read-only) and edit modes, effort levels that map to the right mo
 
 ---
 
+## Non-interactive usage
+
+Other coding agents usually run in non-TTY shells. `agents` now supports that mode directly:
+
+```bash
+agents add codex@latest --yes
+agents use claude@2.1.79 --yes
+agents commands add --names review-pr,debug --agents codex
+agents skills add --names agents-cli --agents claude
+agents sessions view <session-id>
+agents routines view <job-name>
+```
+
+Rules for automation:
+
+- Pass explicit names or IDs instead of relying on pickers.
+- Use `--yes` when a command would otherwise ask for default sync or confirmation choices.
+- Use `--names` with `commands`, `skills`, `hooks`, `rules`, and `permissions` to install from central storage without a checkbox prompt.
+- Long `view` commands print directly in non-interactive shells instead of opening `less`.
+
+If a command still needs a human-only picker, it now exits with a plain-text hint that shows the matching non-interactive form.
+
+---
+
 ## Pin agent versions per project
 
 ```bash

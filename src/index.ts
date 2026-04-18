@@ -44,6 +44,7 @@ import { registerPluginsCommands } from './commands/plugins.js';
 import { registerSyncCommand } from './commands/sync.js';
 import { registerSessionsCommands } from './commands/sessions.js';
 import { registerDriveCommands } from './commands/drive.js';
+import { registerPtyCommands } from './commands/pty.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -98,6 +99,13 @@ Automation:
   routines                        Schedule agents to run on a timer
   daemon                          Start/stop the routines scheduler
   exec <agent> <prompt>           Run an agent non-interactively
+  pty                             Interactive PTY sessions for AI agents
+
+Automation tips:
+  Pass explicit names/IDs         Avoid pickers: agents sessions view <id>
+  Use --yes for defaults          Auto-accept sync/default prompts on add/use/pull
+  Use --names for central items   e.g. agents commands add --names review-pr,debug
+  Non-TTY shells apply defaults   Omitted required selections fail with a plain hint
 
 Config sync (portable setup via git):
   pull [gh:user/repo]             Clone or pull a shared .agents config repo
@@ -314,6 +322,7 @@ registerExecCommand(program);
 registerSessionsCommands(program);
 registerSyncCommand(program);
 registerDriveCommands(program);
+registerPtyCommands(program);
 
 // Deprecated 'jobs' and 'cron' aliases for 'routines'
 for (const alias of ['jobs', 'cron']) {
