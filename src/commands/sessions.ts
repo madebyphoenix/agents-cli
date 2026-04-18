@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -22,6 +24,14 @@ interface ViewOptions {
   transcript?: boolean;
   trace?: boolean;
   json?: boolean;
+}
+
+interface ClaudeHistoryEntry {
+  sessionId: string;
+  display?: string;
+  project?: string;
+  timestampMs?: number;
+  historyPath: string;
 }
 
 async function listAction(options: ListOptions): Promise<void> {
@@ -193,6 +203,11 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
 
       if (matches.length === 0) {
         spinner.stop();
+        const historyEntry = findClaudeHistoryEntry(idQuery);
+        if (historyEntry) {
+          renderClaudeHistoryOnlyId(idQuery, historyEntry, allSessions);
+          process.exit(1);
+        }
         console.error(chalk.red(`No session found matching: ${idQuery}`));
         console.error(chalk.gray('Run "agents sessions" to list available sessions.'));
         process.exit(1);
@@ -249,6 +264,109 @@ export function registerSessionsCommands(program: Command): void {
     .action(async (id: string | undefined, options: ViewOptions) => {
       await viewAction(id, options);
     });
+}
+
+function findClaudeHistoryEntry(idQuery: string): ClaudeHistoryEntry | null {
+  const historyPath = path.join(os.homedir(), '.claude', 'history.jsonl');
+  if (!fs.existsSync(historyPath)) return null;
+
+  try {
+    const lines = fs.readFileSync(historyPath, 'utf-8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      if (parsed.sessionId !== idQuery) continue;
+
+      const timestampMs = typeof parsed.timestamp === 'number'
+        ? parsed.timestamp
+        : typeof parsed.timestamp === 'string'
+          ? Date.parse(parsed.timestamp)
+          : undefined;
+
+      return {
+        sessionId: parsed.sessionId,
+        display: typeof parsed.display === 'string' ? parsed.display : undefined,
+        project: typeof parsed.project === 'string' ? parsed.project : undefined,
+        timestampMs: Number.isFinite(timestampMs) ? timestampMs : undefined,
+        historyPath,
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function renderClaudeHistoryOnlyId(
+  idQuery: string,
+  historyEntry: ClaudeHistoryEntry,
+  allSessions: SessionMeta[],
+): void {
+  console.error(chalk.red(`No transcript session found matching: ${idQuery}`));
+  console.error(chalk.yellow('This ID exists in Claude history, but not as a saved transcript session.'));
+  console.error(chalk.gray(`History file: ${historyEntry.historyPath}`));
+
+  if (historyEntry.display) {
+    console.error(chalk.gray(`History entry: ${historyEntry.display}`));
+  }
+
+  if (historyEntry.project) {
+    console.error(chalk.gray(`Project root: ${historyEntry.project}`));
+  }
+
+  if (historyEntry.timestampMs) {
+    console.error(chalk.gray(`History time: ${new Date(historyEntry.timestampMs).toISOString()}`));
+  }
+
+  const relatedSessions = findClaudeSessionsInProject(allSessions, historyEntry);
+  if (relatedSessions.length > 0) {
+    console.error(chalk.gray('Claude transcript sessions in the same project tree:'));
+    for (const session of relatedSessions) {
+      console.error(
+        chalk.gray(
+          `  ${session.shortId}  ${session.id}  ${session.project || '-'}  ${formatRelativeTime(session.timestamp)}`
+        )
+      );
+    }
+  }
+
+  console.error(chalk.gray('Claude uses history-only IDs for commands like /resume. Use one of the transcript IDs above with "agents sessions view <id>".'));
+}
+
+function findClaudeSessionsInProject(
+  sessions: SessionMeta[],
+  historyEntry: ClaudeHistoryEntry,
+): SessionMeta[] {
+  if (!historyEntry.project) return [];
+
+  return sessions
+    .filter(session =>
+      session.agent === 'claude' &&
+      typeof session.cwd === 'string' &&
+      isWithinProject(session.cwd, historyEntry.project!)
+    )
+    .sort((a, b) => sessionDistance(a, historyEntry) - sessionDistance(b, historyEntry))
+    .slice(0, 3);
+}
+
+function isWithinProject(sessionCwd: string, projectRoot: string): boolean {
+  return sessionCwd === projectRoot || sessionCwd.startsWith(projectRoot + path.sep);
+}
+
+function sessionDistance(session: SessionMeta, historyEntry: ClaudeHistoryEntry): number {
+  if (!historyEntry.timestampMs) return Number.MAX_SAFE_INTEGER;
+  const sessionTime = new Date(session.timestamp).getTime();
+  if (Number.isNaN(sessionTime)) return Number.MAX_SAFE_INTEGER;
+  return Math.abs(sessionTime - historyEntry.timestampMs);
 }
 
 // ---------------------------------------------------------------------------

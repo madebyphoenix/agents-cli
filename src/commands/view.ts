@@ -243,7 +243,8 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
         const base = isDefault ? `${version} (default)` : version;
         const padded = base.padEnd(maxVerLabel);
         const label = isDefault ? `${version}${chalk.green(' (default)')}${' '.repeat(maxVerLabel - base.length)}` : padded;
-        const vInfo = infoMap.get(`${agentId}:${version}`);
+        const rawInfo = infoMap.get(`${agentId}:${version}`);
+        const vInfo = rawInfo ? mergeCanonical(agentId, rawInfo) : undefined;
 
         // Build columns, trimming trailing whitespace when columns are empty
         const parts = [`    ${label}`];
