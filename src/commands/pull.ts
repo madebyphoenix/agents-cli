@@ -6,7 +6,7 @@ import {
   ALL_AGENT_IDS,
   MCP_CAPABLE_AGENTS,
   getAllCliStates,
-  registerMcp,
+  registerMcpToTargets,
   getAccountEmail,
   isAgentName,
   resolveAgentName,
@@ -39,7 +39,6 @@ import {
   listInstalledVersions,
   getGlobalDefault,
   setGlobalDefault,
-  getBinaryPath,
   getVersionHomePath,
   syncResourcesToVersion,
   getAvailableResources,
@@ -48,6 +47,7 @@ import {
   hasNewResources,
   promptNewResourceSelection,
   promptResourceSelection,
+  resolveConfiguredAgentTargets,
   type ResourceSelection,
 } from '../lib/versions.js';
 import {
@@ -240,29 +240,36 @@ export function registerPullCommand(program: Command): void {
         if (manifest?.mcp && Object.keys(manifest.mcp).length > 0) {
           console.log(chalk.bold('\nMCP Servers:\n'));
 
-          const cliStates = await getAllCliStates();
           for (const [name, config] of Object.entries(manifest.mcp)) {
             if (!config.command || config.transport === 'http') continue;
 
-            const mcpAgents = (config.agents || MCP_CAPABLE_AGENTS).filter(
-              (id) => (!agentFilter || id === agentFilter) && cliStates[id]?.installed
+            const scopedAgents = (config.agents ? [...config.agents] : [...MCP_CAPABLE_AGENTS]).filter(
+              (id) => !agentFilter || id === agentFilter
+            );
+            const scopedVersions = config.agentVersions
+              ? Object.fromEntries(
+                  Object.entries(config.agentVersions).filter(([agentId]) => !agentFilter || agentId === agentFilter)
+                ) as Partial<Record<AgentId, string[]>>
+              : undefined;
+            const targets = resolveConfiguredAgentTargets(
+              scopedAgents,
+              scopedVersions,
+              MCP_CAPABLE_AGENTS
+            );
+            const results = await registerMcpToTargets(
+              targets,
+              name,
+              config.command,
+              config.scope || 'user',
+              config.transport || 'stdio'
             );
 
-            for (const agentId of mcpAgents) {
-              const versions = listInstalledVersions(agentId);
-              const defaultVer = getGlobalDefault(agentId);
-              const targetVersions = defaultVer ? [defaultVer] : versions.slice(-1);
-
-              for (const ver of targetVersions) {
-                const home = getVersionHomePath(agentId, ver);
-                const binary = getBinaryPath(agentId, ver);
-                const result = await registerMcp(
-                  agentId, name, config.command, config.scope || 'user',
-                  config.transport || 'stdio', { home, binary }
-                );
-                if (result.success) {
-                  console.log(`  ${chalk.green('+')} ${name} -> ${agentLabel(agentId)}@${ver}`);
-                }
+            for (const result of results) {
+              if (result.success) {
+                const label = result.version
+                  ? `${agentLabel(result.agentId)}@${result.version}`
+                  : agentLabel(result.agentId);
+                console.log(`  ${chalk.green('+')} ${name} -> ${label}`);
               }
             }
           }

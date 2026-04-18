@@ -141,10 +141,12 @@ export function registerPushCommand(program: Command): void {
           console.log();
           manifest.mcp = manifest.mcp || {};
           for (const [name, config] of mcpByName) {
+            const existing = manifest.mcp[name];
             manifest.mcp[name] = {
               command: config.command,
               transport: 'stdio',
               agents: config.agents,
+              ...(existing?.agentVersions ? { agentVersions: existing.agentVersions } : {}),
               scope: 'user',
             };
             console.log(`  ${chalk.cyan('MCP:')} ${name}`);

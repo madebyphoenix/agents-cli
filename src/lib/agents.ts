@@ -8,7 +8,7 @@ import chalk from 'chalk';
 import type { AgentConfig, AgentId } from './types.js';
 import { walkForFiles } from './session/discover.js';
 import { getVersionsDir, getShimsDir } from './state.js';
-import { resolveVersion } from './versions.js';
+import { resolveVersion, getVersionHomePath, getBinaryPath } from './versions.js';
 
 export interface CliState {
   installed: boolean;
@@ -671,6 +671,64 @@ export async function unregisterMcp(
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }
+}
+
+export interface McpTargetOperationResult {
+  agentId: AgentId;
+  version?: string;
+  success: boolean;
+  error?: string;
+}
+
+export async function registerMcpToTargets(
+  targets: { directAgents: AgentId[]; versionSelections: Map<AgentId, string[]> },
+  name: string,
+  command: string,
+  scope: 'user' | 'project' = 'user',
+  transport: string = 'stdio'
+): Promise<McpTargetOperationResult[]> {
+  const results: McpTargetOperationResult[] = [];
+
+  for (const agentId of targets.directAgents) {
+    const result = await registerMcp(agentId, name, command, scope, transport);
+    results.push({ agentId, success: result.success, error: result.error });
+  }
+
+  for (const [agentId, versions] of targets.versionSelections) {
+    for (const version of versions) {
+      const result = await registerMcp(agentId, name, command, scope, transport, {
+        home: getVersionHomePath(agentId, version),
+        binary: getBinaryPath(agentId, version),
+      });
+      results.push({ agentId, version, success: result.success, error: result.error });
+    }
+  }
+
+  return results;
+}
+
+export async function unregisterMcpFromTargets(
+  targets: { directAgents: AgentId[]; versionSelections: Map<AgentId, string[]> },
+  name: string
+): Promise<McpTargetOperationResult[]> {
+  const results: McpTargetOperationResult[] = [];
+
+  for (const agentId of targets.directAgents) {
+    const result = await unregisterMcp(agentId, name);
+    results.push({ agentId, success: result.success, error: result.error });
+  }
+
+  for (const [agentId, versions] of targets.versionSelections) {
+    for (const version of versions) {
+      const result = await unregisterMcp(agentId, name, {
+        home: getVersionHomePath(agentId, version),
+        binary: getBinaryPath(agentId, version),
+      });
+      results.push({ agentId, version, success: result.success, error: result.error });
+    }
+  }
+
+  return results;
 }
 
 export type McpScope = 'user' | 'project';

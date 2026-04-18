@@ -43,10 +43,14 @@ Shims in `~/.agents/shims/` resolve version from `.agents-version` (project) or 
 src/
   index.ts           # CLI entry (commander.js)
   commands/          # Command implementations
-    sessions.ts      # agents sessions list/view
+    sessions.ts      # agents sessions list/view (default: summary mode)
     exec.ts          # agents exec
-    routines.ts      # agents routines
-    view.ts          # agents view
+    routines.ts      # agents routines (scheduled jobs)
+    drive.ts         # agents drive (remote session sync)
+    plugins.ts       # agents plugins
+    subagents.ts     # agents subagents
+    status.ts        # agents status (deprecated alias for agents view)
+    daemon.ts        # agents daemon (scheduler daemon)
     ...
   lib/
     types.ts         # Core types (AgentId, Meta)
@@ -56,7 +60,12 @@ src/
     shims.ts         # Shim generation, config symlink switching
     exec.ts          # Agent execution (command building, spawning)
     routines.ts      # Scheduled job config
+    scheduler.ts     # Job cron scheduling
+    daemon.ts        # Daemon management (reload, health)
     runner.ts        # Job execution with sandboxing
+    drive-sync.ts    # Remote drive sync (rsync to remote host)
+    subagents.ts     # Subagent management (discover, install, remove)
+    plugins.ts       # Plugin discovery and sync
     pty-server.ts    # PTY sidecar server (unix socket, node-pty, xterm-headless)
     pty-client.ts    # PTY client (auto-start server, IPC, escape parsing)
     session/         # Session discovery, parsing, rendering
@@ -64,6 +73,7 @@ src/
       discover.ts    # Find sessions across Claude/Codex/Gemini
       parse.ts       # Parse stored session formats into normalized events
       render.ts      # Transcript, summary, trace, JSON renderers
+      prompt.ts      # Prompt cleaning and topic extraction from raw session messages
 ```
 
 ## Key Types
@@ -114,7 +124,7 @@ agents install <pkg>         # Install mcp:name or skill:user/repo
 # Sessions
 agents sessions              # List sessions across all agents
 agents sessions list         # Same, with --agent/--project filters
-agents sessions view <id>    # View session (transcript by default)
+agents sessions view <id>    # View session (summary by default, --transcript for full transcript)
 agents sessions view <id> --summary   # Files touched, commands run
 agents sessions view <id> --trace     # Reasoning trace as markdown
 agents sessions view <id> --json      # Normalized events as JSON
@@ -172,4 +182,5 @@ bun install && bun run build && bun test
 See `docs/` for architecture deep-dives:
 - `01-version-management.md` - Version install, switching, isolation
 - `02-resource-sync.md` - Resource syncing between central and version homes
-- `03-routines.md` - Scheduled jobs with sandboxed permissions
+- `03-routines.md` - Scheduled jobs with sandboxed permissions (currently `03-cron-jobs.md` in docs/)
+- `04-landscape.md` - Competitive landscape vs Rivet, Agentloom, mise, cass, and others

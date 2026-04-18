@@ -7,7 +7,7 @@ import {
   ALL_AGENT_IDS,
   MCP_CAPABLE_AGENTS,
   getAllCliStates,
-  registerMcp,
+  registerMcpToTargets,
   agentLabel,
 } from '../lib/agents.js';
 import type { AgentId, RegistryType } from '../lib/types.js';
@@ -24,16 +24,24 @@ import {
   discoverCommands,
   resolveCommandSource,
   installCommand,
+  installCommandCentrally,
 } from '../lib/commands.js';
 import {
   discoverSkillsFromRepo,
   installSkill,
+  installSkillCentrally,
 } from '../lib/skills.js';
 import {
   discoverHooksFromRepo,
   installHooks,
+  installHooksCentrally,
 } from '../lib/hooks.js';
-import { listInstalledVersions } from '../lib/versions.js';
+import {
+  listInstalledVersions,
+  resolveInstalledAgentTargets,
+  resolveConfiguredAgentTargets,
+  syncResourcesToVersion,
+} from '../lib/versions.js';
 
 export function registerPackagesCommands(program: Command): void {
   // ==========================================================================
@@ -254,7 +262,7 @@ export function registerPackagesCommands(program: Command): void {
   program
     .command('install <identifier>')
     .description('Install a package from a registry or Git source')
-    .option('-a, --agents <list>', 'Comma-separated agents to install to')
+    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to install to')
     .action(async (identifier: string, options) => {
       const spinner = ora('Resolving package...').start();
 
@@ -317,24 +325,26 @@ export function registerPackagesCommands(program: Command): void {
           }
 
           const cliStates = await getAllCliStates();
-          const agents = options.agents
-            ? (options.agents.split(',') as AgentId[])
-            : MCP_CAPABLE_AGENTS.filter((id) => cliStates[id]?.installed);
+          const installedAgents = MCP_CAPABLE_AGENTS.filter(
+            (id) => cliStates[id]?.installed || listInstalledVersions(id).length > 0
+          );
+          const targets = options.agents
+            ? resolveInstalledAgentTargets(options.agents, MCP_CAPABLE_AGENTS)
+            : resolveConfiguredAgentTargets(installedAgents, undefined, MCP_CAPABLE_AGENTS);
 
-          if (agents.length === 0) {
+          if (targets.selectedAgents.length === 0) {
             console.log(chalk.yellow('\nNo MCP-capable agents installed.'));
             process.exit(1);
           }
 
           console.log(chalk.bold('\nInstalling to agents...'));
-          for (const agentId of agents) {
-            if (!cliStates[agentId]?.installed) continue;
-
-            const result = await registerMcp(agentId, entry.name, command, 'user');
+          const results = await registerMcpToTargets(targets, entry.name, command, 'user');
+          for (const result of results) {
+            const label = result.version ? `${agentLabel(result.agentId)}@${result.version}` : agentLabel(result.agentId);
             if (result.success) {
-              console.log(`  ${chalk.green('+')} ${agentLabel(agentId)}`);
+              console.log(`  ${chalk.green('+')} ${label}`);
             } else {
-              console.log(`  ${chalk.red('x')} ${agentLabel(agentId)}: ${result.error}`);
+              console.log(`  ${chalk.red('x')} ${label}: ${result.error}`);
             }
           }
 
@@ -364,57 +374,111 @@ export function registerPackagesCommands(program: Command): void {
           if (hasSkills) console.log(`  ${skills.length} skills`);
           if (hasHooks) console.log(`  ${hooks.length} hooks`);
 
-          const agents = options.agents
-            ? (options.agents.split(',') as AgentId[])
-            : ALL_AGENT_IDS;
-
           const gitCliStates = await getAllCliStates();
+          const installedAgents = ALL_AGENT_IDS.filter(
+            (id) => gitCliStates[id]?.installed || listInstalledVersions(id).length > 0
+          );
+          const targets = options.agents
+            ? resolveInstalledAgentTargets(options.agents, ALL_AGENT_IDS)
+            : resolveConfiguredAgentTargets(installedAgents, undefined, ALL_AGENT_IDS);
+
+          if (targets.selectedAgents.length === 0) {
+            console.log(chalk.yellow('\nNo agents selected.'));
+            return;
+          }
+
           // Install commands
           if (hasCommands) {
             console.log(chalk.bold('\nInstalling commands...'));
-            let installed = 0;
+            let directInstalled = 0;
+            let syncedVersions = 0;
             let failed = 0;
             for (const command of commands) {
-              for (const agentId of agents) {
-                if (!gitCliStates[agentId]?.installed && listInstalledVersions(agentId).length === 0) continue;
+              const sourcePath = resolveCommandSource(localPath, command.name);
+              if (!sourcePath) continue;
 
-                const sourcePath = resolveCommandSource(localPath, command.name);
-                if (sourcePath) {
-                  const result = installCommand(sourcePath, agentId, command.name, 'symlink');
-                  if (result.error) {
-                    failed++;
-                  } else {
-                    installed++;
-                  }
+              const centralResult = installCommandCentrally(sourcePath, command.name);
+              if (!centralResult.success) {
+                failed++;
+                continue;
+              }
+
+              for (const agentId of targets.directAgents) {
+                if (!gitCliStates[agentId]?.installed && listInstalledVersions(agentId).length === 0) continue;
+                const result = installCommand(sourcePath, agentId, command.name, 'symlink');
+                if (result.error) {
+                  failed++;
+                } else {
+                  directInstalled++;
                 }
               }
             }
+
+            const commandNames = commands.map((command) => command.name);
+            for (const [agentId, versions] of targets.versionSelections) {
+              for (const version of versions) {
+                const result = syncResourcesToVersion(agentId, version, { commands: commandNames });
+                if (result.commands) {
+                  syncedVersions++;
+                }
+              }
+            }
+
+            console.log(`  Installed ${directInstalled} direct command instance(s)`);
+            console.log(`  Synced commands to ${syncedVersions} managed version(s)`);
             if (failed > 0) {
-              console.log(`  Installed ${installed} command instances (${failed} failed)`);
-            } else {
-              console.log(`  Installed ${installed} command instances`);
+              console.log(`  ${failed} command installation(s) failed`);
             }
           }
 
           // Install skills
           if (hasSkills) {
             console.log(chalk.bold('\nInstalling skills...'));
+            const directAgents = targets.directAgents.filter(
+              (agentId) => AGENTS[agentId].capabilities.skills && gitCliStates[agentId]?.installed
+            );
+            let syncedVersions = 0;
             for (const skill of skills) {
-              const result = installSkill(skill.path, skill.name, agents);
-              if (result.success) {
-                console.log(`  ${chalk.green('+')} ${skill.name}`);
-              } else {
-                console.log(`  ${chalk.red('x')} ${skill.name}: ${result.error}`);
+              installSkillCentrally(skill.path, skill.name);
+              const result = installSkill(skill.path, skill.name, directAgents);
+              const status = result.success ? chalk.green('+') : chalk.red('x');
+              const detail = result.success ? skill.name : `${skill.name}: ${result.error}`;
+              console.log(`  ${status} ${detail}`);
+            }
+
+            const skillNames = skills.map((skill) => skill.name);
+            for (const [agentId, versions] of targets.versionSelections) {
+              for (const version of versions) {
+                const result = syncResourcesToVersion(agentId, version, { skills: skillNames });
+                if (result.skills) {
+                  syncedVersions++;
+                }
               }
             }
+            console.log(`  Synced skills to ${syncedVersions} managed version(s)`);
           }
 
           // Install hooks
           if (hasHooks) {
             console.log(chalk.bold('\nInstalling hooks...'));
-            const hookAgents = agents.filter((id) => AGENTS[id].supportsHooks) as AgentId[];
-            const result = await installHooks(localPath, hookAgents, { scope: 'user' });
-            console.log(`  Installed ${result.installed.length} hooks`);
+            let syncedVersions = 0;
+            const directHookAgents = targets.directAgents.filter(
+              (id) => AGENTS[id].supportsHooks && gitCliStates[id]?.installed
+            ) as AgentId[];
+            await installHooksCentrally(localPath);
+            const result = await installHooks(localPath, directHookAgents, { scope: 'user' });
+            console.log(`  Installed ${result.installed.length} direct hook instance(s)`);
+
+            const hookNames = hooks;
+            for (const [agentId, versions] of targets.versionSelections) {
+              for (const version of versions) {
+                const syncResult = syncResourcesToVersion(agentId, version, { hooks: hookNames });
+                if (syncResult.hooks) {
+                  syncedVersions++;
+                }
+              }
+            }
+            console.log(`  Synced hooks to ${syncedVersions} managed version(s)`);
           }
 
           console.log(chalk.green('\nPackage installed.'));

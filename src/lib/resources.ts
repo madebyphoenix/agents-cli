@@ -43,6 +43,8 @@ export interface GetAgentResourcesOptions {
   scope?: 'user' | 'project' | 'all';
   /** For MCP scanning - whether the CLI is installed */
   cliInstalled?: boolean;
+  /** Version home to scan for user-scoped resources */
+  home?: string;
 }
 
 /**
@@ -53,7 +55,7 @@ export function getAgentResources(
   agentId: AgentId,
   options: GetAgentResourcesOptions = {}
 ): AgentResources {
-  const { cwd = process.cwd(), scope = 'all', cliInstalled = true } = options;
+  const { cwd = process.cwd(), scope = 'all', cliInstalled = true, home } = options;
   const agent = AGENTS[agentId];
 
   const shouldInclude = (resourceScope: 'user' | 'project'): boolean => {
@@ -63,7 +65,7 @@ export function getAgentResources(
 
   // Commands
   const commands: ResourceEntry[] = [];
-  for (const cmd of listInstalledCommandsWithScope(agentId, cwd)) {
+  for (const cmd of listInstalledCommandsWithScope(agentId, cwd, { home })) {
     if (shouldInclude(cmd.scope)) {
       commands.push({ name: cmd.name, path: cmd.path, scope: cmd.scope });
     }
@@ -72,7 +74,7 @@ export function getAgentResources(
   // Skills
   const skills: SkillResourceEntry[] = [];
   const skillErrors: SkillParseError[] = [];
-  for (const skill of listInstalledSkillsWithScope(agentId, cwd, { errors: skillErrors })) {
+  for (const skill of listInstalledSkillsWithScope(agentId, cwd, { home, errors: skillErrors })) {
     if (shouldInclude(skill.scope)) {
       skills.push({
         name: skill.name,
@@ -96,8 +98,8 @@ export function getAgentResources(
   }
 
   if (cliInstalled) {
-    const home = getEffectiveHome(agentId);
-    for (const m of listInstalledMcpsWithScope(agentId, cwd, { home })) {
+    const effectiveHome = home || getEffectiveHome(agentId);
+    for (const m of listInstalledMcpsWithScope(agentId, cwd, { home: effectiveHome })) {
       if (!shouldInclude(m.scope)) continue;
       if (!mcpByName.has(m.name)) {
         mcpByName.set(m.name, { name: m.name, scope: m.scope, version: m.version });
@@ -109,7 +111,7 @@ export function getAgentResources(
 
   // Memory/Instructions
   const memory: ResourceEntry[] = [];
-  for (const instr of listInstalledInstructionsWithScope(agentId, cwd)) {
+  for (const instr of listInstalledInstructionsWithScope(agentId, cwd, { home })) {
     if (instr.exists && shouldInclude(instr.scope)) {
       memory.push({
         name: agent.instructionsFile,
@@ -121,7 +123,7 @@ export function getAgentResources(
 
   // Hooks
   const hooks: ResourceEntry[] = [];
-  for (const hook of listInstalledHooksWithScope(agentId, cwd)) {
+  for (const hook of listInstalledHooksWithScope(agentId, cwd, { home })) {
     if (shouldInclude(hook.scope)) {
       hooks.push({ name: hook.name, path: hook.path, scope: hook.scope });
     }

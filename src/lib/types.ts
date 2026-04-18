@@ -36,6 +36,7 @@ export interface McpServerConfig {
   transport: 'stdio' | 'http' | 'sse';
   scope: 'user' | 'project';
   agents?: AgentId[];
+  agentVersions?: Partial<Record<AgentId, string[]>>;
   env?: Record<string, string>;
   headers?: Record<string, string>;
 }

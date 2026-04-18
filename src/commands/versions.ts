@@ -236,7 +236,11 @@ export function registerVersionsCommands(program: Command): void {
                   // Fetch account info for context in the prompt
                   const home = getVersionHomePath(agent, installedVersion);
                   const info = await getAccountInfo(agent, home);
-                  const usage = await getUsageInfo(agent, { home, cliVersion: installedVersion });
+                  const usage = await getUsageInfo(agent, {
+                    home,
+                    cliVersion: installedVersion,
+                    organizationId: info.organizationId,
+                  });
                   const accountHint = formatAccountHint(info, usage.snapshot);
 
                   const message = currentDefault

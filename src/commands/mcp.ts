@@ -10,16 +10,97 @@ import {
   getAllCliStates,
   resolveAgentName,
   formatAgentError,
-  registerMcp,
-  unregisterMcp,
+  registerMcpToTargets,
+  unregisterMcpFromTargets,
   listInstalledMcpsWithScope,
   agentLabel,
 } from '../lib/agents.js';
-import type { AgentId } from '../lib/types.js';
+import type { AgentId, McpServerConfig } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
-import { getEffectiveHome, getGlobalDefault, listInstalledVersions, getVersionHomePath } from '../lib/versions.js';
+import {
+  getEffectiveHome,
+  getGlobalDefault,
+  listInstalledVersions,
+  getVersionHomePath,
+  resolveInstalledAgentTargets,
+  resolveConfiguredAgentTargets,
+} from '../lib/versions.js';
 import { getAgentsDir } from '../lib/state.js';
 import { isPromptCancelled, isInteractiveTerminal, requireInteractiveSelection } from './utils.js';
+
+function parseMcpAgentTargets(value: string): {
+  agents: AgentId[];
+  agentVersions?: Partial<Record<AgentId, string[]>>;
+} {
+  const agents: AgentId[] = [];
+  const agentVersions: Partial<Record<AgentId, string[]>> = {};
+  const targets = value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  for (const target of targets) {
+    const atIndex = target.indexOf('@');
+    const agentToken = (atIndex === -1 ? target : target.slice(0, atIndex)).trim();
+    const versionToken = atIndex === -1 ? null : target.slice(atIndex + 1).trim();
+
+    if (!agentToken) {
+      continue;
+    }
+
+    if (atIndex !== -1 && !versionToken) {
+      throw new Error(`Missing version in --agents entry '${target}'. Use agent@x.y.z or agent@default.`);
+    }
+
+    const agentId = resolveAgentName(agentToken);
+    if (!agentId || !MCP_CAPABLE_AGENTS.includes(agentId)) {
+      throw new Error(formatAgentError(agentToken, MCP_CAPABLE_AGENTS));
+    }
+
+    if (!versionToken) {
+      if (!agents.includes(agentId)) {
+        agents.push(agentId);
+      }
+      continue;
+    }
+
+    if (versionToken === 'default') {
+      if (!getGlobalDefault(agentId)) {
+        throw new Error(`No default version set for ${AGENTS[agentId].name}. Run: agents use ${agentId}@<version>`);
+      }
+      if (!agents.includes(agentId)) {
+        agents.push(agentId);
+      }
+      continue;
+    }
+
+    const installedVersions = listInstalledVersions(agentId);
+    if (installedVersions.length === 0) {
+      throw new Error(`No managed versions are installed for ${AGENTS[agentId].name}. Run: agents add ${agentId}@latest`);
+    }
+
+    if (!installedVersions.includes(versionToken)) {
+      throw new Error(
+        `Version ${versionToken} is not installed for ${AGENTS[agentId].name}. Installed versions: ${installedVersions.join(', ')}`
+      );
+    }
+
+    const versions = agentVersions[agentId] || [];
+    if (!versions.includes(versionToken)) {
+      versions.push(versionToken);
+      agentVersions[agentId] = versions;
+    }
+  }
+
+  return {
+    agents,
+    ...(Object.keys(agentVersions).length > 0 ? { agentVersions } : {}),
+  };
+}
+
+function formatTargetLabel(agentId: AgentId, version?: string): string {
+  return version ? `${agentLabel(agentId)}@${version}` : agentLabel(agentId);
+}
 
 export function registerMcpCommands(program: Command): void {
   const mcpCmd = program
@@ -218,7 +299,7 @@ export function registerMcpCommands(program: Command): void {
   mcpCmd
     .command('add <name> [command_or_url...]')
     .description('Add an MCP server (stdio or HTTP)')
-    .option('-a, --agents <list>', 'Comma-separated agents', MCP_CAPABLE_AGENTS.join(','))
+    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets', MCP_CAPABLE_AGENTS.join(','))
     .option('-s, --scope <scope>', 'Scope: user or project', 'user')
     .option('-t, --transport <type>', 'Transport: stdio or http', 'stdio')
     .option('-H, --header <header>', 'HTTP header (name:value), can be repeated', (val, acc: string[]) => {
@@ -240,6 +321,8 @@ export function registerMcpCommands(program: Command): void {
 
       manifest.mcp = manifest.mcp || {};
 
+      const targetConfig = parseMcpAgentTargets(options.agents);
+
       if (transport === 'http') {
         const url = commandOrUrl[0];
         const headers: Record<string, string> = {};
@@ -257,7 +340,8 @@ export function registerMcpCommands(program: Command): void {
           url,
           transport: 'http',
           scope: options.scope as 'user' | 'project',
-          agents: options.agents.split(',') as AgentId[],
+          agents: targetConfig.agents,
+          ...(targetConfig.agentVersions ? { agentVersions: targetConfig.agentVersions } : {}),
           ...(Object.keys(headers).length > 0 && { headers }),
         };
       } else {
@@ -266,7 +350,8 @@ export function registerMcpCommands(program: Command): void {
           command,
           transport: 'stdio',
           scope: options.scope as 'user' | 'project',
-          agents: options.agents.split(',') as AgentId[],
+          agents: targetConfig.agents,
+          ...(targetConfig.agentVersions ? { agentVersions: targetConfig.agentVersions } : {}),
         };
       }
 
@@ -278,19 +363,24 @@ export function registerMcpCommands(program: Command): void {
   mcpCmd
     .command('remove [name]')
     .description('Remove an MCP server from agents')
-    .option('-a, --agents <list>', 'Comma-separated agents')
+    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets')
     .action(async (name?: string, options?: { agents?: string }) => {
       const cwd = process.cwd();
       const cliStates = await getAllCliStates();
 
       let mcpsToRemove: string[];
-      let targetAgents: AgentId[];
+      let targets:
+        | ReturnType<typeof resolveInstalledAgentTargets>
+        | ReturnType<typeof resolveConfiguredAgentTargets>;
 
       if (name) {
         mcpsToRemove = [name];
-        targetAgents = options?.agents
-          ? (options.agents.split(',') as AgentId[])
-          : MCP_CAPABLE_AGENTS;
+        const installedAgents = MCP_CAPABLE_AGENTS.filter(
+          (agentId) => cliStates[agentId]?.installed || listInstalledVersions(agentId).length > 0
+        );
+        targets = options?.agents
+          ? resolveInstalledAgentTargets(options.agents, MCP_CAPABLE_AGENTS)
+          : resolveConfiguredAgentTargets(installedAgents, undefined, MCP_CAPABLE_AGENTS);
       } else {
         // Interactive picker: collect all MCPs across all installed agents
         const installedAgents = MCP_CAPABLE_AGENTS.filter((agentId) => cliStates[agentId]?.installed);
@@ -345,7 +435,7 @@ export function registerMcpCommands(program: Command): void {
           }
 
           mcpsToRemove = selected;
-          targetAgents = installedAgents;
+          targets = resolveConfiguredAgentTargets(installedAgents, undefined, MCP_CAPABLE_AGENTS);
         } catch (err) {
           if (isPromptCancelled(err)) {
             console.log(chalk.gray('Cancelled'));
@@ -358,13 +448,13 @@ export function registerMcpCommands(program: Command): void {
       // Execute removals - try each MCP on each target agent
       let removed = 0;
       for (const mcpName of mcpsToRemove) {
-        for (const agentId of targetAgents) {
-          if (!cliStates[agentId]?.installed) continue;
-
-          const result = await unregisterMcp(agentId, mcpName);
+        const results = await unregisterMcpFromTargets(targets, mcpName);
+        for (const result of results) {
           if (result.success) {
-            console.log(`  ${chalk.red('-')} ${agentLabel(agentId)}: ${mcpName}`);
+            console.log(`  ${chalk.red('-')} ${formatTargetLabel(result.agentId, result.version)}: ${mcpName}`);
             removed++;
+          } else if (result.error && !result.error.includes('CLI not installed')) {
+            console.log(`  ${chalk.yellow('!')} ${formatTargetLabel(result.agentId, result.version)}: ${result.error}`);
           }
         }
       }
@@ -451,41 +541,53 @@ export function registerMcpCommands(program: Command): void {
   mcpCmd
     .command('register [name]')
     .description('Register MCP server(s) with agent CLIs')
-    .option('-a, --agents <list>', 'Comma-separated agents')
+    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets')
     .action(async (name: string | undefined, options) => {
-      if (!name) {
-        const localPath = getAgentsDir();
-        const manifest = readManifest(localPath);
+      const localPath = getAgentsDir();
+      const manifest = readManifest(localPath);
 
-        if (!manifest?.mcp) {
-          console.log(chalk.yellow('No MCP servers in manifest'));
-          return;
-        }
-
-        const cliStates = await getAllCliStates();
-        for (const [mcpName, config] of Object.entries(manifest.mcp)) {
-          // Skip HTTP transport MCPs for now (need different registration)
-          if (config.transport === 'http' || !config.command) {
-            console.log(`\n  ${chalk.cyan(mcpName)}: ${chalk.yellow('HTTP transport not yet supported')}`);
-            continue;
-          }
-
-          console.log(`\n  ${chalk.cyan(mcpName)}:`);
-          const mcpTargetAgents = config.agents?.length ? config.agents : MCP_CAPABLE_AGENTS;
-          for (const agentId of mcpTargetAgents) {
-            if (!cliStates[agentId]?.installed) continue;
-
-            const result = await registerMcp(agentId, mcpName, config.command, config.scope, config.transport || 'stdio');
-            if (result.success) {
-              console.log(`    ${chalk.green('+')} ${agentLabel(agentId)}`);
-            } else {
-              console.log(`    ${chalk.red('x')} ${agentLabel(agentId)}: ${result.error}`);
-            }
-          }
-        }
+      if (!manifest?.mcp) {
+        console.log(chalk.yellow('No MCP servers in manifest'));
         return;
       }
 
-      console.log(chalk.yellow('Single MCP registration not yet implemented'));
+      const entries = name
+        ? (() => {
+            const config = manifest.mcp?.[name];
+            return config ? [[name, config] as [string, McpServerConfig]] : [];
+          })()
+        : Object.entries(manifest.mcp);
+
+      if (entries.length === 0) {
+        console.log(chalk.yellow(`MCP server '${name}' not found in manifest`));
+        return;
+      }
+
+      for (const [mcpName, config] of entries) {
+        if (config.transport === 'http' || !config.command) {
+          console.log(`\n  ${chalk.cyan(mcpName)}: ${chalk.yellow('HTTP transport not yet supported')}`);
+          continue;
+        }
+
+        console.log(`\n  ${chalk.cyan(mcpName)}:`);
+        const targets = options.agents
+          ? resolveInstalledAgentTargets(options.agents, MCP_CAPABLE_AGENTS)
+          : resolveConfiguredAgentTargets(config.agents, config.agentVersions, MCP_CAPABLE_AGENTS);
+        const results = await registerMcpToTargets(
+          targets,
+          mcpName,
+          config.command,
+          config.scope || 'user',
+          config.transport || 'stdio'
+        );
+
+        for (const result of results) {
+          if (result.success) {
+            console.log(`    ${chalk.green('+')} ${formatTargetLabel(result.agentId, result.version)}`);
+          } else {
+            console.log(`    ${chalk.red('x')} ${formatTargetLabel(result.agentId, result.version)}: ${result.error}`);
+          }
+        }
+      }
     });
 }

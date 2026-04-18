@@ -91,8 +91,8 @@ interface ResourceWithSync {
   scope?: 'user' | 'project';
 }
 
-function accountUsageKey(agentId: AgentId, email: string): string {
-  return `${agentId}:${email}`;
+function getUsageLookupKey(info?: AccountInfo): string | null {
+  return info?.usageKey || info?.accountKey || null;
 }
 
 /**
@@ -152,43 +152,49 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
     globalInfoMap.set(agentId, info);
   }
 
-  // Usage status, plan, and overage credits belong to the account (email), not the
-  // version. Different versions cache these in their own .claude.json, so older
-  // versions show stale bars for the same email. Pick the freshest cache per
-  // (agentId, email) and reuse it for every row with that email. lastActive stays
-  // per-version — it reflects when that specific version was last used.
-  const canonicalByEmail = new Map<string, AccountInfo>();
-  const usageFetchInputs = new Map<string, { agentId: AgentId; home?: string; cliVersion: string | null }>();
+  // Usage status, plan, and overage credits belong to the same underlying account
+  // or org scope, not a specific installed version. Version homes cache those
+  // values independently, so older installs can show stale values. Reuse the
+  // freshest cache entry per stable usage identity and keep lastActive per version.
+  const canonicalByUsageKey = new Map<string, AccountInfo>();
+  const usageFetchInputs = new Map<string, {
+    agentId: AgentId;
+    home?: string;
+    cliVersion: string | null;
+    organizationId: string | null;
+  }>();
   const chooseFresherAccount = (
-    agentId: AgentId,
     info: AccountInfo,
+    agentId: AgentId,
     usageInput?: { home?: string; cliVersion: string | null }
   ) => {
-    if (!info.email) return;
-    const key = accountUsageKey(agentId, info.email);
-    const existing = canonicalByEmail.get(key);
+    const key = getUsageLookupKey(info);
+    if (!key) return;
+    const existing = canonicalByUsageKey.get(key);
     const existingMs = existing?.lastActive?.getTime() ?? -1;
     const currentMs = info.lastActive?.getTime() ?? -1;
     if (!existing || currentMs > existingMs) {
-      canonicalByEmail.set(key, info);
+      canonicalByUsageKey.set(key, info);
       usageFetchInputs.set(key, {
         agentId,
         home: usageInput?.home,
         cliVersion: usageInput?.cliVersion || null,
+        organizationId: info.organizationId,
       });
     }
   };
 
   for (const { agentId, home, version, info } of infoResults) {
-    chooseFresherAccount(agentId, info, { home, cliVersion: version });
+    chooseFresherAccount(info, agentId, { home, cliVersion: version });
   }
   for (const { agentId, cliVersion, info } of globalInfoResults) {
-    chooseFresherAccount(agentId, info, { cliVersion });
+    chooseFresherAccount(info, agentId, { cliVersion });
   }
 
-  const mergeCanonical = (agentId: AgentId, info: AccountInfo): AccountInfo => {
-    if (!info.email) return info;
-    const canon = canonicalByEmail.get(accountUsageKey(agentId, info.email));
+  const mergeCanonical = (info: AccountInfo): AccountInfo => {
+    const key = getUsageLookupKey(info);
+    if (!key) return info;
+    const canon = canonicalByUsageKey.get(key);
     if (!canon) return info;
     return {
       ...info,
@@ -204,6 +210,7 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       usage: await getUsageInfo(input.agentId, {
         home: input.home,
         cliVersion: input.cliVersion,
+        organizationId: input.organizationId,
       }),
     }))
   );
@@ -240,7 +247,7 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
         const label = v === globalDefault ? `${v} (default)` : v;
         maxVerLabel = Math.max(maxVerLabel, label.length);
         const rawInfo = infoMap.get(`${agentId}:${v}`);
-        const info = rawInfo ? mergeCanonical(agentId, rawInfo) : undefined;
+        const info = rawInfo ? mergeCanonical(rawInfo) : undefined;
         if (info?.email) maxEmail = Math.max(maxEmail, info.email.length);
         if (info?.plan) maxPlanWidth = Math.max(maxPlanWidth, info.plan.length);
       }
@@ -267,8 +274,9 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
         const padded = base.padEnd(maxVerLabel);
         const label = isDefault ? `${version}${chalk.green(' (default)')}${' '.repeat(maxVerLabel - base.length)}` : padded;
         const rawInfo = infoMap.get(`${agentId}:${version}`);
-        const vInfo = rawInfo ? mergeCanonical(agentId, rawInfo) : undefined;
-        const usageInfo = vInfo?.email ? usageMap.get(accountUsageKey(agentId, vInfo.email)) : undefined;
+        const vInfo = rawInfo ? mergeCanonical(rawInfo) : undefined;
+        const usageKey = getUsageLookupKey(vInfo);
+        const usageInfo = usageKey ? usageMap.get(usageKey) : undefined;
 
         // Build columns, trimming trailing whitespace when columns are empty
         const parts = [`    ${label}`];
@@ -319,12 +327,14 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       const cliState = cliStates[agentId];
 
       console.log(`  ${chalk.bold(agentLabel(agentId))}`);
-      const gInfo = globalInfoMap.get(agentId);
+      const gInfoRaw = globalInfoMap.get(agentId);
+      const gInfo = gInfoRaw ? mergeCanonical(gInfoRaw) : undefined;
       const verLabel = `${cliState?.version || 'installed'} ${chalk.gray('(global)')}`;
       const verLabelLen = `${cliState?.version || 'installed'} (global)`.length;
       const padding = ' '.repeat(Math.max(0, globalMaxVerLabel - verLabelLen));
       const parts = [`    ${verLabel}${padding}`];
-      const gUsage = gInfo?.email ? usageMap.get(accountUsageKey(agentId, gInfo.email)) : undefined;
+      const gUsageKey = getUsageLookupKey(gInfo);
+      const gUsage = gUsageKey ? usageMap.get(gUsageKey) : undefined;
       const gUsageStr = formatUsageSummary(gInfo?.plan || null, gUsage?.snapshot || null);
       const gActiveStr = gInfo ? formatLastActive(gInfo.lastActive) : '';
       if (gInfo?.email || gUsageStr || gActiveStr) parts.push(gInfo?.email ? chalk.cyan(gInfo.email) : '');
@@ -429,6 +439,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
       return;
     }
   }
+  const home = getVersionHomePath(agentId, version);
 
   // Get git sync status if ~/.agents/ is a git repo
   const hasGitRepo = isGitRepo(agentsDir);
@@ -505,6 +516,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
     cwd,
     scope: 'all',
     cliInstalled: cliStates[agentId]?.installed ?? false,
+    home,
   });
 
   const agentData: AgentResourceDisplay = {
@@ -568,14 +580,14 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
 
   // 1. Agent CLI info
   console.log(chalk.bold('Agent CLIs\n'));
-  const home = getVersionHomePath(agentId, version);
   const accountInfo = await getAccountInfo(agentId, home);
-  const usageInfo = await getUsageInfo(agentId, { home, cliVersion: version });
+  const usageInfo = await getUsageInfo(agentId, {
+    home,
+    cliVersion: version,
+    organizationId: accountInfo.organizationId,
+  });
   const emailStr = accountInfo.email ? chalk.cyan(`  ${accountInfo.email}`) : '';
-  const cli = cliStates[agentId];
-  const status = cli?.installed
-    ? chalk.green(cli.version || 'installed')
-    : chalk.gray('not installed');
+  const status = chalk.green(version);
   const usageStr = formatUsageSummary(accountInfo.plan, null);
   const usagePart = usageStr ? `  ${usageStr}` : '';
   console.log(`  ${colorAgent(agentId)(AGENTS[agentId].name.padEnd(14))} ${status}${emailStr}${usagePart}`);

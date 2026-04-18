@@ -1592,6 +1592,12 @@ export interface VersionSelectionResult {
   versionSelections: Map<AgentId, string[]>;
 }
 
+export interface InstalledAgentTargetResult {
+  selectedAgents: AgentId[];
+  directAgents: AgentId[];
+  versionSelections: Map<AgentId, string[]>;
+}
+
 /**
  * Resolve a comma-separated --agents list into concrete version selections.
  * Bare agents target the default version, or the newest installed version when no default exists.
@@ -1692,6 +1698,143 @@ export function resolveAgentVersionTargets(
   }
 
   return { selectedAgents, versionSelections };
+}
+
+/**
+ * Resolve a comma-separated --agents list into install/apply targets.
+ * Bare agents target the default version (or newest installed version) when managed,
+ * and fall back to the agent's effective HOME when unmanaged.
+ * Explicit agent@version targets only that installed version.
+ */
+export function resolveInstalledAgentTargets(
+  value: string,
+  availableAgents: readonly AgentId[],
+  options: { allVersions?: boolean } = {}
+): InstalledAgentTargetResult {
+  const selectedAgents: AgentId[] = [];
+  const directAgents: AgentId[] = [];
+  const versionSelections = new Map<AgentId, string[]>();
+  const targets = value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const addVersionTarget = (agentId: AgentId, version: string) => {
+    const versions = versionSelections.get(agentId) || [];
+    if (!versions.includes(version)) {
+      versions.push(version);
+      versionSelections.set(agentId, versions);
+    }
+
+    const directIndex = directAgents.indexOf(agentId);
+    if (directIndex !== -1) {
+      directAgents.splice(directIndex, 1);
+    }
+  };
+
+  for (const target of targets) {
+    const atIndex = target.indexOf('@');
+    const agentToken = (atIndex === -1 ? target : target.slice(0, atIndex)).trim();
+    const versionToken = atIndex === -1 ? null : target.slice(atIndex + 1).trim();
+
+    if (!agentToken) {
+      continue;
+    }
+
+    if (atIndex !== -1 && !versionToken) {
+      throw new Error(`Missing version in --agents entry '${target}'. Use agent@x.y.z or agent@default.`);
+    }
+
+    const agentId = resolveAgentName(agentToken);
+    if (!agentId || !availableAgents.includes(agentId)) {
+      throw new Error(formatAgentError(agentToken, [...availableAgents]));
+    }
+
+    if (!selectedAgents.includes(agentId)) {
+      selectedAgents.push(agentId);
+    }
+
+    const installedVersions = listInstalledVersions(agentId);
+    const defaultVersion = getGlobalDefault(agentId);
+
+    if (!versionToken) {
+      if (installedVersions.length === 0) {
+        if (!directAgents.includes(agentId)) {
+          directAgents.push(agentId);
+        }
+        continue;
+      }
+
+      const targetVersions = options.allVersions
+        ? [...installedVersions]
+        : [defaultVersion || installedVersions[installedVersions.length - 1]];
+
+      for (const version of targetVersions) {
+        addVersionTarget(agentId, version);
+      }
+      continue;
+    }
+
+    if (versionToken === 'default') {
+      if (!defaultVersion) {
+        throw new Error(`No default version set for ${AGENTS[agentId].name}. Run: agents use ${agentId}@<version>`);
+      }
+      addVersionTarget(agentId, defaultVersion);
+      continue;
+    }
+
+    if (installedVersions.length === 0) {
+      throw new Error(`No managed versions are installed for ${AGENTS[agentId].name}. Run: agents add ${agentId}@latest`);
+    }
+
+    if (!installedVersions.includes(versionToken)) {
+      throw new Error(
+        `Version ${versionToken} is not installed for ${AGENTS[agentId].name}. Installed versions: ${installedVersions.join(', ')}`
+      );
+    }
+
+    addVersionTarget(agentId, versionToken);
+  }
+
+  return { selectedAgents, directAgents, versionSelections };
+}
+
+/**
+ * Resolve configured manifest targets into direct homes and managed versions.
+ */
+export function resolveConfiguredAgentTargets(
+  agents: readonly AgentId[] | undefined,
+  agentVersions: Partial<Record<AgentId, string[]>> | undefined,
+  availableAgents: readonly AgentId[],
+  options: { allVersions?: boolean } = {}
+): InstalledAgentTargetResult {
+  const targetSpecs: string[] = [];
+  const broadTargets = agents ? [...agents] : [...availableAgents];
+
+  for (const agentId of broadTargets) {
+    if (availableAgents.includes(agentId)) {
+      targetSpecs.push(agentId);
+    }
+  }
+
+  if (agentVersions) {
+    for (const [agentId, versions] of Object.entries(agentVersions) as Array<[AgentId, string[] | undefined]>) {
+      if (!availableAgents.includes(agentId) || !versions) continue;
+      for (const version of versions) {
+        targetSpecs.push(`${agentId}@${version}`);
+      }
+    }
+  }
+
+  if (targetSpecs.length === 0) {
+    return {
+      selectedAgents: [],
+      directAgents: [],
+      versionSelections: new Map(),
+    };
+  }
+
+  return resolveInstalledAgentTargets(targetSpecs.join(','), availableAgents, options);
 }
 
 /**
