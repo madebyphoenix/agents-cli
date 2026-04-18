@@ -7,6 +7,7 @@ import * as os from 'os';
 let TEST_ROOT: string;
 let AGENTS_DIR: string;
 let PROJECT_AGENTS_DIR: string | null;
+let META: { agents?: Record<string, string> };
 
 vi.mock('../src/lib/state.js', () => {
   return {
@@ -22,8 +23,8 @@ vi.mock('../src/lib/state.js', () => {
     get getPluginsDir() { return () => path.join(AGENTS_DIR, 'plugins'); },
     get getProjectAgentsDir() { return () => PROJECT_AGENTS_DIR; },
     get ensureAgentsDir() { return () => fs.mkdirSync(AGENTS_DIR, { recursive: true }); },
-    get readMeta() { return () => ({}); },
-    get writeMeta() { return () => {}; },
+    get readMeta() { return () => META; },
+    get writeMeta() { return (next: { agents?: Record<string, string> }) => { META = next; }; },
     get recordVersionResources() { return () => {}; },
     get clearVersionResources() { return () => {}; },
     get getVersionResources() { return () => null; },
@@ -74,6 +75,7 @@ vi.mock('../src/lib/shims.js', () => ({
 
 import {
   parseAgentSpec,
+  resolveAgentVersionTargets,
   compareVersions,
   getNewResources,
   hasNewResources,
@@ -86,6 +88,12 @@ import {
   type AvailableResources,
   type ResourceSelection,
 } from '../src/lib/versions.js';
+
+function installManagedVersion(agent: 'claude' | 'codex', version: string): void {
+  const binaryPath = getBinaryPath(agent, version);
+  fs.mkdirSync(path.dirname(binaryPath), { recursive: true });
+  fs.writeFileSync(binaryPath, '#!/bin/sh\nexit 0\n');
+}
 
 function emptyResources(): AvailableResources {
   return {
@@ -106,6 +114,7 @@ beforeEach(() => {
   TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-test-'));
   AGENTS_DIR = path.join(TEST_ROOT, '.agents');
   PROJECT_AGENTS_DIR = null;
+  META = {};
   fs.mkdirSync(AGENTS_DIR, { recursive: true });
 });
 
@@ -151,6 +160,48 @@ describe('parseAgentSpec', () => {
       expect(result).not.toBeNull();
       expect(result!.agent).toBe(agent);
     }
+  });
+});
+
+describe('resolveAgentVersionTargets', () => {
+  it('targets the newest installed version for a bare agent with no default', () => {
+    installManagedVersion('codex', '0.1.0');
+    installManagedVersion('codex', '0.2.0');
+
+    const result = resolveAgentVersionTargets('codex', ['codex']);
+
+    expect(result.selectedAgents).toEqual(['codex']);
+    expect(result.versionSelections.get('codex')).toEqual(['0.2.0']);
+  });
+
+  it('targets only the requested explicit version', () => {
+    installManagedVersion('claude', '2.0.0');
+    installManagedVersion('claude', '2.1.0');
+
+    const result = resolveAgentVersionTargets('claude@2.0.0', ['claude']);
+
+    expect(result.selectedAgents).toEqual(['claude']);
+    expect(result.versionSelections.get('claude')).toEqual(['2.0.0']);
+  });
+
+  it('resolves agent@default from the configured default version', () => {
+    installManagedVersion('claude', '2.0.0');
+    installManagedVersion('claude', '2.1.0');
+    META = { agents: { claude: '2.1.0' } };
+
+    const result = resolveAgentVersionTargets('claude@default', ['claude']);
+
+    expect(result.selectedAgents).toEqual(['claude']);
+    expect(result.versionSelections.get('claude')).toEqual(['2.1.0']);
+  });
+
+  it('keeps explicit versions when all-versions mode is enabled', () => {
+    installManagedVersion('claude', '2.0.0');
+    installManagedVersion('claude', '2.1.0');
+
+    const result = resolveAgentVersionTargets('claude@2.0.0', ['claude'], { allVersions: true });
+
+    expect(result.versionSelections.get('claude')).toEqual(['2.0.0']);
   });
 });
 

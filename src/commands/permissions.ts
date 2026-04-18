@@ -291,13 +291,34 @@ export function registerPermissionsCommands(program: Command): void {
               : selected.filter((s) => s !== '__all__');
           }
 
-          // Get agent and version selection
-          const result = await promptAgentVersionSelection(
-            PERMISSIONS_CAPABLE_AGENTS,
-            { skipPrompts }
-          );
+          let selectedAgents: AgentId[];
+          let versionSelections: Map<AgentId, string[]>;
 
-          if (result.selectedAgents.length === 0) {
+          if (options.agents) {
+            const result = resolveAgentVersionTargets(options.agents, PERMISSIONS_CAPABLE_AGENTS, {
+              allVersions: options.all,
+            });
+            selectedAgents = result.selectedAgents;
+            versionSelections = result.versionSelections;
+          } else if (options.all) {
+            selectedAgents = [...PERMISSIONS_CAPABLE_AGENTS];
+            versionSelections = new Map();
+            for (const agentId of selectedAgents) {
+              const versions = listInstalledVersions(agentId);
+              if (versions.length > 0) {
+                versionSelections.set(agentId, [...versions]);
+              }
+            }
+          } else {
+            const result = await promptAgentVersionSelection(
+              PERMISSIONS_CAPABLE_AGENTS,
+              { skipPrompts }
+            );
+            selectedAgents = result.selectedAgents;
+            versionSelections = result.versionSelections;
+          }
+
+          if (selectedAgents.length === 0) {
             console.log(chalk.yellow('\nNo agents selected.'));
             return;
           }
@@ -308,7 +329,7 @@ export function registerPermissionsCommands(program: Command): void {
             const installed = installedSets.find((s) => s.name === setName);
             if (!installed) continue;
 
-            for (const [agentId, versions] of result.versionSelections) {
+            for (const [agentId, versions] of versionSelections) {
               for (const version of versions) {
                 const versionHome = getVersionHomePath(agentId, version);
                 const applyResult = applyPermissionsToVersion(agentId, installed.set, versionHome, true);

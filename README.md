@@ -46,8 +46,8 @@ Other coding agents usually run in non-TTY shells. `agents` now supports that mo
 ```bash
 agents add codex@latest --yes
 agents use claude@2.1.79 --yes
-agents commands add --names review-pr,debug --agents codex
-agents skills add --names agents-cli --agents claude
+agents commands add --names review-pr,debug --agents codex@0.113.0
+agents skills add --names agents-cli --agents claude@default
 agents sessions view <session-id>
 agents routines view <job-name>
 ```
@@ -57,6 +57,7 @@ Rules for automation:
 - Pass explicit names or IDs instead of relying on pickers.
 - Use `--yes` when a command would otherwise ask for default sync or confirmation choices.
 - Use `--names` with `commands`, `skills`, `hooks`, `rules`, and `permissions` to install from central storage without a checkbox prompt.
+- Use `agent@version` or `agent@default` with `--agents` when you need an exact managed version.
 - Long `view` commands print directly in non-interactive shells instead of opening `less`.
 
 If a command still needs a human-only picker, it now exits with a plain-text hint that shows the matching non-interactive form.
@@ -135,6 +136,22 @@ agents pull                       # Restore on any machine
 agents fork                       # Fork the default repo to your GitHub
 agents pull --upstream             # Merge updates from upstream
 ```
+
+### Interactive PTY sessions
+
+Give your agents the ability to interact with full-screen terminal programs -- REPLs, TUIs, interactive installers, anything that needs a real terminal.
+
+```bash
+SID=$(agents pty start)                              # Start a session
+agents pty exec $SID "python3"                       # Launch Python REPL
+agents pty screen $SID                               # See what's on screen
+agents pty write $SID "print('hello')\n"             # Type into it
+agents pty screen $SID                               # See the result
+agents pty write $SID "exit()\n"                     # Quit
+agents pty stop $SID                                 # Clean up
+```
+
+A sidecar server holds PTY sessions alive between CLI calls. `screen` renders the terminal as clean text (no ANSI codes) using xterm-headless -- so agents see exactly what a human would see. Sessions auto-clean after 30 minutes of idle.
 
 ### Schedule agents as routines
 
@@ -227,6 +244,17 @@ agents exec <agent> <prompt>      # Run agent
 agents routines add <name>        # Schedule a job
 agents routines list              # Show all jobs
 agents daemon start               # Start scheduler
+
+# PTY sessions
+agents pty start                  # Start a PTY session (returns ID)
+agents pty exec <id> <command>    # Run a command in the session
+agents pty screen <id>            # Render terminal as clean text
+agents pty write <id> <input>     # Send keystrokes (\n \t \e \xHH)
+agents pty read <id>              # Read raw output
+agents pty signal <id> INT        # Send signal
+agents pty list                   # Show active sessions
+agents pty stop <id>              # Kill a session
+agents pty server status          # Check sidecar server
 ```
 
 ---

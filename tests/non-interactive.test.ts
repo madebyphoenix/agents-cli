@@ -97,6 +97,43 @@ describe('non-interactive CLI usage', () => {
     expect(fs.existsSync(targetPath)).toBe(true);
   });
 
+  it('syncs only the requested explicit version target', () => {
+    const home = makeTempHome();
+    tempHomes.push(home);
+    writeCentralCommand(home, 'README');
+    writeFakeManagedVersion(home, 'codex', '0.1.0', 'codex');
+    writeFakeManagedVersion(home, 'codex', '0.2.0', 'codex');
+
+    const result = runAgents(home, ['commands', 'add', '--names', 'README', '--agents', 'codex@0.2.0']);
+    const requestedPath = path.join(
+      home,
+      '.agents',
+      'versions',
+      'codex',
+      '0.2.0',
+      'home',
+      '.codex',
+      'prompts',
+      'README.md',
+    );
+    const untouchedPath = path.join(
+      home,
+      '.agents',
+      'versions',
+      'codex',
+      '0.1.0',
+      'home',
+      '.codex',
+      'prompts',
+      'README.md',
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Commands installed.');
+    expect(fs.existsSync(requestedPath)).toBe(true);
+    expect(fs.existsSync(untouchedPath)).toBe(false);
+  });
+
   it('uses defaults automatically for version switching in a non-interactive shell', () => {
     const home = makeTempHome();
     tempHomes.push(home);

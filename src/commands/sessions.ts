@@ -66,7 +66,7 @@ async function listAction(options: ListOptions): Promise<void> {
     spinner.stop();
 
     if (sessions.length === 0) {
-      console.log(chalk.gray(formatNoSessionsMessage(options.all)));
+      console.log(chalk.gray(formatNoSessionsMessage(options.all, false, options.project)));
       return;
     }
 
@@ -286,7 +286,7 @@ export function registerSessionsCommands(program: Command): void {
     .description('List and view agent sessions for the current directory by default')
     .option('--agent <agent>', 'Filter by agent (claude, codex, gemini)')
     .option('--all', 'Show sessions from every directory')
-    .option('--project <name>', 'Filter by project name')
+    .option('--project <name>', 'Filter by project name across all directories')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
     .action(async (options: ListOptions) => {
       await listAction(options);
@@ -297,7 +297,7 @@ export function registerSessionsCommands(program: Command): void {
     .description('List sessions for the current directory by default')
     .option('--agent <agent>', 'Filter by agent (claude, codex, gemini)')
     .option('--all', 'Show sessions from every directory')
-    .option('--project <name>', 'Filter by project name')
+    .option('--project <name>', 'Filter by project name across all directories')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
     .action(async (options: ListOptions) => {
       await listAction(options);
@@ -315,7 +315,15 @@ export function registerSessionsCommands(program: Command): void {
     });
 }
 
-function formatNoSessionsMessage(showAll: boolean | undefined, picker = false): string {
+function formatNoSessionsMessage(
+  showAll: boolean | undefined,
+  picker = false,
+  project?: string,
+): string {
+  const projectQuery = project?.trim();
+  if (projectQuery) {
+    return `No sessions found for project "${projectQuery}".`;
+  }
   if (showAll) return 'No sessions found.';
   const command = picker ? 'agents sessions view --all' : 'agents sessions --all';
   return `No sessions found for ${process.cwd()}. Run "${command}" to see sessions from every directory.`;

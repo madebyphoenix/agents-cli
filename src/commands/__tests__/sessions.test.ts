@@ -105,6 +105,49 @@ describe('agents sessions', () => {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
+
+  it('finds matching projects outside the current directory when --project is provided', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-project-'));
+
+    try {
+      writeUpdateCache(tempHome);
+
+      const workspaceDir = path.join(tempHome, 'work');
+      const swarmifyDir = path.join(workspaceDir, 'swarmify');
+      const agentsCliDir = path.join(workspaceDir, 'agents-cli');
+      const swarmifySessionId = '55555555-5555-4555-8555-555555555555';
+      const agentsCliSessionId = '66666666-6666-4666-8666-666666666666';
+
+      fs.mkdirSync(workspaceDir, { recursive: true });
+
+      writeClaudeSession(
+        tempHome,
+        'swarmify-test',
+        swarmifySessionId,
+        swarmifyDir,
+        'Inspect the swarmify session list',
+        '2026-04-17T19:35:30.000Z'
+      );
+      writeClaudeSession(
+        tempHome,
+        'agents-cli-test',
+        agentsCliSessionId,
+        agentsCliDir,
+        'Inspect the agents-cli session list',
+        '2026-04-17T19:36:30.000Z'
+      );
+
+      const result = runAgents(['sessions', '--project', 'agents-cli'], workspaceDir, tempHome);
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain(agentsCliSessionId.slice(0, 8));
+      expect(output).not.toContain(swarmifySessionId.slice(0, 8));
+      expect(output).not.toContain(`No sessions found for ${workspaceDir}`);
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('agents sessions view', () => {

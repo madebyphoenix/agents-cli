@@ -62,13 +62,17 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
   }
   saveIndex([...toSave.values()]);
 
+  const projectQuery = options?.project?.trim();
+
   // Filter by project (case-insensitive substring match)
-  if (options?.project) {
-    const query = options.project.toLowerCase();
+  if (projectQuery) {
+    const query = projectQuery.toLowerCase();
     sessions = sessions.filter(s => s.project?.toLowerCase().includes(query));
   }
 
-  if (!options?.all) {
+  // An explicit project search should scan across directories instead of
+  // intersecting with the default cwd-only scope.
+  if (!options?.all && !projectQuery) {
     const currentDir = normalizeCwd(options?.cwd || process.cwd());
     sessions = sessions.filter(s => normalizeCwd(s.cwd) === currentDir);
   }

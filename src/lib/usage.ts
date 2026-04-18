@@ -25,6 +25,7 @@ const CLAUDE_SCOPES = [
 ];
 const CLAUDE_KEYCHAIN_SERVICE = 'Claude Code-credentials';
 
+const COMPACT_BAR_LEN = 5;
 const USAGE_BAR_LEN = 10;
 const FULL = '\u2588';
 const EMPTY = '\u2591';
@@ -125,7 +126,9 @@ export function formatUsageSummary(
   }
 
   if (snapshot) {
-    const windows = snapshot.windows.map((window) => colorUsage(`${window.shortLabel}:${formatPercent(window.usedPercent)}%`, window.usedPercent));
+    const windows = snapshot.windows.map((window) =>
+      `${chalk.gray(window.shortLabel)} ${renderCompactUsageBar(window.usedPercent)}`
+    );
     if (windows.length > 0) {
       parts.push(windows.join(' '));
     }
@@ -493,9 +496,18 @@ function parseDateValue(value: unknown): Date | null {
 }
 
 function renderUsageBar(usedPercent: number): string {
-  const filled = Math.max(0, Math.min(USAGE_BAR_LEN, Math.round((usedPercent / 100) * USAGE_BAR_LEN)));
+  return renderBar(usedPercent, USAGE_BAR_LEN);
+}
+
+function renderCompactUsageBar(usedPercent: number): string {
+  return renderBar(usedPercent, COMPACT_BAR_LEN, usedPercent > 0 ? 1 : 0);
+}
+
+function renderBar(usedPercent: number, length: number, minimumVisible = 0): string {
+  const rounded = Math.round((usedPercent / 100) * length);
+  const filled = Math.max(minimumVisible, Math.max(0, Math.min(length, rounded)));
   const color = getUsageColor(usedPercent);
-  return color(FULL.repeat(filled)) + chalk.dim(EMPTY.repeat(USAGE_BAR_LEN - filled));
+  return color(FULL.repeat(filled)) + chalk.dim(EMPTY.repeat(length - filled));
 }
 
 function colorUsage(text: string, usedPercent: number): string {

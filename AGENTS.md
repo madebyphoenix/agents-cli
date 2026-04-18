@@ -57,6 +57,8 @@ src/
     exec.ts          # Agent execution (command building, spawning)
     routines.ts      # Scheduled job config
     runner.ts        # Job execution with sandboxing
+    pty-server.ts    # PTY sidecar server (unix socket, node-pty, xterm-headless)
+    pty-client.ts    # PTY client (auto-start server, IPC, escape parsing)
     session/         # Session discovery, parsing, rendering
       types.ts       # SessionEvent, SessionMeta, ViewMode
       discover.ts    # Find sessions across Claude/Codex/Gemini
@@ -123,6 +125,17 @@ agents exec <agent> <prompt> # Execute agent non-interactively
 # Automation
 agents routines              # Manage scheduled jobs
 agents daemon                # Manage the scheduler daemon
+
+# PTY sessions
+agents pty start             # Start interactive PTY session (returns ID)
+agents pty exec <id> <cmd>   # Run command (non-blocking, sentinel detection)
+agents pty screen <id>       # Render terminal as clean text (xterm-headless)
+agents pty write <id> <input> # Send keystrokes (\n \t \e \xHH)
+agents pty read <id>         # Read raw PTY output
+agents pty signal <id> INT   # Send signal to process
+agents pty list              # Show active sessions
+agents pty stop <id>         # Kill session
+agents pty server status     # Sidecar server on ~/.agents/pty.sock
 
 # Env
 agents pull                  # Sync from git repo
