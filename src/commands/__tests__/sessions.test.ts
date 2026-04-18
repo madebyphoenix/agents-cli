@@ -480,6 +480,132 @@ describe('agents sessions', () => {
   });
 });
 
+describe('session search improvements', () => {
+  it('P2: atomic index write leaves no .tmp file after success', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-p2-'));
+
+    try {
+      writeUpdateCache(tempHome);
+      const projectDir = path.join(tempHome, 'work', 'p2-test');
+      writeClaudeSession(tempHome, 'p2-test', 'aaaa1111-0000-4000-8000-000000000001', projectDir, 'atomic write test', '2026-04-18T10:00:00.000Z');
+
+      const result = runAgents(['sessions', '--all'], projectDir, tempHome);
+      expect(result.status).toBe(0);
+
+      const sessionsDir = path.join(tempHome, '.agents', 'sessions');
+      expect(fs.existsSync(path.join(sessionsDir, 'index.jsonl'))).toBe(true);
+      expect(fs.existsSync(path.join(sessionsDir, 'content_index.jsonl'))).toBe(true);
+      expect(fs.existsSync(path.join(sessionsDir, 'index.jsonl.tmp'))).toBe(false);
+      expect(fs.existsSync(path.join(sessionsDir, 'content_index.jsonl.tmp'))).toBe(false);
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('P3: --git-branch filter limits results to matching branch', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-p3-'));
+
+    try {
+      writeUpdateCache(tempHome);
+      const projectDir = path.join(tempHome, 'work', 'p3-test');
+      const mainId = 'bb220000-0000-4000-8000-000000000002';
+      const featureId = 'cc330000-0000-4000-8000-000000000003';
+
+      fs.mkdirSync(projectDir, { recursive: true });
+      const sessionsDir = path.join(tempHome, '.claude', 'projects', 'p3-test');
+      fs.mkdirSync(sessionsDir, { recursive: true });
+
+      // Session on main branch
+      fs.writeFileSync(
+        path.join(sessionsDir, `${mainId}.jsonl`),
+        JSON.stringify({ type: 'user', timestamp: '2026-04-18T10:00:00.000Z', cwd: projectDir, sessionId: mainId, version: '2.1.110', gitBranch: 'main', message: { role: 'user', content: 'work on main' } }) + '\n',
+        'utf-8'
+      );
+      // Session on feature branch
+      fs.writeFileSync(
+        path.join(sessionsDir, `${featureId}.jsonl`),
+        JSON.stringify({ type: 'user', timestamp: '2026-04-18T11:00:00.000Z', cwd: projectDir, sessionId: featureId, version: '2.1.110', gitBranch: 'feature/search', message: { role: 'user', content: 'work on feature' } }) + '\n',
+        'utf-8'
+      );
+
+      const result = runAgents(['sessions', '--all', '--git-branch', 'feature'], projectDir, tempHome);
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain(featureId.slice(0, 8));
+      expect(output).not.toContain(mainId.slice(0, 8));
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('P5: BM25 index is not rewritten when session set is unchanged', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-p5-'));
+
+    try {
+      writeUpdateCache(tempHome);
+      const projectDir = path.join(tempHome, 'work', 'p5-test');
+      writeClaudeSession(tempHome, 'p5-test', 'aaaa1111-0000-4000-8000-000000000004', projectDir, 'cache test prompt', '2026-04-18T10:00:00.000Z');
+
+      // First run: builds and writes the index
+      runAgents(['sessions', '--all'], projectDir, tempHome);
+
+      const indexPath = path.join(tempHome, '.agents', 'sessions', 'content_index.jsonl');
+      expect(fs.existsSync(indexPath)).toBe(true);
+      const mtime1 = fs.statSync(indexPath).mtimeMs;
+
+      // Second run with identical sessions: index must not be rewritten
+      runAgents(['sessions', '--all'], projectDir, tempHome);
+      const mtime2 = fs.statSync(indexPath).mtimeMs;
+
+      expect(mtime2).toBe(mtime1);
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('P6: multi-term query requires all terms to match', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-p6-'));
+
+    try {
+      writeUpdateCache(tempHome);
+      const projectDir = path.join(tempHome, 'work', 'p6-test');
+      const bothId = 'aaaa1111-0000-4000-8000-000000000005';
+      const oneId  = 'aaaa1111-0000-4000-8000-000000000006';
+
+      writeClaudeSession(tempHome, 'p6-test', bothId, projectDir, 'fix the authentication token handling', '2026-04-18T10:00:00.000Z');
+      writeClaudeSession(tempHome, 'p6-test', oneId, projectDir, 'update authentication flow only', '2026-04-18T11:00:00.000Z');
+
+      // Search for both terms: only bothId should match
+      const result = runAgents(['sessions', 'view', 'authentication token', '--transcript'], projectDir, tempHome);
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain('fix the authentication token handling');
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('P12: list table shows matched content terms when --project is active', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-p12-'));
+
+    try {
+      writeUpdateCache(tempHome);
+      const projectDir = path.join(tempHome, 'work', 'search-engine');
+      writeClaudeSession(tempHome, 'search-engine', 'aaaa1111-0000-4000-8000-000000000007', projectDir, 'implement full text search ranking', '2026-04-18T10:00:00.000Z');
+
+      const result = runAgents(['sessions', '--project', 'search'], projectDir, tempHome);
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain(']');
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('agents sessions view', () => {
   it('resolves explicit IDs across directories even when the default listing is scoped to cwd', () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-view-global-'));

@@ -19,6 +19,7 @@ const SESSION_AGENT_FILTER_HELP = `Filter by agent (${SESSION_AGENTS.join(', ')}
 interface SessionFilterOptions {
   agent?: string;
   project?: string;
+  gitBranch?: string;
   all?: boolean;
   since?: string;
   until?: string;
@@ -62,6 +63,7 @@ async function listAction(options: ListOptions): Promise<void> {
       all: options.all,
       cwd: process.cwd(),
       project: options.project,
+      gitBranch: options.gitBranch,
       limit,
       since: options.since,
       until: options.until,
@@ -82,6 +84,17 @@ async function listAction(options: ListOptions): Promise<void> {
       }
     }
 
+    // P12: populate _matchedTerms via content index when a text query is active
+    const listTextQuery = options.project?.trim();
+    let displaySessions = sessions;
+    if (listTextQuery && sessions.length > 0) {
+      const contentResults = searchContentIndex(sessions, listTextQuery);
+      displaySessions = sessions.map(s => {
+        const match = contentResults.get(s.id);
+        return match?._matchedTerms ? { ...s, _matchedTerms: match._matchedTerms } : s;
+      });
+    }
+
     // Print header
     console.log(
       chalk.gray(
@@ -96,7 +109,7 @@ async function listAction(options: ListOptions): Promise<void> {
       )
     );
 
-    for (const session of sessions) {
+    for (const session of displaySessions) {
       const agentColor = colorAgent(session.agent);
       const when = formatRelativeTime(session.timestamp);
       const project = session.project || '-';
@@ -105,6 +118,9 @@ async function listAction(options: ListOptions): Promise<void> {
         ? `${session.agent}@${session.version}`
         : session.agent;
       const topic = session.topic || '';
+      const matchBadge = session._matchedTerms?.length
+        ? chalk.yellow(` [${session._matchedTerms.join(', ')}]`)
+        : '';
 
       console.log(
         chalk.white(padRight(session.shortId, 10)) +
@@ -114,7 +130,8 @@ async function listAction(options: ListOptions): Promise<void> {
         chalk.gray(padRight(when, 14)) +
         chalk.gray(padRight(formatCompactMetric(session.messageCount), 8)) +
         chalk.gray(padRight(formatCompactMetric(session.tokenCount), 10)) +
-        chalk.white(truncate(topic, 40))
+        chalk.white(truncate(topic, 40)) +
+        matchBadge
       );
     }
 
@@ -266,13 +283,12 @@ function filterSessionsByQuery(
   return sessions
     .map(session => ({ session, score: scoreSessionQuery(session, terms) }))
     .filter(entry => {
-      // Include if scored by topic/project/etc, or matched by content search
+      // Metadata scoring already requires ALL terms to match (returns 0 on any miss)
       if (entry.score > 0) return true;
+      // P6: AND semantics — every query term must appear in the content match list
       const contentMatch = contentIndex.get(entry.session.id);
-      if (contentMatch && contentMatch._matchedTerms && contentMatch._matchedTerms.length > 0) {
-        return true;
-      }
-      return false;
+      if (!contentMatch?._matchedTerms?.length) return false;
+      return terms.every(t => contentMatch._matchedTerms!.includes(t));
     })
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
@@ -305,6 +321,7 @@ function scoreSessionQuery(session: SessionMeta, terms: string[]): number {
     const cwd = session.cwd?.toLowerCase() || '';
     const agent = session.agent.toLowerCase();
     const version = session.version?.toLowerCase() || '';
+    const gitBranch = session.gitBranch?.toLowerCase() || '';
 
     let termScore = 0;
     if (exactId) termScore = 1000;
@@ -312,11 +329,13 @@ function scoreSessionQuery(session: SessionMeta, terms: string[]): number {
     else if (topic.startsWith(term)) termScore = 700;
     else if (project.startsWith(term)) termScore = 600;
     else if (account.startsWith(term)) termScore = 550;
+    else if (gitBranch.startsWith(term)) termScore = 525;
     else if (agent.startsWith(term) || version.startsWith(term)) termScore = 500;
     else if (topic.includes(term)) termScore = 400;
     else if (project.includes(term)) termScore = 300;
     else if (account.includes(term)) termScore = 250;
     else if (cwd.includes(term)) termScore = 200;
+    else if (gitBranch.includes(term)) termScore = 175;
     else if (version.includes(term) || agent.includes(term)) termScore = 150;
     else return 0;
 
@@ -342,6 +361,7 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
       all: Boolean(idQuery) || options.all,
       cwd: process.cwd(),
       project: options.project,
+      gitBranch: options.gitBranch,
       limit: 5000,
       since: options.since,
       until: options.until,
@@ -451,6 +471,7 @@ export function registerSessionsCommands(program: Command): void {
     .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
+    .option('--git-branch <branch>', 'Filter by git branch name (substring match)')
     .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
@@ -464,6 +485,7 @@ export function registerSessionsCommands(program: Command): void {
     .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
+    .option('--git-branch <branch>', 'Filter by git branch name (substring match)')
     .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
@@ -477,6 +499,7 @@ export function registerSessionsCommands(program: Command): void {
     .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
+    .option('--git-branch <branch>', 'Filter by git branch name (substring match)')
     .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('--transcript', 'Show full conversation transcript')

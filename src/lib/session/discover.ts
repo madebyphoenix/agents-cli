@@ -20,6 +20,7 @@ const CONTENT_INDEX_PATH = path.join(SESSIONS_DIR, 'content_index.jsonl');
 export interface DiscoverOptions {
   agent?: SessionAgentId;
   project?: string;
+  gitBranch?: string;
   all?: boolean;
   cwd?: string;
   limit?: number;
@@ -98,9 +99,23 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
   }
   saveIndex([...toSave.values()]);
 
-  // Build BM25 content index for all discovered sessions
-  const bm25 = buildBM25Index(sessions);
-  saveBM25Index(bm25);
+  // P9: Apply time range filters BEFORE building the BM25 index so only
+  // in-range sessions are indexed (avoids wasted work on out-of-scope docs).
+  if (options?.since || options?.until) {
+    const sinceMs = options.since ? parseTimeFilter(options.since) : 0;
+    const untilMs = options.until ? new Date(options.until).getTime() : Infinity;
+    sessions = sessions.filter(s => {
+      const ts = new Date(s.timestamp).getTime();
+      return ts >= sinceMs && ts <= untilMs;
+    });
+  }
+
+  // P5: Skip BM25 rebuild when the session set has not changed.
+  const sessionsHash = computeSessionsHash(sessions);
+  if (sessionsHash !== readBM25IndexHash()) {
+    const bm25 = buildBM25Index(sessions);
+    saveBM25Index(bm25, sessionsHash);
+  }
 
   const projectQuery = options?.project?.trim();
 
@@ -110,14 +125,10 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
     sessions = sessions.filter(s => s.project?.toLowerCase().includes(query));
   }
 
-  // Apply time range filters
-  if (options?.since || options?.until) {
-    const sinceMs = options.since ? parseTimeFilter(options.since) : 0;
-    const untilMs = options.until ? new Date(options.until).getTime() : Infinity;
-    sessions = sessions.filter(s => {
-      const ts = new Date(s.timestamp).getTime();
-      return ts >= sinceMs && ts <= untilMs;
-    });
+  // P3: Filter by git branch (case-insensitive substring match)
+  if (options?.gitBranch) {
+    const branchQuery = options.gitBranch.toLowerCase();
+    sessions = sessions.filter(s => s.gitBranch?.toLowerCase().includes(branchQuery));
   }
 
   // An explicit project search should scan across directories instead of
@@ -194,7 +205,9 @@ function saveIndex(sessions: SessionMeta[]): void {
       seen.add(s.id);
       lines.push(JSON.stringify(s));
     }
-    fs.writeFileSync(INDEX_PATH, lines.join('\n') + '\n', 'utf-8');
+    const tmp = INDEX_PATH + '.tmp';
+    fs.writeFileSync(tmp, lines.join('\n') + '\n', 'utf-8');
+    fs.renameSync(tmp, INDEX_PATH);
   } catch (err: any) {
     console.error(`Warning: Could not save session cache: ${err.message}`);
   }
@@ -207,6 +220,29 @@ function saveIndex(sessions: SessionMeta[]): void {
 const BM25_K1 = 1.2;
 const BM25_B = 0.75;
 const BM25_INDEX_VERSION = 2;
+
+let _cachedBM25Index: BM25Index | null | undefined;
+
+export function computeSessionsHash(sessions: SessionMeta[]): string {
+  const pairs = sessions
+    .map(s => `${s.id}:${s.timestamp}`)
+    .sort()
+    .join('\n');
+  return crypto.createHash('sha256').update(pairs).digest('hex').slice(0, 16);
+}
+
+function readBM25IndexHash(): string | undefined {
+  if (!fs.existsSync(CONTENT_INDEX_PATH)) return undefined;
+  try {
+    const content = fs.readFileSync(CONTENT_INDEX_PATH, 'utf-8');
+    const firstLine = content.split('\n')[0];
+    if (!firstLine) return undefined;
+    const header = JSON.parse(firstLine);
+    return typeof header?.h === 'string' ? header.h : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface BM25Index {
   N: number;
@@ -262,11 +298,11 @@ export function buildBM25Index(sessions: SessionMeta[]): BM25Index {
   return { N, avgdl, docLengths, postings };
 }
 
-function saveBM25Index(index: BM25Index): void {
+function saveBM25Index(index: BM25Index, sessionsHash?: string): void {
   try {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
     const lines: string[] = [];
-    lines.push(JSON.stringify({ v: BM25_INDEX_VERSION, N: index.N, avgdl: index.avgdl }));
+    lines.push(JSON.stringify({ v: BM25_INDEX_VERSION, N: index.N, avgdl: index.avgdl, h: sessionsHash }));
     for (const [sid, len] of index.docLengths) {
       lines.push(JSON.stringify({ d: sid, l: len }));
     }
@@ -275,11 +311,15 @@ function saveBM25Index(index: BM25Index): void {
       for (const [sid, tf] of termPostings) p.push([sid, tf]);
       lines.push(JSON.stringify({ t: term, p }));
     }
-    fs.writeFileSync(CONTENT_INDEX_PATH, lines.join('\n') + '\n', 'utf-8');
+    const tmp = CONTENT_INDEX_PATH + '.tmp';
+    fs.writeFileSync(tmp, lines.join('\n') + '\n', 'utf-8');
+    fs.renameSync(tmp, CONTENT_INDEX_PATH);
+    _cachedBM25Index = index;
   } catch { /* non-fatal */ }
 }
 
 function loadBM25Index(): BM25Index | null {
+  if (_cachedBM25Index !== undefined) return _cachedBM25Index;
   if (!fs.existsSync(CONTENT_INDEX_PATH)) return null;
   let content: string;
   try {
@@ -325,6 +365,7 @@ function loadBM25Index(): BM25Index | null {
       index.postings.set(entry.t, termPostings);
     }
   }
+  _cachedBM25Index = index;
   return index;
 }
 

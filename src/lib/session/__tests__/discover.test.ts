@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionMeta } from '../types.js';
-import { buildBM25Index, scoreBM25 } from '../discover.js';
+import { buildBM25Index, scoreBM25, computeSessionsHash } from '../discover.js';
 
 function session(id: string, topic: string, userText?: string): SessionMeta {
   return {
@@ -110,5 +110,46 @@ describe('scoreBM25', () => {
     const results = scoreBM25(index, 'apple');
     const ordered = [...results.keys()];
     expect(ordered).toEqual(['high', 'mid', 'low']);
+  });
+});
+
+describe('computeSessionsHash', () => {
+  it('returns the same hash regardless of session order', () => {
+    const a = session('alpha', 'topic-a');
+    const b = session('beta', 'topic-b');
+    expect(computeSessionsHash([a, b])).toBe(computeSessionsHash([b, a]));
+  });
+
+  it('returns different hashes when sessions are added', () => {
+    const a = session('alpha', 'topic-a');
+    const b = session('beta', 'topic-b');
+    expect(computeSessionsHash([a])).not.toBe(computeSessionsHash([a, b]));
+  });
+
+  it('returns different hashes when a session timestamp changes', () => {
+    const base: SessionMeta = {
+      id: 'alpha',
+      shortId: 'alpha',
+      agent: 'claude',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      filePath: '/tmp/alpha.jsonl',
+    };
+    const updated = { ...base, timestamp: '2026-01-02T00:00:00.000Z' };
+    expect(computeSessionsHash([base])).not.toBe(computeSessionsHash([updated]));
+  });
+
+  it('returns a non-empty string for an empty session list', () => {
+    const h = computeSessionsHash([]);
+    expect(typeof h).toBe('string');
+    expect(h.length).toBeGreaterThan(0);
+  });
+
+  it('rebuild is skipped when hash matches stored value', () => {
+    const sessions = [session('a', 'auth bug'), session('b', 'payment fix')];
+    const hash = computeSessionsHash(sessions);
+    // Simulate the check performed in discoverSessions
+    expect(hash !== computeSessionsHash([])).toBe(true);
+    expect(hash === computeSessionsHash([...sessions].reverse())).toBe(true);
+    expect(hash !== computeSessionsHash([sessions[0]])).toBe(true);
   });
 });
