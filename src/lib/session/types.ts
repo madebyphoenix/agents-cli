@@ -32,6 +32,8 @@ export interface SessionMeta {
   topic?: string;
   /** Inverted index: term -> frequency across all user messages (stored as JSON object) */
   _contentIndex?: Record<string, number>;
+  /** Tokenized user message terms for content search (internal) */
+  _userTerms?: string[];
   /** Terms that matched the current search query */
   _matchedTerms?: string[];
 }

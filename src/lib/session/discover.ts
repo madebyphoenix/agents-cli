@@ -37,6 +37,8 @@ interface ClaudeSessionScan {
   topic?: string;
   messageCount: number;
   tokenCount?: number;
+  /** Tokenized user message terms (for content search index) */
+  userTerms?: string[];
 }
 
 interface CodexSessionScan {
@@ -48,6 +50,8 @@ interface CodexSessionScan {
   topic?: string;
   messageCount: number;
   tokenCount?: number;
+  /** Tokenized user message terms (for content search index) */
+  userTerms?: string[];
 }
 
 const cachedAgentVersions = new Map<SessionAgentId, Promise<string | undefined>>();
@@ -95,7 +99,7 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
   saveIndex([...toSave.values()]);
 
   // Build content index for all discovered sessions
-  const contentIndex = buildContentIndex(sessions);
+  const contentIndex = await buildContentIndex(sessions);
   saveContentIndex(contentIndex);
 
   const projectQuery = options?.project?.trim();
@@ -200,7 +204,7 @@ function saveIndex(sessions: SessionMeta[]): void {
 // Content index (inverted term -> session terms)
 // ---------------------------------------------------------------------------
 
-function buildContentIndex(sessions: SessionMeta[]): Map<string, Set<string>> {
+async function buildContentIndex(sessions: SessionMeta[]): Promise<Map<string, Set<string>>> {
   const index = new Map<string, Set<string>>();
   for (const session of sessions) {
     const terms = extractSessionTerms(session);
@@ -219,6 +223,7 @@ function extractSessionTerms(session: SessionMeta): string[] {
   if (session.cwd) textParts.push(session.cwd);
   if (session.gitBranch) textParts.push(session.gitBranch);
   if (session.account) textParts.push(session.account);
+  if (session._userTerms) textParts.push(session._userTerms.join('\n'));
   return tokenizeText(textParts.join('\n'));
 }
 
@@ -425,6 +430,7 @@ async function readClaudeMeta(filePath: string, sessionId: string, account?: str
       topic: scan.topic,
       messageCount: scan.messageCount,
       tokenCount: scan.tokenCount,
+      _userTerms: scan.userTerms?.flatMap(splitLines),
     };
   }
 
@@ -440,6 +446,7 @@ async function readClaudeMeta(filePath: string, sessionId: string, account?: str
     messageCount: scan.messageCount,
     tokenCount: scan.tokenCount,
     topic: scan.topic,
+    _userTerms: scan.userTerms?.flatMap(splitLines),
   };
 }
 
@@ -545,6 +552,7 @@ async function readCodexMeta(
     messageCount: scan.messageCount,
     tokenCount: scan.tokenCount,
     account,
+    _userTerms: scan.userTerms?.flatMap(splitLines),
   };
 }
 
@@ -633,12 +641,14 @@ function readGeminiMeta(
   let messageCount = 0;
   let tokenCount = 0;
   let sawTokenCount = false;
+  const userTerms: string[] = [];
 
   for (const message of messages) {
     if (message.type === 'user') {
       const text = extractGeminiMessageText(message.content);
       if (text) {
         messageCount++;
+        userTerms.push(text);
         if (!topic) topic = extractSessionTopic(text);
       }
     } else if (message.type === 'gemini') {
@@ -666,6 +676,7 @@ function readGeminiMeta(
     topic,
     messageCount,
     tokenCount: sawTokenCount ? tokenCount : undefined,
+    _userTerms: userTerms.length > 0 ? userTerms : undefined,
   };
 }
 
@@ -942,6 +953,7 @@ async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
   let tokenCount = 0;
   let sawTokenCount = false;
   const seenAssistantIds = new Set<string>();
+  const userTexts: string[] = [];
 
   try {
     for await (const line of rl) {
@@ -965,6 +977,7 @@ async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
         const text = extractClaudeUserText(parsed);
         if (text) {
           messageCount++;
+          userTexts.push(text);
           if (!topic) topic = extractSessionTopic(text);
         }
         continue;
@@ -1002,6 +1015,7 @@ async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
     topic,
     messageCount,
     tokenCount: sawTokenCount ? tokenCount : undefined,
+    userTerms: userTexts.length > 0 ? userTexts : undefined,
   };
 }
 
@@ -1017,6 +1031,7 @@ async function scanCodexSession(filePath: string): Promise<CodexSessionScan> {
   let topic: string | undefined;
   let messageCount = 0;
   let tokenCount: number | undefined;
+  const userTexts: string[] = [];
 
   try {
     for await (const line of rl) {
@@ -1046,7 +1061,10 @@ async function scanCodexSession(filePath: string): Promise<CodexSessionScan> {
         const text = extractCodexMessageText(parsed.payload.content, role);
         if (!text) continue;
         messageCount++;
-        if (role === 'user' && !topic) topic = extractSessionTopic(text);
+        if (role === 'user') {
+          userTexts.push(text);
+          if (!topic) topic = extractSessionTopic(text);
+        }
         continue;
       }
 
@@ -1069,6 +1087,7 @@ async function scanCodexSession(filePath: string): Promise<CodexSessionScan> {
     topic,
     messageCount,
     tokenCount,
+    userTerms: userTexts.length > 0 ? userTexts : undefined,
   };
 }
 
@@ -1175,6 +1194,10 @@ function extractClaudeUserText(parsed: any): string | undefined {
 
 function isLocalCommandMessage(text: string): boolean {
   return /<local-command-caveat>|<bash-(input|stdout|stderr)>/i.test(text);
+}
+
+function splitLines(text: string): string[] {
+  return text.split('\n').map(l => l.trim()).filter(Boolean);
 }
 
 function getClaudeUsageTotal(usage: any): number | null {

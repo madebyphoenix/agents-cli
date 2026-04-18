@@ -261,15 +261,38 @@ function filterSessionsByQuery(
   if (!trimmed) return sessions;
 
   const terms = trimmed.split(/\s+/).filter(Boolean);
+  const contentIndex = searchContentIndex(sessions, trimmed);
 
   return sessions
     .map(session => ({ session, score: scoreSessionQuery(session, terms) }))
-    .filter(entry => entry.score > 0)
+    .filter(entry => {
+      // Include if scored by topic/project/etc, or matched by content search
+      if (entry.score > 0) return true;
+      const contentMatch = contentIndex.get(entry.session.id);
+      if (contentMatch && contentMatch._matchedTerms && contentMatch._matchedTerms.length > 0) {
+        return true;
+      }
+      return false;
+    })
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
+      const cmA = contentIndex.get(a.session.id);
+      const cmB = contentIndex.get(b.session.id);
+      if (cmA && cmB && cmA._matchedTerms && cmB._matchedTerms) {
+        if (cmB._matchedTerms.length !== cmA._matchedTerms.length) {
+          return cmB._matchedTerms.length - cmA._matchedTerms.length;
+        }
+      }
       return new Date(b.session.timestamp).getTime() - new Date(a.session.timestamp).getTime();
     })
-    .map(entry => entry.session);
+    .map(entry => {
+      // Attach content match terms for highlighting
+      const cm = contentIndex.get(entry.session.id);
+      if (cm && cm._matchedTerms) {
+        return { ...cm };
+      }
+      return entry.session;
+    });
 }
 
 function scoreSessionQuery(session: SessionMeta, terms: string[]): number {
