@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { spawnSync } from 'child_process';
 
 const repoRoot = process.cwd();
@@ -133,6 +134,62 @@ function writeCodexSession(
   ];
 
   fs.writeFileSync(filePath, lines.join('\n') + '\n', 'utf-8');
+}
+
+function writeGeminiSession(
+  tempHome: string,
+  sessionId: string,
+  cwd: string,
+  prompt: string,
+  timestamp: string,
+  version = '0.29.5',
+): void {
+  const versionHome = path.join(tempHome, '.agents', 'versions', 'gemini', version, 'home');
+  const geminiHome = path.join(versionHome, '.gemini');
+  const projectHash = crypto.createHash('sha256').update(cwd).digest('hex');
+  const chatsDir = path.join(geminiHome, 'tmp', projectHash, 'chats');
+
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.mkdirSync(chatsDir, { recursive: true });
+  fs.mkdirSync(path.dirname(path.join(tempHome, '.gemini')), { recursive: true });
+
+  const activeGeminiHome = path.join(tempHome, '.gemini');
+  if (!fs.existsSync(activeGeminiHome)) {
+    fs.symlinkSync(geminiHome, activeGeminiHome);
+  }
+
+  fs.writeFileSync(
+    path.join(geminiHome, 'projects.json'),
+    JSON.stringify({ projects: [cwd] }),
+    'utf-8'
+  );
+
+  fs.writeFileSync(
+    path.join(chatsDir, `session-${timestamp.replace(/[:.]/g, '-')}-${sessionId.slice(0, 8)}.json`),
+    JSON.stringify({
+      sessionId,
+      projectHash,
+      startTime: timestamp,
+      lastUpdated: timestamp,
+      messages: [
+        {
+          id: `${sessionId}-user`,
+          timestamp,
+          type: 'user',
+          content: [{ text: prompt }],
+        },
+        {
+          id: `${sessionId}-assistant`,
+          timestamp,
+          type: 'gemini',
+          content: 'Investigating now.',
+          model: 'gemini-3-flash-preview',
+          tokens: { total: 1234 },
+        },
+      ],
+    }, null, 2),
+    'utf-8'
+  );
 }
 
 function runAgents(args: string[], cwd: string, home: string) {
@@ -367,6 +424,56 @@ describe('agents sessions', () => {
       expect(output).toContain(prompt);
       expect(output).not.toContain('Collaboration Mode: Default');
       expect(output).not.toContain('# AGENTS.md instructions');
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('shows Codex CLI versions in the agent column', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-codex-version-'));
+
+    try {
+      writeUpdateCache(tempHome);
+
+      const projectDir = path.join(tempHome, 'work', 'agents-cli');
+      writeCodexSession(
+        tempHome,
+        'abababab-abab-4bab-8bab-abababababab',
+        projectDir,
+        'Show codex versions in the session list',
+        '2026-04-17T19:42:30.000Z'
+      );
+
+      const result = runAgents(['sessions', '--agent', 'codex', '--all'], projectDir, tempHome);
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain('codex@0.113.0');
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('shows Gemini CLI versions in the agent column when sessions come from a managed version home', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-gemini-version-'));
+
+    try {
+      writeUpdateCache(tempHome);
+
+      const projectDir = path.join(tempHome, 'work', 'agents-cli');
+      writeGeminiSession(
+        tempHome,
+        'f0f0f0f0-f0f0-4f0f-8f0f-f0f0f0f0f0f0',
+        projectDir,
+        'Show gemini versions in the session list',
+        '2026-04-17T19:43:30.000Z'
+      );
+
+      const result = runAgents(['sessions', '--agent', 'gemini', '--all'], projectDir, tempHome);
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain('gemini@0.29.5');
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }

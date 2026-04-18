@@ -14,6 +14,8 @@ import { renderMarkdown } from '../lib/markdown.js';
 import { colorAgent } from '../lib/agents.js';
 import { isInteractiveTerminal, isPromptCancelled, requireInteractiveSelection } from './utils.js';
 
+const SESSION_AGENT_FILTER_HELP = `Filter by agent (${SESSION_AGENTS.join(', ')})`;
+
 interface SessionFilterOptions {
   agent?: string;
   project?: string;
@@ -395,7 +397,7 @@ export function registerSessionsCommands(program: Command): void {
   const sessionsCmd = program
     .command('sessions')
     .description('List and view agent sessions for the current directory by default')
-    .option('--agent <agent>', 'Filter by agent (claude, codex, gemini)')
+    .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
@@ -406,7 +408,7 @@ export function registerSessionsCommands(program: Command): void {
   sessionsCmd
     .command('list')
     .description('List sessions for the current directory by default')
-    .option('--agent <agent>', 'Filter by agent (claude, codex, gemini)')
+    .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
@@ -417,7 +419,7 @@ export function registerSessionsCommands(program: Command): void {
   sessionsCmd
     .command('view [id]')
     .description('View a session by ID or search query (picker defaults to live search)')
-    .option('--agent <agent>', 'Filter by agent (claude, codex, gemini)')
+    .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
     .option('--transcript', 'Show full conversation transcript')

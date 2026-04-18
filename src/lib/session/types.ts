@@ -30,6 +30,10 @@ export interface SessionMeta {
   version?: string;
   account?: string;
   topic?: string;
+  /** Inverted index: term -> frequency across all user messages */
+  _contentIndex?: Map<string, number>;
+  /** Terms that matched the current search query */
+  _matchedTerms?: string[];
 }
 
 export type ViewMode = 'transcript' | 'summary' | 'trace' | 'json';

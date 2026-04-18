@@ -5,6 +5,9 @@ import * as crypto from 'crypto';
 import * as readline from 'readline';
 import { execSync } from 'child_process';
 import type { SessionAgentId, SessionMeta } from './types.js';
+import type { AgentId } from '../types.js';
+import { getCliVersion } from '../agents.js';
+import { getConfigSymlinkVersion } from '../shims.js';
 import { SESSION_AGENTS } from './types.js';
 import { extractSessionTopic } from './prompt.js';
 
@@ -41,6 +44,8 @@ interface CodexSessionScan {
   messageCount: number;
   tokenCount?: number;
 }
+
+const cachedAgentVersions = new Map<SessionAgentId, Promise<string | undefined>>();
 
 /**
  * Discover sessions across all installed agents, versions, and backups.
@@ -406,6 +411,7 @@ async function discoverCodexSessions(): Promise<SessionMeta[]> {
   const sessions: SessionMeta[] = [];
   const seen = new Set<string>();
   const account = getCodexAccount();
+  const currentVersion = await getCurrentAgentVersion('codex');
   let skipped = 0;
 
   for (const sessionsDir of getAgentSessionDirs('codex', 'sessions')) {
@@ -413,7 +419,7 @@ async function discoverCodexSessions(): Promise<SessionMeta[]> {
 
     for (const filePath of jsonlFiles) {
       try {
-        const meta = await readCodexMeta(filePath, account);
+        const meta = await readCodexMeta(filePath, account, currentVersion);
         if (meta && !seen.has(meta.id)) {
           seen.add(meta.id);
           sessions.push(meta);
@@ -429,7 +435,11 @@ async function discoverCodexSessions(): Promise<SessionMeta[]> {
   return sessions;
 }
 
-async function readCodexMeta(filePath: string, account?: string): Promise<SessionMeta | null> {
+async function readCodexMeta(
+  filePath: string,
+  account?: string,
+  currentVersion?: string,
+): Promise<SessionMeta | null> {
   const scan = await scanCodexSession(filePath);
   const sessionId = scan.sessionId || '';
   if (!sessionId) return null;
@@ -444,7 +454,7 @@ async function readCodexMeta(filePath: string, account?: string): Promise<Sessio
     cwd,
     filePath,
     gitBranch: scan.gitBranch,
-    version: scan.version,
+    version: resolveSessionVersion('codex', filePath, scan.version, currentVersion),
     topic: scan.topic,
     messageCount: scan.messageCount,
     tokenCount: scan.tokenCount,
@@ -460,6 +470,7 @@ async function discoverGeminiSessions(): Promise<SessionMeta[]> {
   const projectMap = buildGeminiProjectMap();
   const sessions: SessionMeta[] = [];
   const seen = new Set<string>();
+  const currentVersion = await getCurrentAgentVersion('gemini');
   let skipped = 0;
 
   for (const tmpDir of getAgentSessionDirs('gemini', 'tmp')) {
@@ -484,7 +495,7 @@ async function discoverGeminiSessions(): Promise<SessionMeta[]> {
       for (const file of chatFiles) {
         const filePath = path.join(chatsDir, file);
         try {
-          const meta = readGeminiMeta(filePath, hashDir, projectMap);
+          const meta = readGeminiMeta(filePath, hashDir, projectMap, currentVersion);
           if (meta && !seen.has(meta.id)) {
             seen.add(meta.id);
             sessions.push(meta);
@@ -504,7 +515,8 @@ async function discoverGeminiSessions(): Promise<SessionMeta[]> {
 function readGeminiMeta(
   filePath: string,
   hashDir: string,
-  projectMap: Map<string, { name: string; path: string }>
+  projectMap: Map<string, { name: string; path: string }>,
+  currentVersion?: string,
 ): SessionMeta | null {
   let session: any;
   try {
@@ -516,6 +528,11 @@ function readGeminiMeta(
   const sessionId = typeof session.sessionId === 'string' ? session.sessionId : '';
   const startTime = typeof session.startTime === 'string' ? session.startTime : '';
   const projectHash = typeof session.projectHash === 'string' ? session.projectHash : '';
+  const embeddedVersion = typeof session.version === 'string'
+    ? session.version
+    : typeof session.cliVersion === 'string'
+      ? session.cliVersion
+      : undefined;
   if (!sessionId) return null;
 
   // Resolve project name from hash
@@ -559,6 +576,7 @@ function readGeminiMeta(
     project,
     cwd,
     filePath,
+    version: resolveSessionVersion('gemini', filePath, embeddedVersion, currentVersion),
     topic,
     messageCount,
     tokenCount: sawTokenCount ? tokenCount : undefined,
@@ -651,6 +669,7 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
   if (!fs.existsSync(OPENCODE_DB)) return [];
 
   const account = getOpenCodeAccount();
+  const currentVersion = await getCurrentAgentVersion('opencode');
 
   try {
     // Query sessions. time_created is millisecond epoch. Limit to 200 most recent.
@@ -713,7 +732,7 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
         project: directory ? path.basename(directory) : undefined,
         cwd: directory || undefined,
         filePath: `${OPENCODE_DB}#${id}`,
-        version: version || undefined,
+        version: resolveSessionVersion('opencode', OPENCODE_DB, version || undefined, currentVersion),
         account,
         topic,
         messageCount: Number.isNaN(messageCount) ? undefined : messageCount,
@@ -744,6 +763,8 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
     return sessions;
   }
 
+  const currentVersion = await getCurrentAgentVersion('openclaw');
+
   // Discover active channels
   // Format: "- Telegram default (Jeff): enabled, configured, running, out:2h ago, mode:polling, token:config"
   try {
@@ -766,6 +787,7 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
         agent: 'openclaw',
         timestamp: new Date().toISOString(),
         project: name,
+        version: currentVersion,
         filePath: '',
       });
     }
@@ -810,6 +832,7 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
         timestamp: new Date().toISOString(),
         project: `${jobName} (${agentId || 'unknown'})`,
         cwd: status,
+        version: currentVersion,
         filePath: '',
       });
     }
@@ -926,7 +949,7 @@ async function scanCodexSession(filePath: string): Promise<CodexSessionScan> {
         timestamp = payload.timestamp || parsed.timestamp || timestamp;
         cwd = payload.cwd || cwd;
         gitBranch = payload.git?.branch || gitBranch;
-        version = payload.version || version;
+        version = payload.cli_version || payload.version || version;
         continue;
       }
 
@@ -1096,6 +1119,54 @@ function extractCodexMessageText(contentBlocks: any, role: 'user' | 'assistant')
     });
 
   return text || undefined;
+}
+
+function normalizeVersion(version?: string | null): string | undefined {
+  const trimmed = version?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function extractVersionFromManagedPath(agent: SessionAgentId, sourcePath?: string): string | undefined {
+  if (!sourcePath) return undefined;
+
+  const candidates = [sourcePath, safeRealpathSync(sourcePath) || ''];
+  const marker = `/.agents/versions/${agent}/`;
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const normalized = candidate.split(path.sep).join('/');
+    const start = normalized.indexOf(marker);
+    if (start === -1) continue;
+    const version = normalized.slice(start + marker.length).split('/')[0];
+    if (version) return version;
+  }
+
+  return undefined;
+}
+
+async function getCurrentAgentVersion(agent: SessionAgentId): Promise<string | undefined> {
+  const cached = cachedAgentVersions.get(agent);
+  if (cached) return cached;
+
+  const promise = (async () => {
+    const symlinkVersion = normalizeVersion(getConfigSymlinkVersion(agent as AgentId));
+    if (symlinkVersion) return symlinkVersion;
+    return normalizeVersion(await getCliVersion(agent as AgentId));
+  })();
+
+  cachedAgentVersions.set(agent, promise);
+  return promise;
+}
+
+function resolveSessionVersion(
+  agent: SessionAgentId,
+  sourcePath: string | undefined,
+  embeddedVersion?: string,
+  currentVersion?: string,
+): string | undefined {
+  return normalizeVersion(embeddedVersion)
+    || extractVersionFromManagedPath(agent, sourcePath)
+    || normalizeVersion(currentVersion);
 }
 
 function getCodexTokenCount(totalTokenUsage: any): number | null {
