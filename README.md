@@ -79,6 +79,31 @@ If a command still needs a human-only picker, it now exits with a plain-text hin
 
 ---
 
+## Search sessions fast
+
+Interactive terminals now get a live-search picker for sessions:
+
+```bash
+agents sessions view
+agents sessions --agent codex
+agents sessions --project agents-cli
+agents sessions view --agent gemini "session discovery"
+```
+
+What you can type into the picker:
+
+- Session ID or short ID
+- Prompt text / topic text
+- Project name
+- Account email
+- Agent name or version
+
+The shared `Agent` column also shows the resolved agent version when it is known, so filtered lists read like `claude@2.1.110`, `codex@0.113.0`, `gemini@0.29.5`, and `opencode@1.2.6`.
+
+Use `agents sessions view <id>` in non-interactive shells when you already know the session you want.
+
+---
+
 ## Pin agent versions per project
 
 ```bash
@@ -256,6 +281,9 @@ agents drive status                # Show drive state
 
 # Execution
 agents exec <agent> <prompt>      # Run agent
+agents sessions view <id>         # Read a session by exact ID
+agents sessions --agent codex     # Interactive filtered session search
+agents sessions --project agents  # Interactive project-scoped session search
 agents routines add <name>        # Schedule a job
 agents routines list              # Show all jobs
 agents daemon start               # Start scheduler

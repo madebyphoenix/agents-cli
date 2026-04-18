@@ -7,7 +7,7 @@ import ora from 'ora';
 import { search } from '@inquirer/prompts';
 import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types.js';
 import { SESSION_AGENTS } from '../lib/session/types.js';
-import { discoverSessions, resolveSessionById } from '../lib/session/discover.js';
+import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter } from '../lib/session/discover.js';
 import { parseSession } from '../lib/session/parse.js';
 import { renderTranscript, renderSummary, renderTrace, renderJson } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
@@ -20,6 +20,8 @@ interface SessionFilterOptions {
   agent?: string;
   project?: string;
   all?: boolean;
+  since?: string;
+  until?: string;
 }
 
 interface ListOptions extends SessionFilterOptions {
@@ -61,6 +63,8 @@ async function listAction(options: ListOptions): Promise<void> {
       cwd: process.cwd(),
       project: options.project,
       limit,
+      since: options.since,
+      until: options.until,
     });
 
     spinner.stop();
@@ -169,6 +173,12 @@ function formatPickerLabel(s: SessionMeta): string {
   const account = s.account || '';
   const agentLabel = s.version ? `${s.agent}@${s.version}` : s.agent;
   const topic = s.topic || '';
+  const matchTerms = s._matchedTerms;
+
+  // Append matched terms badge
+  const matchBadge = matchTerms && matchTerms.length > 0
+    ? chalk.yellow(` [${matchTerms.join(', ')}]`)
+    : '';
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
@@ -178,7 +188,8 @@ function formatPickerLabel(s: SessionMeta): string {
     chalk.gray(padRight(when, 14)) +
     chalk.gray(padRight(formatCompactMetric(s.messageCount), 8)) +
     chalk.gray(padRight(formatCompactMetric(s.tokenCount), 10)) +
-    chalk.white(truncate(topic, 30))
+    chalk.white(truncate(topic, 30)) +
+    matchBadge
   );
 }
 
@@ -311,6 +322,8 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
       cwd: process.cwd(),
       project: options.project,
       limit: 5000,
+      since: options.since,
+      until: options.until,
     });
     let session: SessionMeta | undefined;
 
@@ -335,7 +348,24 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
       session = picked;
     } else {
       const matches = resolveSessionById(allSessions, idQuery);
-      const queryMatches = matches.length > 0 ? matches : filterSessionsByQuery(allSessions, idQuery);
+      let queryMatches: SessionMeta[] = matches.length > 0 ? matches : filterSessionsByQuery(allSessions, idQuery);
+
+      // Content search fallback when no title/topic/project matches
+      if (queryMatches.length === 0) {
+        const contentResults = searchContentIndex(allSessions, idQuery);
+        if (contentResults.size > 0) {
+          const matchedSessions = Array.from(contentResults.values())
+            .sort((a, b) => (a._matchedTerms?.length ?? 0) - (b._matchedTerms?.length ?? 0));
+          if (matchedSessions.length === 1) {
+            session = matchedSessions[0];
+            console.log(chalk.gray(
+              `Found by content match (terms: ${matchedSessions[0]._matchedTerms?.join(', ')})`
+            ));
+          } else {
+            queryMatches = matchedSessions;
+          }
+        }
+      }
 
       if (queryMatches.length === 0) {
         spinner.stop();
@@ -400,6 +430,8 @@ export function registerSessionsCommands(program: Command): void {
     .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
+    .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
+    .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
     .action(async (options: ListOptions) => {
       await listAction(options);
@@ -411,6 +443,8 @@ export function registerSessionsCommands(program: Command): void {
     .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
+    .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
+    .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
     .action(async (options: ListOptions) => {
       await listAction(options);
@@ -422,6 +456,8 @@ export function registerSessionsCommands(program: Command): void {
     .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
+    .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
+    .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('--transcript', 'Show full conversation transcript')
     .option('--trace', 'Show reasoning trace as markdown')
     .option('--json', 'Output normalized events as JSON')

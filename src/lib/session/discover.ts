@@ -197,6 +197,73 @@ function saveIndex(sessions: SessionMeta[]): void {
 }
 
 // ---------------------------------------------------------------------------
+// Content index (inverted term -> session terms)
+// ---------------------------------------------------------------------------
+
+function buildContentIndex(sessions: SessionMeta[]): Map<string, Set<string>> {
+  const index = new Map<string, Set<string>>();
+  for (const session of sessions) {
+    const terms = extractSessionTerms(session);
+    for (const term of terms) {
+      if (!index.has(term)) index.set(term, new Set());
+      index.get(term)!.add(session.id);
+    }
+  }
+  return index;
+}
+
+function extractSessionTerms(session: SessionMeta): string[] {
+  const textParts: string[] = [];
+  if (session.topic) textParts.push(session.topic);
+  if (session.project) textParts.push(session.project);
+  if (session.cwd) textParts.push(session.cwd);
+  if (session.gitBranch) textParts.push(session.gitBranch);
+  if (session.account) textParts.push(session.account);
+  return tokenizeText(textParts.join('\n'));
+}
+
+function tokenizeText(text: string): string[] {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  const tokens = text.toLowerCase().split(/[^a-z0-9]+/);
+  for (const token of tokens) {
+    if (token.length < 2 || seen.has(token)) continue;
+    seen.add(token);
+    terms.push(token);
+  }
+  return terms;
+}
+
+function saveContentIndex(index: Map<string, Set<string>>): void {
+  try {
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    const lines: string[] = [];
+    for (const [term, sessionIds] of index) {
+      lines.push(JSON.stringify({ term, sessions: [...sessionIds] }));
+    }
+    fs.writeFileSync(CONTENT_INDEX_PATH, lines.join('\n') + '\n', 'utf-8');
+  } catch { /* index save failure is non-fatal */ }
+}
+
+function loadContentIndex(): Map<string, Set<string>> {
+  const index = new Map<string, Set<string>>();
+  if (!fs.existsSync(CONTENT_INDEX_PATH)) return index;
+  try {
+    const content = fs.readFileSync(CONTENT_INDEX_PATH, 'utf-8');
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line) as { term: string; sessions: string[] };
+        if (entry.term && entry.sessions) {
+          index.set(entry.term, new Set(entry.sessions));
+        }
+      } catch { /* malformed index entry, skip */ }
+    }
+  } catch { /* index load failure is non-fatal */ }
+  return index;
+}
+
+// ---------------------------------------------------------------------------
 // Multi-version directory scanning
 // ---------------------------------------------------------------------------
 
@@ -1236,4 +1303,68 @@ function sumKnownNumbers(values: unknown[]): number | null {
   }
 
   return found ? total : null;
+}
+
+// ---------------------------------------------------------------------------
+// Time range parsing
+// ---------------------------------------------------------------------------
+
+export function parseTimeFilter(input: string): number {
+  const relativeMatch = input.match(/^(\d+)([dw])$/i);
+  if (relativeMatch) {
+    const value = parseInt(relativeMatch[1], 10);
+    const unit = relativeMatch[2].toLowerCase();
+    if (unit === 'd') return Date.now() - value * 86_400_000;
+    if (unit === 'w') return Date.now() - value * 7 * 86_400_000;
+  }
+  const ts = new Date(input).getTime();
+  return Number.isNaN(ts) ? 0 : ts;
+}
+
+// ---------------------------------------------------------------------------
+// Content index search
+// ---------------------------------------------------------------------------
+
+/**
+ * Score sessions by matching against terms from the content index.
+ * Returns sessions with matched terms attached for highlighting.
+ */
+export function searchContentIndex(
+  sessions: SessionMeta[],
+  query: string,
+): Map<string, SessionMeta> {
+  const index = loadContentIndex();
+  if (index.size === 0) return new Map();
+
+  const terms = tokenizeText(query);
+  if (terms.length === 0) return new Map();
+
+  const scored = new Map<string, { score: number; matchedTerms: string[] }>();
+
+  for (const term of terms) {
+    const matchingSessions = index.get(term);
+    if (!matchingSessions) continue;
+
+    for (const sessionId of matchingSessions) {
+      const entry = scored.get(sessionId);
+      if (!entry) {
+        scored.set(sessionId, { score: 1, matchedTerms: [term] });
+      } else {
+        entry.score += 1;
+        if (!entry.matchedTerms.includes(term)) {
+          entry.matchedTerms.push(term);
+        }
+      }
+    }
+  }
+
+  const result = new Map<string, SessionMeta>();
+  for (const [sessionId, info] of scored) {
+    const session = sessions.find(s => s.id === sessionId);
+    if (session) {
+      result.set(sessionId, { ...session, _matchedTerms: info.matchedTerms });
+    }
+  }
+
+  return result;
 }
