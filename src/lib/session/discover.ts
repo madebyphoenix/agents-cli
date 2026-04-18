@@ -15,6 +15,8 @@ const INDEX_PATH = path.join(SESSIONS_DIR, 'index.jsonl');
 export interface DiscoverOptions {
   agent?: SessionAgentId;
   project?: string;
+  all?: boolean;
+  cwd?: string;
   limit?: number;
 }
 
@@ -66,6 +68,11 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
     sessions = sessions.filter(s => s.project?.toLowerCase().includes(query));
   }
 
+  if (!options?.all) {
+    const currentDir = normalizeCwd(options?.cwd || process.cwd());
+    sessions = sessions.filter(s => normalizeCwd(s.cwd) === currentDir);
+  }
+
   // Sort by timestamp descending
   sessions.sort((a, b) => {
     const ta = new Date(a.timestamp).getTime() || 0;
@@ -74,6 +81,11 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
   });
 
   return sessions.slice(0, limit);
+}
+
+function normalizeCwd(cwd?: string): string {
+  if (!cwd) return '';
+  return path.resolve(cwd);
 }
 
 /**

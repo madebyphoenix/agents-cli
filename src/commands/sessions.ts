@@ -17,10 +17,12 @@ import { isPromptCancelled } from './utils.js';
 interface ListOptions {
   agent?: string;
   project?: string;
+  all?: boolean;
   limit?: string;
 }
 
 interface ViewOptions {
+  all?: boolean;
   transcript?: boolean;
   trace?: boolean;
   json?: boolean;
@@ -47,6 +49,8 @@ async function listAction(options: ListOptions): Promise<void> {
   try {
     const sessions = await discoverSessions({
       agent,
+      all: options.all,
+      cwd: process.cwd(),
       project: options.project,
       limit,
     });
@@ -54,7 +58,7 @@ async function listAction(options: ListOptions): Promise<void> {
     spinner.stop();
 
     if (sessions.length === 0) {
-      console.log(chalk.gray('No sessions found.'));
+      console.log(chalk.gray(formatNoSessionsMessage(options.all)));
       return;
     }
 
@@ -181,7 +185,11 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
   const spinner = ora('Finding session...').start();
 
   try {
-    const allSessions = await discoverSessions({ limit: 5000 });
+    const allSessions = await discoverSessions({
+      all: Boolean(idQuery) || options.all,
+      cwd: process.cwd(),
+      limit: 5000,
+    });
     let session: SessionMeta;
 
     if (!idQuery) {
@@ -189,7 +197,7 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
       spinner.stop();
 
       if (allSessions.length === 0) {
-        console.log(chalk.gray('No sessions found.'));
+        console.log(chalk.gray(formatNoSessionsMessage(options.all, true)));
         return;
       }
 
@@ -237,8 +245,9 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
 export function registerSessionsCommands(program: Command): void {
   const sessionsCmd = program
     .command('sessions')
-    .description('List and view agent sessions')
+    .description('List and view agent sessions for the current directory by default')
     .option('--agent <agent>', 'Filter by agent (claude, codex, gemini)')
+    .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
     .action(async (options: ListOptions) => {
@@ -247,8 +256,9 @@ export function registerSessionsCommands(program: Command): void {
 
   sessionsCmd
     .command('list')
-    .description('List sessions across agents')
+    .description('List sessions for the current directory by default')
     .option('--agent <agent>', 'Filter by agent (claude, codex, gemini)')
+    .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
     .action(async (options: ListOptions) => {
@@ -257,13 +267,20 @@ export function registerSessionsCommands(program: Command): void {
 
   sessionsCmd
     .command('view [id]')
-    .description('View a session (interactive picker if no ID given)')
+    .description('View a session (picker defaults to the current directory)')
+    .option('--all', 'Show sessions from every directory')
     .option('--transcript', 'Show full conversation transcript')
     .option('--trace', 'Show reasoning trace as markdown')
     .option('--json', 'Output normalized events as JSON')
     .action(async (id: string | undefined, options: ViewOptions) => {
       await viewAction(id, options);
     });
+}
+
+function formatNoSessionsMessage(showAll: boolean | undefined, picker = false): string {
+  if (showAll) return 'No sessions found.';
+  const command = picker ? 'agents sessions view --all' : 'agents sessions --all';
+  return `No sessions found for ${process.cwd()}. Run "${command}" to see sessions from every directory.`;
 }
 
 function findClaudeHistoryEntry(idQuery: string): ClaudeHistoryEntry | null {
@@ -337,9 +354,17 @@ function renderClaudeHistoryOnlyId(
         )
       );
     }
+
+    console.error(chalk.gray('Use one of the transcript IDs above with "agents sessions view <id>".'));
+    return;
   }
 
-  console.error(chalk.gray('Claude uses history-only IDs for commands like /resume. Use one of the transcript IDs above with "agents sessions view <id>".'));
+  if (historyEntry.display === '/resume') {
+    console.error(chalk.gray('This looks like a Claude /resume history entry. In this case, the resumed conversation continued under a different transcript session ID.'));
+  }
+
+  const projectHint = historyEntry.project ? path.basename(historyEntry.project) : 'the project';
+  console.error(chalk.gray(`Try "agents sessions --agent claude --project ${projectHint}" to find the resumed transcript session.`));
 }
 
 function findClaudeSessionsInProject(

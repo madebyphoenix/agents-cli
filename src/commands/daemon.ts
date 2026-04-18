@@ -317,7 +317,7 @@ async function runReportDaemon(options: {
 async function syncOnce(client: FactoryClient, nodeId: string): Promise<void> {
   try {
     // Discover local sessions
-    const sessions = await discoverSessions({ limit: 100 });
+    const sessions = await discoverSessions({ all: true, limit: 100 });
 
     // For now, treat all discovered sessions as "active" (we don't have a reliable way
     // to detect completed sessions without tracking state)

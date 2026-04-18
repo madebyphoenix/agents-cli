@@ -68,8 +68,9 @@ describe('agents sessions view', () => {
       expect(output).toContain('This ID exists in Claude history, but not as a saved transcript session.');
       expect(output).toContain('History entry: /resume');
       expect(output).toContain(`Project root: ${projectRoot}`);
-      expect(output).toContain(transcriptId);
-      expect(output).toContain('Claude uses history-only IDs for commands like /resume.');
+      expect(output).toContain('This looks like a Claude /resume history entry.');
+      expect(output).toContain('the resumed conversation continued under a different transcript session ID.');
+      expect(output).toContain('Try "agents sessions --agent claude --project swarmify" to find the resumed transcript session.');
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
