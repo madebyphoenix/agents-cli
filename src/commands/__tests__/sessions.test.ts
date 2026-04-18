@@ -47,6 +47,94 @@ function writeClaudeSession(
   );
 }
 
+function writeCodexSession(
+  tempHome: string,
+  sessionId: string,
+  cwd: string,
+  prompt: string,
+  timestamp: string,
+): void {
+  fs.mkdirSync(cwd, { recursive: true });
+  const sessionsDir = path.join(tempHome, '.codex', 'sessions', '2026', '04', '17');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+
+  const filePath = path.join(
+    sessionsDir,
+    `rollout-${timestamp.replace(/[:.]/g, '-')}-${sessionId}.jsonl`
+  );
+
+  const lines = [
+    JSON.stringify({
+      timestamp,
+      type: 'session_meta',
+      payload: {
+        id: sessionId,
+        timestamp,
+        cwd,
+        originator: 'codex_cli_rs',
+        cli_version: '0.113.0',
+        source: 'cli',
+      },
+    }),
+    JSON.stringify({
+      timestamp,
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'developer',
+        content: [{ type: 'input_text', text: '<permissions instructions>\nFilesystem sandboxing.\n</permissions instructions>' }],
+      },
+    }),
+    JSON.stringify({
+      timestamp,
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '<environment_context>\n  <cwd>/tmp/project</cwd>\n  <shell>zsh</shell>\n</environment_context>' }],
+      },
+    }),
+    JSON.stringify({
+      timestamp,
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '<collaboration_mode># Collaboration Mode: Default\n</collaboration_mode>' }],
+      },
+    }),
+    JSON.stringify({
+      timestamp,
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>\nDo work.\n</INSTRUCTIONS>' }],
+      },
+    }),
+    JSON.stringify({
+      timestamp,
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: prompt }],
+      },
+    }),
+    JSON.stringify({
+      timestamp,
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'Looking into it now.' }],
+      },
+    }),
+  ];
+
+  fs.writeFileSync(filePath, lines.join('\n') + '\n', 'utf-8');
+}
+
 function runAgents(args: string[], cwd: string, home: string) {
   return spawnSync(tsxBin, [cliEntry, ...args], {
     cwd,
@@ -252,6 +340,37 @@ describe('agents sessions', () => {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
+
+  it('shows the first human Codex prompt instead of injected session scaffolding', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-codex-topic-'));
+
+    try {
+      writeUpdateCache(tempHome);
+
+      const projectDir = path.join(tempHome, 'work', 'agents-cli');
+      const sessionId = '99999999-9999-4999-8999-999999999999';
+      const prompt = 'Search across sessions by prompt text';
+
+      writeCodexSession(
+        tempHome,
+        sessionId,
+        projectDir,
+        prompt,
+        '2026-04-17T19:40:30.000Z'
+      );
+
+      const result = runAgents(['sessions', '--all'], projectDir, tempHome);
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain(sessionId.slice(0, 8));
+      expect(output).toContain(prompt);
+      expect(output).not.toContain('Collaboration Mode: Default');
+      expect(output).not.toContain('# AGENTS.md instructions');
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('agents sessions view', () => {
@@ -385,6 +504,35 @@ describe('agents sessions view', () => {
       expect(output).toContain(`Resolved Claude history entry ${historyOnlyId} to transcript ${transcriptId}.`);
       expect(output).toContain('Loaded resumed transcript');
       expect(output).not.toContain(`No transcript session found matching: ${historyOnlyId}`);
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves text queries against session topics, not only IDs', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-view-query-'));
+
+    try {
+      writeUpdateCache(tempHome);
+
+      const projectDir = path.join(tempHome, 'work', 'agents-cli');
+      const sessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      const prompt = 'Search across sessions by prompt text';
+
+      writeCodexSession(
+        tempHome,
+        sessionId,
+        projectDir,
+        prompt,
+        '2026-04-17T19:41:30.000Z'
+      );
+
+      const result = runAgents(['sessions', 'view', 'prompt text', '--transcript'], projectDir, tempHome);
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain(prompt);
+      expect(output).not.toContain('No session found matching: prompt text');
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }

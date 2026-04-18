@@ -6,6 +6,7 @@ import * as readline from 'readline';
 import { execSync } from 'child_process';
 import type { SessionAgentId, SessionMeta } from './types.js';
 import { SESSION_AGENTS } from './types.js';
+import { extractSessionTopic } from './prompt.js';
 
 const HOME = os.homedir();
 const AGENTS_DIR = path.join(HOME, '.agents');
@@ -535,7 +536,7 @@ function readGeminiMeta(
       const text = extractGeminiMessageText(message.content);
       if (text) {
         messageCount++;
-        if (!topic) topic = extractTopic(text);
+        if (!topic) topic = extractSessionTopic(text);
       }
     } else if (message.type === 'gemini') {
       if (extractGeminiMessageText(message.content)) {
@@ -855,7 +856,7 @@ async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
         const text = extractClaudeUserText(parsed);
         if (text) {
           messageCount++;
-          if (!topic) topic = extractTopic(text);
+          if (!topic) topic = extractSessionTopic(text);
         }
         continue;
       }
@@ -936,7 +937,7 @@ async function scanCodexSession(filePath: string): Promise<CodexSessionScan> {
         const text = extractCodexMessageText(parsed.payload.content, role);
         if (!text) continue;
         messageCount++;
-        if (role === 'user' && !topic) topic = extractTopic(text);
+        if (role === 'user' && !topic) topic = extractSessionTopic(text);
         continue;
       }
 
@@ -1041,14 +1042,6 @@ function safeRealpathSync(p: string): string | null {
   } catch {
     return null;
   }
-}
-
-function extractTopic(text: string): string {
-  // Strip leading whitespace, slash commands, and system tags
-  let clean = text.replace(/^[\s\n]+/, '').replace(/<[^>]+>/g, '').trim();
-  // Take first line only
-  const firstLine = clean.split('\n')[0].trim();
-  return firstLine;
 }
 
 function extractClaudeUserText(parsed: any): string | undefined {

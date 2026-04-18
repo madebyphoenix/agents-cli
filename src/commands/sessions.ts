@@ -4,7 +4,7 @@ import * as path from 'path';
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { select } from '@inquirer/prompts';
+import { search } from '@inquirer/prompts';
 import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types.js';
 import { SESSION_AGENTS } from '../lib/session/types.js';
 import { discoverSessions, resolveSessionById } from '../lib/session/discover.js';
@@ -176,17 +176,90 @@ function formatPickerLabel(s: SessionMeta): string {
 
 async function pickSession(sessions: SessionMeta[]): Promise<SessionMeta | null> {
   try {
-    return await select({
-      message: 'Select a session:',
-      choices: sessions.map(s => ({
-        name: formatPickerLabel(s),
-        value: s,
-      })),
+    return await search({
+      message: 'Search sessions:',
+      pageSize: 12,
+      source: async (input) => {
+        const matches = filterSessionsByQuery(sessions, input).slice(0, 30);
+        if (matches.length === 0) {
+          return [{
+            name: input?.trim()
+              ? `No sessions found for "${input.trim()}"`
+              : 'No sessions found',
+            value: null,
+            disabled: 'Keep typing',
+          }];
+        }
+
+        return matches.map(s => ({
+          name: formatPickerLabel(s),
+          value: s,
+          description: formatSearchDescription(s),
+          short: s.shortId,
+        }));
+      },
+      validate: (value) => value ? true : 'No matching sessions.',
     });
   } catch (err) {
     if (isPromptCancelled(err)) return null;
     throw err;
   }
+}
+
+function formatSearchDescription(session: SessionMeta): string {
+  return [session.id, session.cwd].filter(Boolean).join('  ');
+}
+
+function filterSessionsByQuery(
+  sessions: SessionMeta[],
+  query: string | undefined,
+): SessionMeta[] {
+  const trimmed = query?.trim().toLowerCase() || '';
+  if (!trimmed) return sessions;
+
+  const terms = trimmed.split(/\s+/).filter(Boolean);
+
+  return sessions
+    .map(session => ({ session, score: scoreSessionQuery(session, terms) }))
+    .filter(entry => entry.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return new Date(b.session.timestamp).getTime() - new Date(a.session.timestamp).getTime();
+    })
+    .map(entry => entry.session);
+}
+
+function scoreSessionQuery(session: SessionMeta, terms: string[]): number {
+  let score = 0;
+
+  for (const term of terms) {
+    const exactId = session.id.toLowerCase() === term || session.shortId.toLowerCase() === term;
+    const prefixId = session.id.toLowerCase().startsWith(term) || session.shortId.toLowerCase().startsWith(term);
+    const topic = session.topic?.toLowerCase() || '';
+    const project = session.project?.toLowerCase() || '';
+    const account = session.account?.toLowerCase() || '';
+    const cwd = session.cwd?.toLowerCase() || '';
+    const agent = session.agent.toLowerCase();
+    const version = session.version?.toLowerCase() || '';
+
+    let termScore = 0;
+    if (exactId) termScore = 1000;
+    else if (prefixId) termScore = 900;
+    else if (topic.startsWith(term)) termScore = 700;
+    else if (project.startsWith(term)) termScore = 600;
+    else if (account.startsWith(term)) termScore = 550;
+    else if (agent.startsWith(term) || version.startsWith(term)) termScore = 500;
+    else if (topic.includes(term)) termScore = 400;
+    else if (project.includes(term)) termScore = 300;
+    else if (account.includes(term)) termScore = 250;
+    else if (cwd.includes(term)) termScore = 200;
+    else if (version.includes(term) || agent.includes(term)) termScore = 150;
+    else return 0;
+
+    score += termScore;
+  }
+
+  return score;
 }
 
 async function viewAction(idQuery: string | undefined, options: ViewOptions): Promise<void> {
@@ -222,15 +295,14 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
         ]);
       }
 
-      // Show at most 30 in the picker
-      const picked = await pickSession(allSessions.slice(0, 30));
+      const picked = await pickSession(allSessions);
       if (!picked) return;
       session = picked;
     } else {
-      // Resolve by ID
       const matches = resolveSessionById(allSessions, idQuery);
+      const queryMatches = matches.length > 0 ? matches : filterSessionsByQuery(allSessions, idQuery);
 
-      if (matches.length === 0) {
+      if (queryMatches.length === 0) {
         spinner.stop();
         const historyEntry = findClaudeHistoryEntry(idQuery);
         if (historyEntry) {
@@ -251,24 +323,24 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
         }
       }
 
-      if (matches.length === 0) {
+      if (queryMatches.length === 0) {
         // session already resolved from history fallback
-      } else if (matches.length > 1) {
+      } else if (queryMatches.length > 1) {
         spinner.stop();
         if (!isInteractiveTerminal()) {
           console.error(chalk.red(`Multiple sessions match: ${idQuery}`));
-          console.error(chalk.gray('Pass a longer ID or one of these exact IDs:'));
-          for (const match of matches.slice(0, 10)) {
+          console.error(chalk.gray('Pass a longer ID/query or one of these exact IDs:'));
+          for (const match of queryMatches.slice(0, 10)) {
             console.error(chalk.cyan(`  ${match.id}`));
           }
           process.exit(1);
         }
         // Multiple matches -- let the user pick
-        const picked = await pickSession(matches);
+        const picked = await pickSession(queryMatches);
         if (!picked) return;
         session = picked;
       } else {
-        session = matches[0];
+        session = queryMatches[0];
       }
     }
 
@@ -311,7 +383,7 @@ export function registerSessionsCommands(program: Command): void {
 
   sessionsCmd
     .command('view [id]')
-    .description('View a session (picker defaults to the current directory)')
+    .description('View a session by ID or search query (picker defaults to live search)')
     .option('--all', 'Show sessions from every directory')
     .option('--transcript', 'Show full conversation transcript')
     .option('--trace', 'Show reasoning trace as markdown')

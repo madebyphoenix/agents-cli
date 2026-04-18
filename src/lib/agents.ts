@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as TOML from 'smol-toml';
 import chalk from 'chalk';
 import type { AgentConfig, AgentId } from './types.js';
+import { walkForFiles } from './session/discover.js';
 import { getVersionsDir, getShimsDir } from './state.js';
 import { resolveVersion } from './versions.js';
 
@@ -362,6 +363,11 @@ export function ensureSkillsDir(agentId: AgentId): void {
 }
 
 export interface AccountInfo {
+  accountKey: string | null;
+  usageKey: string | null;
+  accountId: string | null;
+  organizationId: string | null;
+  userId: string | null;
   email: string | null;
   plan: string | null;
   usageStatus: 'available' | 'rate_limited' | 'out_of_credits' | null;
@@ -382,29 +388,39 @@ export async function getAccountInfo(
   home?: string
 ): Promise<AccountInfo> {
   const base = home || os.homedir();
-  const empty: AccountInfo = { email: null, plan: null, usageStatus: null, overageCredits: null, lastActive: null };
+  const empty: AccountInfo = {
+    accountKey: null,
+    usageKey: null,
+    accountId: null,
+    organizationId: null,
+    userId: null,
+    email: null,
+    plan: null,
+    usageStatus: null,
+    overageCredits: null,
+    lastActive: null,
+  };
 
-  // Resolve lastActive from config file mtime
-  const configFiles: Record<string, string> = {
+  const configFiles: Partial<Record<AgentId, string>> = {
     claude: path.join(base, '.claude.json'),
     codex: path.join(base, '.codex', 'auth.json'),
     gemini: path.join(base, '.gemini', 'google_accounts.json'),
   };
-  let lastActive: Date | null = null;
-  const configPath = configFiles[agentId];
-  if (configPath) {
-    try {
-      const stat = await fs.promises.stat(configPath);
-      lastActive = stat.mtime;
-    } catch { /* config file not accessible */ }
-  }
+  const lastActive = resolveLastActive(agentId, base, configFiles[agentId]);
 
   try {
     switch (agentId) {
       case 'claude': {
         const data = JSON.parse(await fs.promises.readFile(path.join(base, '.claude.json'), 'utf-8'));
         const oa = data.oauthAccount;
+        const accountId = normalizeIdentityPart(oa?.accountUuid);
+        const organizationId = normalizeIdentityPart(oa?.organizationUuid);
         const email = oa?.emailAddress || null;
+        const accountKey = buildIdentityKey(agentId, [
+          ['account', accountId],
+          ['org', organizationId],
+        ]);
+        const usageKey = buildIdentityKey(agentId, [['org', organizationId]]);
 
         let plan: string | null = null;
         if (oa?.billingType === 'stripe_subscription') plan = 'Pro';
@@ -426,18 +442,37 @@ export async function getAccountInfo(
           };
         }
 
-        return { email, plan, usageStatus, overageCredits, lastActive };
+        return {
+          accountKey,
+          usageKey,
+          accountId,
+          organizationId,
+          userId: null,
+          email,
+          plan,
+          usageStatus,
+          overageCredits,
+          lastActive,
+        };
       }
       case 'codex': {
         const data = JSON.parse(await fs.promises.readFile(path.join(base, '.codex', 'auth.json'), 'utf-8'));
         const token = data.tokens?.id_token || data.tokens?.access_token;
         if (!token) return { ...empty, lastActive };
-        const payload = token.split('.')[1];
-        const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString());
+        const decoded = decodeJwtPayload(token);
+        if (!decoded) return { ...empty, lastActive };
         const email = decoded.email || null;
 
         // Plan and subscription from OpenAI auth claim
         const authClaim = decoded['https://api.openai.com/auth'] || {};
+        const accountId = normalizeIdentityPart(authClaim.chatgpt_account_id);
+        const userId = normalizeIdentityPart(authClaim.chatgpt_user_id || authClaim.user_id);
+        const organizationId = normalizeIdentityPart(getCodexDefaultOrgId(authClaim));
+        const accountKey = buildIdentityKey(agentId, [
+          ['account', accountId],
+          ['user', userId],
+          ['org', organizationId],
+        ]);
         const rawPlan = authClaim.chatgpt_plan_type;
         const plan = rawPlan ? rawPlan.charAt(0).toUpperCase() + rawPlan.slice(1) : null;
 
@@ -449,7 +484,18 @@ export async function getAccountInfo(
           usageStatus = expired ? 'out_of_credits' : 'available';
         }
 
-        return { email, plan, usageStatus, overageCredits: null, lastActive };
+        return {
+          accountKey,
+          usageKey: accountKey,
+          accountId,
+          organizationId,
+          userId,
+          email,
+          plan,
+          usageStatus,
+          overageCredits: null,
+          lastActive,
+        };
       }
       case 'gemini': {
         const data = JSON.parse(await fs.promises.readFile(path.join(base, '.gemini', 'google_accounts.json'), 'utf-8'));
@@ -462,6 +508,98 @@ export async function getAccountInfo(
     /* auth/config file missing or unreadable */
     return { ...empty, lastActive };
   }
+}
+
+function resolveLastActive(
+  agentId: AgentId,
+  base: string,
+  configPath?: string
+): Date | null {
+  const sessionDir = getSessionDir(agentId, base);
+  const sessionExt = getSessionExtension(agentId);
+  if (sessionDir && sessionExt) {
+    const latestSession = getLatestFileMtime(sessionDir, sessionExt);
+    if (latestSession) {
+      return latestSession;
+    }
+  }
+
+  if (!configPath) return null;
+  try {
+    return fs.statSync(configPath).mtime;
+  } catch {
+    return null;
+  }
+}
+
+function getSessionDir(agentId: AgentId, base: string): string | null {
+  switch (agentId) {
+    case 'claude':
+      return path.join(base, '.claude', 'projects');
+    case 'codex':
+      return path.join(base, '.codex', 'sessions');
+    case 'gemini':
+      return path.join(base, '.gemini', 'tmp');
+    default:
+      return null;
+  }
+}
+
+function getSessionExtension(agentId: AgentId): string | null {
+  switch (agentId) {
+    case 'claude':
+    case 'codex':
+      return '.jsonl';
+    case 'gemini':
+      return '.json';
+    default:
+      return null;
+  }
+}
+
+function getLatestFileMtime(dir: string, ext: string): Date | null {
+  if (!fs.existsSync(dir)) return null;
+  const [latest] = walkForFiles(dir, ext, 1);
+  if (!latest) return null;
+  try {
+    return fs.statSync(latest).mtime;
+  } catch {
+    return null;
+  }
+}
+
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  const payload = token.split('.')[1];
+  if (!payload) return null;
+  try {
+    return JSON.parse(Buffer.from(payload, 'base64url').toString());
+  } catch {
+    return null;
+  }
+}
+
+function getCodexDefaultOrgId(authClaim: any): string | null {
+  const organizations = authClaim?.organizations;
+  if (!Array.isArray(organizations)) return null;
+  const first = organizations[0];
+  return typeof first?.id === 'string' ? first.id : null;
+}
+
+function normalizeIdentityPart(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function buildIdentityKey(
+  agentId: AgentId,
+  parts: Array<[label: string, value: string | null]>
+): string | null {
+  const encoded = parts
+    .filter(([, value]) => value)
+    .map(([label, value]) => `${label}=${value}`);
+  if (encoded.length === 0) return null;
+  return `${agentId}:${encoded.join(':')}`;
 }
 
 export async function isMcpRegistered(agentId: AgentId, mcpName: string): Promise<boolean> {

@@ -1,5 +1,6 @@
 import type { SessionEvent } from './types.js';
 import { summarizeToolUse } from './parse.js';
+import { cleanSessionPrompt, extractSessionTopic } from './prompt.js';
 
 /**
  * Render session as a conversation transcript.
@@ -52,7 +53,10 @@ export function renderSummary(events: SessionEvent[]): string {
   for (const event of events) {
     if (event.type === 'message') {
       if (event.role === 'user' && !firstUserMessage) {
-        firstUserMessage = event.content || '';
+        const topic = extractSessionTopic(event.content || '');
+        if (topic) {
+          firstUserMessage = event.content || '';
+        }
       }
       if (event.role === 'assistant' && event.content) {
         lastAssistantMessage = event.content;
@@ -78,7 +82,7 @@ export function renderSummary(events: SessionEvent[]): string {
 
   // Prompt -- clean up agent preambles, show the human-written part
   if (firstUserMessage) {
-    const cleaned = cleanPrompt(firstUserMessage);
+    const cleaned = cleanSessionPrompt(firstUserMessage);
     if (cleaned) {
       const promptText = cleaned.length > 300 ? cleaned.slice(0, 297) + '...' : cleaned;
       md.push(`**Prompt:** ${promptText.split('\n')[0]}`);
@@ -152,39 +156,6 @@ function formatFileGroups(md: string[], grouped: Map<string, string[]>): void {
       md.push(`  **${dir}/** ${files.map(f => '\`' + f + '\`').join(', ')}`);
     });
   }
-}
-
-/**
- * Strip agent-injected preambles from user prompts.
- * Codex wraps the real prompt in <environment_context>...</environment_context>
- * and <user_instructions>...</user_instructions> tags.
- */
-function cleanPrompt(raw: string): string {
-  let text = raw;
-
-  // Strip XML-style blocks like <environment_context>...</environment_context>
-  text = text.replace(/<\/?[a-z_]+>/gi, '');
-
-  // Strip metadata lines -- key:value pairs and bare values that look like paths/env
-  const lines = text.split('\n');
-  const meaningful: string[] = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    // Skip key:value metadata
-    if (/^(cwd|shell|current_date|timezone|os|platform|arch|home|user)\b/i.test(trimmed)) continue;
-    // Skip bare absolute paths (e.g., /Users/muqsit/src/...)
-    if (/^\/[\w/.-]+$/.test(trimmed)) continue;
-    // Skip bare shell names
-    if (/^(bash|zsh|fish|sh|dash)$/i.test(trimmed)) continue;
-    // Skip bare dates
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) continue;
-    // Skip timezone identifiers
-    if (/^[A-Z][a-z]+\/[A-Z][a-z]+/.test(trimmed) && trimmed.split('/').length === 2) continue;
-    meaningful.push(trimmed);
-  }
-
-  return meaningful.join('\n').trim();
 }
 
 /**

@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import chalk from 'chalk';
 
 import type { AgentId } from './types.js';
-import { getAgentSessionDirs, walkForFiles } from './session/discover.js';
+import { walkForFiles } from './session/discover.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -56,6 +56,7 @@ export interface UsageInfo {
 interface UsageOptions {
   home?: string;
   cliVersion?: string | null;
+  organizationId?: string | null;
 }
 
 interface CodexRateLimitWindow {
@@ -85,9 +86,13 @@ interface ClaudeOauthCredentials {
   refreshToken?: string | null;
   expiresAt?: number | null;
   scopes?: string[] | null;
+  subscriptionType?: string | null;
+  rateLimitTier?: string | null;
+  organizationUuid?: string | null;
 }
 
 interface ClaudeKeychainPayload {
+  organizationUuid?: string | null;
   claudeAiOauth?: ClaudeOauthCredentials | null;
 }
 
@@ -200,6 +205,12 @@ async function getClaudeUsageInfo(options?: UsageOptions): Promise<UsageInfo> {
       return { snapshot: null, error: null };
     }
 
+    const requestedOrgId = normalizeString(options?.organizationId);
+    const liveOrgId = normalizeString(oauth.organizationUuid);
+    if (requestedOrgId && requestedOrgId !== liveOrgId) {
+      return { snapshot: null, error: null };
+    }
+
     const accessToken = await getClaudeAccessToken(oauth);
     if (!accessToken) {
       return { snapshot: null, error: null };
@@ -241,36 +252,19 @@ async function getClaudeUsageInfo(options?: UsageOptions): Promise<UsageInfo> {
 }
 
 function collectCodexSessionFiles(home?: string): string[] {
-  const dirs: string[] = [];
-  const seenDirs = new Set<string>();
-
-  const addDir = (dir: string) => {
-    if (!fs.existsSync(dir)) return;
-    const real = safeRealpathSync(dir) || dir;
-    if (seenDirs.has(real)) return;
-    seenDirs.add(real);
-    dirs.push(dir);
-  };
-
-  if (home) {
-    addDir(path.join(home, '.codex', 'sessions'));
-  }
-
-  for (const dir of getAgentSessionDirs('codex', 'sessions')) {
-    addDir(dir);
-  }
+  const base = home || os.homedir();
+  const dir = path.join(base, '.codex', 'sessions');
+  if (!fs.existsSync(dir)) return [];
 
   const seenFiles = new Set<string>();
   const files: Array<{ path: string; mtime: number }> = [];
-  for (const dir of dirs) {
-    for (const filePath of walkForFiles(dir, '.jsonl', 20)) {
-      const real = safeRealpathSync(filePath) || filePath;
-      if (seenFiles.has(real)) continue;
-      seenFiles.add(real);
-      const stat = safeStatSync(filePath);
-      if (!stat) continue;
-      files.push({ path: filePath, mtime: stat.mtimeMs });
-    }
+  for (const filePath of walkForFiles(dir, '.jsonl', 20)) {
+    const real = safeRealpathSync(filePath) || filePath;
+    if (seenFiles.has(real)) continue;
+    seenFiles.add(real);
+    const stat = safeStatSync(filePath);
+    if (!stat) continue;
+    files.push({ path: filePath, mtime: stat.mtimeMs });
   }
 
   files.sort((a, b) => b.mtime - a.mtime);
@@ -382,7 +376,13 @@ async function loadClaudeOauth(): Promise<ClaudeOauthCredentials | null> {
     ]);
 
     const payload = JSON.parse(stdout.trim()) as ClaudeKeychainPayload;
-    return payload.claudeAiOauth ?? null;
+    if (!payload.claudeAiOauth) {
+      return null;
+    }
+    return {
+      ...payload.claudeAiOauth,
+      organizationUuid: normalizeString(payload.organizationUuid),
+    };
   } catch {
     return null;
   }
@@ -493,6 +493,12 @@ function parseDateValue(value: unknown): Date | null {
   }
 
   return null;
+}
+
+function normalizeString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
 }
 
 function renderUsageBar(usedPercent: number): string {
