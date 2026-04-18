@@ -333,6 +333,27 @@ describe('buildExecCommand', () => {
         }
       }
     });
+
+    it('injects Claude config dir for pinned Claude versions', () => {
+      const env = buildExecEnv(opts({ agent: 'claude', version: '2.1.98' }));
+      expect(env.CLAUDE_CONFIG_DIR).toBe(
+        `${process.env.HOME}/.agents/versions/claude/2.1.98/home/.claude`
+      );
+    });
+
+    it('lets explicit env override injected Claude config dir', () => {
+      const env = buildExecEnv(opts({
+        agent: 'claude',
+        version: '2.1.98',
+        env: { CLAUDE_CONFIG_DIR: '/tmp/custom-claude-config' },
+      }));
+      expect(env.CLAUDE_CONFIG_DIR).toBe('/tmp/custom-claude-config');
+    });
+
+    it('does not inject Claude config dir for non-Claude agents', () => {
+      const env = buildExecEnv(opts({ agent: 'codex', version: '0.98.0' }));
+      expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    });
   });
 
   // --- Version pinning ---

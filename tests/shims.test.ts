@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { generateShimScript } from '../src/lib/shims.js';
+import { generateShimScript, generateVersionedAliasScript } from '../src/lib/shims.js';
 
 // We need to mock the versions directory, so we'll test the logic directly
 // by creating temp directories that mimic the version structure
@@ -355,5 +355,27 @@ describe('shims - generateShimScript', () => {
     const script = generateShimScript('claude');
     expect(script).toContain('find_project_agents_dir');
     expect(script).toContain('agents sync --agent "$AGENT" --version "$VERSION" --project-dir "$PROJECT_AGENTS_DIR"');
+  });
+
+  test('scopes Claude keychain auth to the selected version config dir', () => {
+    const script = generateShimScript('claude');
+    expect(script).toContain('export CLAUDE_CONFIG_DIR="$VERSION_DIR/home/.claude"');
+  });
+
+  test('does not inject Claude keychain scoping for non-Claude agents', () => {
+    const script = generateShimScript('codex');
+    expect(script).not.toContain('CLAUDE_CONFIG_DIR');
+  });
+});
+
+describe('shims - generateVersionedAliasScript', () => {
+  test('scopes Claude version aliases to their config dir', () => {
+    const script = generateVersionedAliasScript('claude', '2.1.110');
+    expect(script).toContain('export CLAUDE_CONFIG_DIR="$HOME/.agents/versions/claude/2.1.110/home/.claude"');
+  });
+
+  test('does not inject Claude keychain scoping for non-Claude aliases', () => {
+    const script = generateVersionedAliasScript('codex', '0.98.0');
+    expect(script).not.toContain('CLAUDE_CONFIG_DIR');
   });
 });

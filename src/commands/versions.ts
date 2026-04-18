@@ -14,7 +14,12 @@ import {
 } from '../lib/agents.js';
 import type { AccountInfo } from '../lib/agents.js';
 import type { UsageSnapshot } from '../lib/usage.js';
-import { formatUsageSummary, getUsageInfo } from '../lib/usage.js';
+import {
+  formatUsageSummary,
+  getUsageInfo,
+  getUsageInfoByIdentity,
+  getUsageLookupKey,
+} from '../lib/usage.js';
 import { viewAction } from './view.js';
 import type { AgentId } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
@@ -484,23 +489,42 @@ export function registerVersionsCommands(program: Command): void {
             return 0;
           });
 
-          // Pre-fetch emails for picker labels
-          const pickerEmails = await Promise.all(
+          // Pre-fetch account info for picker labels and usage identity lookup
+          const pickerAccounts = await Promise.all(
             sortedVersions.map((v) =>
-              getAccountEmail(agentId, getVersionHomePath(agentId, v)).then((email) => ({ v, email }))
+              getAccountInfo(agentId, getVersionHomePath(agentId, v)).then((info) => ({ v, info }))
             )
           );
-          const pickerEmailMap = new Map(pickerEmails.map((e) => [e.v, e.email]));
+          const pickerAccountMap = new Map(pickerAccounts.map(({ v, info }) => [v, info]));
+          const { usageByKey } = await getUsageInfoByIdentity(
+            pickerAccounts.map(({ v, info }) => ({
+              agentId,
+              home: getVersionHomePath(agentId, v),
+              cliVersion: v,
+              info,
+            }))
+          );
 
           const maxLabelLen = Math.max(...sortedVersions.map((v) => (v === globalDefault ? `${v} (default)` : v).length));
+          const maxEmailLen = Math.max(0, ...pickerAccounts.map(({ info }) => info.email?.length || 0));
           selectedVersion = await select({
             message: `Select ${agentLabel(agentConfig.id)} version:`,
             choices: sortedVersions.map((v) => {
               let label = v === globalDefault ? `${v}${chalk.green(' (default)')}` : v;
               const padLen = maxLabelLen - (v === globalDefault ? `${v} (default)` : v).length;
               if (padLen > 0) label += ' '.repeat(padLen);
-              const email = pickerEmailMap.get(v);
-              if (email) label += chalk.cyan(`  ${email}`);
+              const accountInfo = pickerAccountMap.get(v);
+              const email = accountInfo?.email || '';
+              const usageKey = getUsageLookupKey(accountInfo);
+              const usageSummary = usageKey ? formatUsageSummary(null, usageByKey.get(usageKey)?.snapshot || null) : '';
+
+              if (maxEmailLen > 0) {
+                label += '  ';
+                label += email ? chalk.cyan(email.padEnd(maxEmailLen)) : ' '.repeat(maxEmailLen);
+              }
+              if (usageSummary) {
+                label += `  ${usageSummary}`;
+              }
               return { name: label, value: v };
             }),
           });

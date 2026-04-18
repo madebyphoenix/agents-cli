@@ -1,6 +1,8 @@
 import { spawn } from 'child_process';
+import * as path from 'path';
 import type { AgentId } from './types.js';
 import { parseTimeout } from './routines.js';
+import { getVersionHomePath, isVersionInstalled, resolveVersion } from './versions.js';
 
 export type ExecMode = 'plan' | 'edit' | 'full';
 export type ExecEffort = 'fast' | 'default' | 'detailed';
@@ -49,8 +51,18 @@ export function parseExecEnv(entries: string[]): Record<string, string> | undefi
 }
 
 export function buildExecEnv(options: ExecOptions): NodeJS.ProcessEnv {
+  const managedEnv: NodeJS.ProcessEnv = {};
+  if (options.agent === 'claude') {
+    const cwd = options.cwd || process.cwd();
+    const version = options.version || resolveVersion('claude', cwd);
+    if (version && isVersionInstalled('claude', version)) {
+      managedEnv.CLAUDE_CONFIG_DIR = path.join(getVersionHomePath('claude', version), '.claude');
+    }
+  }
+
   return {
     ...process.env,
+    ...managedEnv,
     ...options.env,
   };
 }

@@ -16,8 +16,13 @@ import {
 } from '../lib/agents.js';
 import type { AccountInfo } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
-import { formatUsageSection, formatUsageSummary, getUsageInfo } from '../lib/usage.js';
-import type { UsageInfo } from '../lib/usage.js';
+import {
+  formatUsageSection,
+  formatUsageSummary,
+  getUsageInfo,
+  getUsageInfoByIdentity,
+  getUsageLookupKey,
+} from '../lib/usage.js';
 import { readManifest } from '../lib/manifest.js';
 import {
   listInstalledVersions,
@@ -91,10 +96,6 @@ interface ResourceWithSync {
   scope?: 'user' | 'project';
 }
 
-function getUsageLookupKey(info?: AccountInfo): string | null {
-  return info?.usageKey || info?.accountKey || null;
-}
-
 /**
  * Show installed versions for one or all agents.
  * Called when: `agents view` or `agents view claude`
@@ -156,40 +157,19 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
   // or org scope, not a specific installed version. Version homes cache those
   // values independently, so older installs can show stale values. Reuse the
   // freshest cache entry per stable usage identity and keep lastActive per version.
-  const canonicalByUsageKey = new Map<string, AccountInfo>();
-  const usageFetchInputs = new Map<string, {
-    agentId: AgentId;
-    home?: string;
-    cliVersion: string | null;
-    organizationId: string | null;
-  }>();
-  const chooseFresherAccount = (
-    info: AccountInfo,
-    agentId: AgentId,
-    usageInput?: { home?: string; cliVersion: string | null }
-  ) => {
-    const key = getUsageLookupKey(info);
-    if (!key) return;
-    const existing = canonicalByUsageKey.get(key);
-    const existingMs = existing?.lastActive?.getTime() ?? -1;
-    const currentMs = info.lastActive?.getTime() ?? -1;
-    if (!existing || currentMs > existingMs) {
-      canonicalByUsageKey.set(key, info);
-      usageFetchInputs.set(key, {
-        agentId,
-        home: usageInput?.home,
-        cliVersion: usageInput?.cliVersion || null,
-        organizationId: info.organizationId,
-      });
-    }
-  };
-
-  for (const { agentId, home, version, info } of infoResults) {
-    chooseFresherAccount(info, agentId, { home, cliVersion: version });
-  }
-  for (const { agentId, cliVersion, info } of globalInfoResults) {
-    chooseFresherAccount(info, agentId, { cliVersion });
-  }
+  const { canonicalByUsageKey, usageByKey } = await getUsageInfoByIdentity([
+    ...infoResults.map(({ agentId, home, version, info }) => ({
+      agentId,
+      home,
+      cliVersion: version,
+      info,
+    })),
+    ...globalInfoResults.map(({ agentId, cliVersion, info }) => ({
+      agentId,
+      cliVersion,
+      info,
+    })),
+  ]);
 
   const mergeCanonical = (info: AccountInfo): AccountInfo => {
     const key = getUsageLookupKey(info);
@@ -203,21 +183,6 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       overageCredits: canon.overageCredits,
     };
   };
-
-  const usageResults = await Promise.all(
-    [...usageFetchInputs.entries()].map(async ([key, input]) => ({
-      key,
-      usage: await getUsageInfo(input.agentId, {
-        home: input.home,
-        cliVersion: input.cliVersion,
-        organizationId: input.organizationId,
-      }),
-    }))
-  );
-  const usageMap = new Map<string, UsageInfo>();
-  for (const { key, usage } of usageResults) {
-    usageMap.set(key, usage);
-  }
 
   // Separate version-managed from globally-installed agents
   const versionManaged: AgentId[] = [];
@@ -276,7 +241,7 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
         const rawInfo = infoMap.get(`${agentId}:${version}`);
         const vInfo = rawInfo ? mergeCanonical(rawInfo) : undefined;
         const usageKey = getUsageLookupKey(vInfo);
-        const usageInfo = usageKey ? usageMap.get(usageKey) : undefined;
+        const usageInfo = usageKey ? usageByKey.get(usageKey) : undefined;
 
         // Build columns, trimming trailing whitespace when columns are empty
         const parts = [`    ${label}`];
@@ -334,7 +299,7 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       const padding = ' '.repeat(Math.max(0, globalMaxVerLabel - verLabelLen));
       const parts = [`    ${verLabel}${padding}`];
       const gUsageKey = getUsageLookupKey(gInfo);
-      const gUsage = gUsageKey ? usageMap.get(gUsageKey) : undefined;
+      const gUsage = gUsageKey ? usageByKey.get(gUsageKey) : undefined;
       const gUsageStr = formatUsageSummary(gInfo?.plan || null, gUsage?.snapshot || null);
       const gActiveStr = gInfo ? formatLastActive(gInfo.lastActive) : '';
       if (gInfo?.email || gUsageStr || gActiveStr) parts.push(gInfo?.email ? chalk.cyan(gInfo.email) : '');

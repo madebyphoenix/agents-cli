@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -6,6 +7,7 @@ import * as readline from 'readline';
 import { promisify } from 'util';
 import chalk from 'chalk';
 
+import type { AccountInfo } from './agents.js';
 import type { AgentId } from './types.js';
 import { walkForFiles } from './session/discover.js';
 
@@ -53,10 +55,24 @@ export interface UsageInfo {
   error: string | null;
 }
 
+export interface UsageIdentityInput {
+  agentId: AgentId;
+  info: AccountInfo;
+  home?: string;
+  cliVersion?: string | null;
+}
+
 interface UsageOptions {
   home?: string;
   cliVersion?: string | null;
   organizationId?: string | null;
+}
+
+export interface UsageFetchInput {
+  agentId: AgentId;
+  home?: string;
+  cliVersion: string | null;
+  organizationId: string | null;
 }
 
 interface CodexRateLimitWindow {
@@ -119,6 +135,64 @@ export async function getUsageInfo(agentId: AgentId, options?: UsageOptions): Pr
   }
 }
 
+export function getUsageLookupKey(
+  info?: Pick<AccountInfo, 'usageKey' | 'accountKey'> | null
+): string | null {
+  return info?.usageKey || info?.accountKey || null;
+}
+
+export function buildCanonicalUsageContext(inputs: UsageIdentityInput[]): {
+  canonicalByUsageKey: Map<string, AccountInfo>;
+  usageFetchInputs: Map<string, UsageFetchInput>;
+} {
+  const canonicalByUsageKey = new Map<string, AccountInfo>();
+  const usageFetchInputs = new Map<string, UsageFetchInput>();
+
+  for (const input of inputs) {
+    const key = getUsageLookupKey(input.info);
+    if (!key) continue;
+
+    const existing = canonicalByUsageKey.get(key);
+    const existingMs = existing?.lastActive?.getTime() ?? -1;
+    const currentMs = input.info.lastActive?.getTime() ?? -1;
+    if (existing && existingMs >= currentMs) {
+      continue;
+    }
+
+    canonicalByUsageKey.set(key, input.info);
+    usageFetchInputs.set(key, {
+      agentId: input.agentId,
+      home: input.home,
+      cliVersion: input.cliVersion || null,
+      organizationId: input.info.organizationId,
+    });
+  }
+
+  return { canonicalByUsageKey, usageFetchInputs };
+}
+
+export async function getUsageInfoByIdentity(inputs: UsageIdentityInput[]): Promise<{
+  canonicalByUsageKey: Map<string, AccountInfo>;
+  usageByKey: Map<string, UsageInfo>;
+}> {
+  const { canonicalByUsageKey, usageFetchInputs } = buildCanonicalUsageContext(inputs);
+  const usageResults = await Promise.all(
+    [...usageFetchInputs.entries()].map(async ([key, input]) => ({
+      key,
+      usage: await getUsageInfo(input.agentId, {
+        home: input.home,
+        cliVersion: input.cliVersion,
+        organizationId: input.organizationId,
+      }),
+    }))
+  );
+
+  return {
+    canonicalByUsageKey,
+    usageByKey: new Map(usageResults.map(({ key, usage }) => [key, usage])),
+  };
+}
+
 export function formatUsageSummary(
   plan: string | null,
   snapshot: UsageSnapshot | null,
@@ -134,7 +208,7 @@ export function formatUsageSummary(
     const windows = snapshot.windows
       .filter((window) => window.key !== 'sonnet_week')
       .map((window) =>
-      `${chalk.gray(window.shortLabel)} ${renderCompactUsageBar(window.usedPercent)}`
+      `${chalk.gray(`${window.shortLabel}:`)} ${renderCompactUsageBar(window.usedPercent)}`
     );
     if (windows.length > 0) {
       parts.push(windows.join(' '));
@@ -202,14 +276,14 @@ async function getCodexUsageInfo(options?: UsageOptions): Promise<UsageInfo> {
 
 async function getClaudeUsageInfo(options?: UsageOptions): Promise<UsageInfo> {
   try {
-    const oauth = await loadClaudeOauth();
+    const oauth = await loadClaudeOauth(options?.home);
     if (!oauth?.accessToken) {
       return { snapshot: null, error: null };
     }
 
     const requestedOrgId = normalizeString(options?.organizationId);
     const liveOrgId = normalizeString(oauth.organizationUuid);
-    if (requestedOrgId && requestedOrgId !== liveOrgId) {
+    if (!isClaudeUsageOrgMatch(requestedOrgId, liveOrgId)) {
       return { snapshot: null, error: null };
     }
 
@@ -361,7 +435,7 @@ function normalizeClaudeWindow(
   };
 }
 
-async function loadClaudeOauth(): Promise<ClaudeOauthCredentials | null> {
+async function loadClaudeOauth(home?: string): Promise<ClaudeOauthCredentials | null> {
   if (process.platform !== 'darwin') {
     return null;
   }
@@ -373,7 +447,7 @@ async function loadClaudeOauth(): Promise<ClaudeOauthCredentials | null> {
       '-a',
       account,
       '-s',
-      CLAUDE_KEYCHAIN_SERVICE,
+      getClaudeKeychainService(home),
       '-w',
     ]);
 
@@ -388,6 +462,25 @@ async function loadClaudeOauth(): Promise<ClaudeOauthCredentials | null> {
   } catch {
     return null;
   }
+}
+
+export function getClaudeKeychainService(home?: string): string {
+  if (!home) {
+    return CLAUDE_KEYCHAIN_SERVICE;
+  }
+
+  const configDir = path.join(home, '.claude').normalize('NFC');
+  const hash = createHash('sha256').update(configDir).digest('hex').slice(0, 8);
+  return `${CLAUDE_KEYCHAIN_SERVICE}-${hash}`;
+}
+
+export function isClaudeUsageOrgMatch(
+  requestedOrgId: string | null | undefined,
+  liveOrgId: string | null | undefined
+): boolean {
+  const requested = normalizeString(requestedOrgId);
+  const live = normalizeString(liveOrgId);
+  return !requested || !live || requested === live;
 }
 
 async function getClaudeAccessToken(oauth: ClaudeOauthCredentials): Promise<string | null> {
