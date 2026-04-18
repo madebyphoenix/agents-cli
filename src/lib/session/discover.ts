@@ -85,7 +85,8 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
 
 function normalizeCwd(cwd?: string): string {
   if (!cwd) return '';
-  return path.resolve(cwd);
+  const resolved = path.resolve(cwd);
+  return safeRealpathSync(resolved) || resolved;
 }
 
 /**
@@ -169,7 +170,7 @@ function saveIndex(sessions: SessionMeta[]): void {
  * @param subdir - Subdirectory within the agent's config dir where sessions live
  *                 (e.g., 'projects' for Claude, 'sessions' for Codex, 'tmp' for Gemini)
  */
-function getAgentSessionDirs(agent: string, subdir: string): string[] {
+export function getAgentSessionDirs(agent: string, subdir: string): string[] {
   const resolved = new Set<string>();
   const dirs: string[] = [];
 
@@ -797,7 +798,7 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
 // Utilities
 // ---------------------------------------------------------------------------
 
-function readFirstLines(filePath: string, maxLines: number): Promise<string[]> {
+export function readFirstLines(filePath: string, maxLines: number): Promise<string[]> {
   return new Promise((resolve) => {
     const lines: string[] = [];
     const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
@@ -822,7 +823,7 @@ function readFirstLines(filePath: string, maxLines: number): Promise<string[]> {
  * Walk a directory recursively for files with a given extension.
  * Returns at most `limit` files, sorted by mtime descending.
  */
-function walkForFiles(dir: string, ext: string, limit: number): string[] {
+export function walkForFiles(dir: string, ext: string, limit: number): string[] {
   const results: { path: string; mtime: number }[] = [];
 
   function walk(d: string, depth: number) {

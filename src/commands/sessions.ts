@@ -36,6 +36,14 @@ interface ClaudeHistoryEntry {
   historyPath: string;
 }
 
+interface ClaudeResumeMatch {
+  session: SessionMeta;
+  resumeTimestampMs: number;
+  deltaMs: number;
+}
+
+const CLAUDE_RESUME_MATCH_WINDOW_MS = 10 * 60_000;
+
 async function listAction(options: ListOptions): Promise<void> {
   const agent = options.agent as SessionAgentId | undefined;
   if (agent && !SESSION_AGENTS.includes(agent)) {
@@ -190,7 +198,7 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
       cwd: process.cwd(),
       limit: 5000,
     });
-    let session: SessionMeta;
+    let session: SessionMeta | undefined;
 
     if (!idQuery) {
       // No ID provided -- show interactive picker
@@ -220,15 +228,26 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
         spinner.stop();
         const historyEntry = findClaudeHistoryEntry(idQuery);
         if (historyEntry) {
-          renderClaudeHistoryOnlyId(idQuery, historyEntry, allSessions);
+          const resumeMatch = resolveClaudeHistoryEntryToTranscript(historyEntry, allSessions);
+          if (resumeMatch) {
+            session = resumeMatch.session;
+            console.log(chalk.gray(
+              `Resolved Claude history entry ${idQuery} to transcript ${resumeMatch.session.id}.`
+            ));
+          } else {
+            renderClaudeHistoryOnlyId(idQuery, historyEntry, allSessions);
+            process.exit(1);
+          }
+        } else {
+          console.error(chalk.red(`No session found matching: ${idQuery}`));
+          console.error(chalk.gray('Run "agents sessions" to list available sessions.'));
           process.exit(1);
         }
-        console.error(chalk.red(`No session found matching: ${idQuery}`));
-        console.error(chalk.gray('Run "agents sessions" to list available sessions.'));
-        process.exit(1);
       }
 
-      if (matches.length > 1) {
+      if (matches.length === 0) {
+        // session already resolved from history fallback
+      } else if (matches.length > 1) {
         spinner.stop();
         if (!isInteractiveTerminal()) {
           console.error(chalk.red(`Multiple sessions match: ${idQuery}`));
@@ -245,6 +264,10 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
       } else {
         session = matches[0];
       }
+    }
+
+    if (!session) {
+      throw new Error('Session resolution failed');
     }
 
     spinner.stop();
@@ -386,16 +409,97 @@ function findClaudeSessionsInProject(
   sessions: SessionMeta[],
   historyEntry: ClaudeHistoryEntry,
 ): SessionMeta[] {
-  if (!historyEntry.project) return [];
-
-  return sessions
-    .filter(session =>
-      session.agent === 'claude' &&
-      typeof session.cwd === 'string' &&
-      isWithinProject(session.cwd, historyEntry.project!)
-    )
+  return findClaudeProjectSessions(sessions, historyEntry)
     .sort((a, b) => sessionDistance(a, historyEntry) - sessionDistance(b, historyEntry))
     .slice(0, 3);
+}
+
+function findClaudeProjectSessions(
+  sessions: SessionMeta[],
+  historyEntry: ClaudeHistoryEntry,
+): SessionMeta[] {
+  if (!historyEntry.project) return [];
+  const projectRoot = historyEntry.project;
+
+  return sessions.filter(session =>
+    session.agent === 'claude' &&
+    typeof session.cwd === 'string' &&
+    isWithinProject(session.cwd, projectRoot)
+  );
+}
+
+function resolveClaudeHistoryEntryToTranscript(
+  historyEntry: ClaudeHistoryEntry,
+  sessions: SessionMeta[],
+): ClaudeResumeMatch | null {
+  if (historyEntry.display !== '/resume') return null;
+
+  const candidates = findClaudeProjectSessions(sessions, historyEntry);
+  const matches: ClaudeResumeMatch[] = [];
+
+  for (const session of candidates) {
+    const resumeTimestampMs = findClaudeResumeTimestamp(session.filePath, historyEntry.timestampMs);
+    if (resumeTimestampMs === null) continue;
+
+    const deltaMs = historyEntry.timestampMs === undefined
+      ? 0
+      : Math.abs(resumeTimestampMs - historyEntry.timestampMs);
+
+    if (historyEntry.timestampMs !== undefined && deltaMs > CLAUDE_RESUME_MATCH_WINDOW_MS) {
+      continue;
+    }
+
+    matches.push({ session, resumeTimestampMs, deltaMs });
+  }
+
+  if (matches.length === 0) return null;
+
+  matches.sort((a, b) => {
+    if (a.deltaMs !== b.deltaMs) return a.deltaMs - b.deltaMs;
+    return b.resumeTimestampMs - a.resumeTimestampMs;
+  });
+
+  const [best, second] = matches;
+  if (second && best.deltaMs === second.deltaMs && best.resumeTimestampMs === second.resumeTimestampMs) {
+    return null;
+  }
+
+  return best;
+}
+
+function findClaudeResumeTimestamp(filePath: string, targetTimestampMs?: number): number | null {
+  try {
+    const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
+    let bestTimestampMs: number | null = null;
+
+    for (const line of lines) {
+      if (!line.includes('SessionStart:resume')) continue;
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      if (parsed.attachment?.hookName !== 'SessionStart:resume') continue;
+
+      const timestampMs = Date.parse(parsed.timestamp || '');
+      if (Number.isNaN(timestampMs)) continue;
+
+      if (targetTimestampMs === undefined) {
+        return timestampMs;
+      }
+
+      if (bestTimestampMs === null || Math.abs(timestampMs - targetTimestampMs) < Math.abs(bestTimestampMs - targetTimestampMs)) {
+        bestTimestampMs = timestampMs;
+      }
+    }
+
+    return bestTimestampMs;
+  } catch {
+    return null;
+  }
 }
 
 function isWithinProject(sessionCwd: string, projectRoot: string): boolean {

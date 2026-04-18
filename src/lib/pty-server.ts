@@ -13,6 +13,7 @@ import * as net from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { fileURLToPath } from 'url';
 import { getAgentsDir } from './state.js';
 
 // --- Constants ---

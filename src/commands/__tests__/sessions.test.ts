@@ -5,7 +5,8 @@ import * as path from 'path';
 import { spawnSync } from 'child_process';
 
 const repoRoot = process.cwd();
-const cliEntry = path.join(repoRoot, 'dist', 'index.js');
+const cliEntry = path.join(repoRoot, 'src', 'index.ts');
+const tsxBin = path.join(repoRoot, 'node_modules', '.bin', 'tsx');
 
 function writeUpdateCache(tempHome: string): void {
   const packageJson = JSON.parse(
@@ -47,7 +48,7 @@ function writeClaudeSession(
 }
 
 function runAgents(args: string[], cwd: string, home: string) {
-  return spawnSync(process.execPath, [cliEntry, ...args], {
+  return spawnSync(tsxBin, [cliEntry, ...args], {
     cwd,
     env: { ...process.env, HOME: home },
     encoding: 'utf-8',
@@ -145,7 +146,7 @@ describe('agents sessions view', () => {
     }
   });
 
-  it('explains Claude history-only IDs instead of reporting them as missing', () => {
+  it('resolves Claude /resume history IDs to the resumed transcript', () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-view-'));
 
     try {
@@ -167,26 +168,76 @@ describe('agents sessions view', () => {
         }) + '\n',
         'utf-8'
       );
-      writeClaudeSession(
-        tempHome,
-        'swarmify-test',
-        transcriptId,
-        transcriptCwd,
-        'Check the build output',
-        '2026-04-17T19:35:30.000Z'
+      fs.mkdirSync(transcriptCwd, { recursive: true });
+      fs.writeFileSync(
+        path.join(tempHome, '.claude', 'projects', 'swarmify-test', `${transcriptId}.jsonl`),
+        [
+          JSON.stringify({
+            type: 'user',
+            timestamp: '2026-04-17T19:00:00.000Z',
+            cwd: transcriptCwd,
+            sessionId: transcriptId,
+            version: '2.1.110',
+            gitBranch: 'main',
+            message: { role: 'user', content: 'Earlier context' },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            timestamp: '2026-04-17T19:00:05.000Z',
+            cwd: transcriptCwd,
+            sessionId: transcriptId,
+            version: '2.1.110',
+            gitBranch: 'main',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'Earlier reply' }],
+            },
+          }),
+          JSON.stringify({
+            type: 'attachment',
+            timestamp: '2026-04-17T19:30:30.000Z',
+            cwd: transcriptCwd,
+            sessionId: transcriptId,
+            version: '2.1.110',
+            gitBranch: 'main',
+            attachment: {
+              type: 'hook_success',
+              hookName: 'SessionStart:resume',
+              hookEvent: 'SessionStart',
+            },
+          }),
+          JSON.stringify({
+            type: 'user',
+            timestamp: '2026-04-17T19:30:45.000Z',
+            cwd: transcriptCwd,
+            sessionId: transcriptId,
+            version: '2.1.110',
+            gitBranch: 'main',
+            message: { role: 'user', content: 'Continue from where we left off' },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            timestamp: '2026-04-17T19:31:00.000Z',
+            cwd: transcriptCwd,
+            sessionId: transcriptId,
+            version: '2.1.110',
+            gitBranch: 'main',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'Loaded resumed transcript' }],
+            },
+          }),
+        ].join('\n') + '\n',
+        'utf-8'
       );
 
-      const result = runAgents(['sessions', 'view', historyOnlyId], repoRoot, tempHome);
-      expect(result.status).toBe(1);
+      const result = runAgents(['sessions', 'view', historyOnlyId, '--transcript'], repoRoot, tempHome);
+      expect(result.status).toBe(0);
 
       const output = outputOf(result);
-      expect(output).toContain(`No transcript session found matching: ${historyOnlyId}`);
-      expect(output).toContain('This ID exists in Claude history, but not as a saved transcript session.');
-      expect(output).toContain('History entry: /resume');
-      expect(output).toContain(`Project root: ${projectRoot}`);
-      expect(output).toContain('This looks like a Claude /resume history entry.');
-      expect(output).toContain('the resumed conversation continued under a different transcript session ID.');
-      expect(output).toContain('Try "agents sessions --agent claude --project swarmify" to find the resumed transcript session.');
+      expect(output).toContain(`Resolved Claude history entry ${historyOnlyId} to transcript ${transcriptId}.`);
+      expect(output).toContain('Loaded resumed transcript');
+      expect(output).not.toContain(`No transcript session found matching: ${historyOnlyId}`);
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
