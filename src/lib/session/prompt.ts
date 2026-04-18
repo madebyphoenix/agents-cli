@@ -11,7 +11,10 @@ const NOISE_LINE_PATTERNS = [
   /^(bash|zsh|fish|sh|dash)$/i,
   /^\d{4}-\d{2}-\d{2}$/,
   /^[A-Z][A-Za-z]+\/[A-Z][\w+-]+$/,
+  /^Caveat:/i,
 ];
+
+const LOCAL_COMMAND_PREFIX = '<local-command-caveat>';
 
 export function cleanSessionPrompt(raw: string): string {
   let text = raw.replace(/\r/g, '').trim();

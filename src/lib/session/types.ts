@@ -14,6 +14,8 @@ export interface SessionEvent {
   command?: string;
   success?: boolean;
   output?: string;
+  /** Internal: marks tool_use events from local commands */
+  _local?: boolean;
 }
 
 export interface SessionMeta {

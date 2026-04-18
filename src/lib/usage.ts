@@ -8,6 +8,7 @@ import { promisify } from 'util';
 import chalk from 'chalk';
 
 import type { AccountInfo } from './agents.js';
+import { getAgentsDir } from './state.js';
 import type { AgentId } from './types.js';
 import { walkForFiles } from './session/discover.js';
 
@@ -26,6 +27,8 @@ const CLAUDE_SCOPES = [
   'user:file_upload',
 ];
 const CLAUDE_KEYCHAIN_SERVICE = 'Claude Code-credentials';
+const CLAUDE_USAGE_CACHE_PATH = path.join(getAgentsDir(), 'cache', 'claude-usage.json');
+const CACHED_CLAUDE_USAGE_SOURCE_LABEL = 'last seen live account data';
 
 const COMPACT_BAR_LEN = 5;
 const USAGE_BAR_LEN = 10;
@@ -119,6 +122,20 @@ interface ClaudeTokenResponse {
   scope?: string;
 }
 
+interface CachedUsageWindow {
+  key: UsageWindowKey;
+  label: string;
+  shortLabel: string;
+  usedPercent: number;
+  resetsAt: string | null;
+  windowMinutes: number | null;
+}
+
+interface CachedUsageSnapshot {
+  capturedAt: string | null;
+  windows: CachedUsageWindow[];
+}
+
 interface CodexRateLimitMatch {
   capturedAt: Date | null;
   rateLimits: CodexRateLimits;
@@ -179,10 +196,11 @@ export async function getUsageInfoByIdentity(inputs: UsageIdentityInput[]): Prom
   const usageResults = await Promise.all(
     [...usageFetchInputs.entries()].map(async ([key, input]) => ({
       key,
-      usage: await getUsageInfo(input.agentId, {
+      usage: await getUsageInfoForIdentity({
+        agentId: input.agentId,
         home: input.home,
         cliVersion: input.cliVersion,
-        organizationId: input.organizationId,
+        info: canonicalByUsageKey.get(key)!,
       }),
     }))
   );
@@ -191,6 +209,29 @@ export async function getUsageInfoByIdentity(inputs: UsageIdentityInput[]): Prom
     canonicalByUsageKey,
     usageByKey: new Map(usageResults.map(({ key, usage }) => [key, usage])),
   };
+}
+
+export async function getUsageInfoForIdentity(input: UsageIdentityInput): Promise<UsageInfo> {
+  const usage = await getUsageInfo(input.agentId, {
+    home: input.home,
+    cliVersion: input.cliVersion,
+    organizationId: input.info.organizationId,
+  });
+  const usageKey = getUsageLookupKey(input.info);
+  if (input.agentId !== 'claude' || !usageKey) {
+    return usage;
+  }
+
+  if (usage.snapshot?.source === 'live') {
+    writeClaudeUsageCache(usageKey, usage.snapshot);
+    return usage;
+  }
+
+  const cached = readClaudeUsageCache(usageKey);
+  if (cached) {
+    return { snapshot: cached, error: usage.error };
+  }
+  return usage;
 }
 
 export function formatUsageSummary(
@@ -440,32 +481,29 @@ async function loadClaudeOauth(home?: string): Promise<ClaudeOauthCredentials | 
     return null;
   }
 
-  const account = os.userInfo().username;
-  for (const service of getClaudeKeychainServices(home)) {
-    try {
-      const { stdout } = await execFileAsync('security', [
-        'find-generic-password',
-        '-a',
-        account,
-        '-s',
-        service,
-        '-w',
-      ]);
+  try {
+    const account = os.userInfo().username;
+    const { stdout } = await execFileAsync('security', [
+      'find-generic-password',
+      '-a',
+      account,
+      '-s',
+      // Managed Claude homes must stay pinned to their own service name.
+      getClaudeKeychainService(home),
+      '-w',
+    ]);
 
-      const payload = JSON.parse(stdout.trim()) as ClaudeKeychainPayload;
-      if (!payload.claudeAiOauth) {
-        continue;
-      }
-      return {
-        ...payload.claudeAiOauth,
-        organizationUuid: normalizeString(payload.organizationUuid),
-      };
-    } catch {
-      /* try the next Claude credential scope */
+    const payload = JSON.parse(stdout.trim()) as ClaudeKeychainPayload;
+    if (!payload.claudeAiOauth) {
+      return null;
     }
+    return {
+      ...payload.claudeAiOauth,
+      organizationUuid: normalizeString(payload.organizationUuid),
+    };
+  } catch {
+    return null;
   }
-
-  return null;
 }
 
 export function getClaudeKeychainService(home?: string): string {
@@ -478,14 +516,6 @@ export function getClaudeKeychainService(home?: string): string {
   return `${CLAUDE_KEYCHAIN_SERVICE}-${hash}`;
 }
 
-export function getClaudeKeychainServices(home?: string): string[] {
-  const services = [getClaudeKeychainService(home)];
-  if (services[0] !== CLAUDE_KEYCHAIN_SERVICE) {
-    services.push(CLAUDE_KEYCHAIN_SERVICE);
-  }
-  return services;
-}
-
 export function isClaudeUsageOrgMatch(
   requestedOrgId: string | null | undefined,
   liveOrgId: string | null | undefined
@@ -493,6 +523,119 @@ export function isClaudeUsageOrgMatch(
   const requested = normalizeString(requestedOrgId);
   const live = normalizeString(liveOrgId);
   return !requested || !live || requested === live;
+}
+
+export function readClaudeUsageCache(
+  usageKey: string,
+  cachePath = CLAUDE_USAGE_CACHE_PATH,
+  now = new Date()
+): UsageSnapshot | null {
+  const cache = readClaudeUsageCacheFile(cachePath);
+  const cached = cache[usageKey];
+  if (!cached) {
+    return null;
+  }
+
+  const snapshot = deserializeClaudeUsageSnapshot(cached, now);
+  if (!snapshot) {
+    delete cache[usageKey];
+    writeClaudeUsageCacheFile(cache, cachePath);
+  }
+  return snapshot;
+}
+
+export function writeClaudeUsageCache(
+  usageKey: string,
+  snapshot: UsageSnapshot,
+  cachePath = CLAUDE_USAGE_CACHE_PATH
+): void {
+  const cache = readClaudeUsageCacheFile(cachePath);
+  cache[usageKey] = serializeClaudeUsageSnapshot(snapshot);
+  writeClaudeUsageCacheFile(cache, cachePath);
+}
+
+function readClaudeUsageCacheFile(cachePath: string): Record<string, CachedUsageSnapshot> {
+  if (!fs.existsSync(cachePath)) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf-8')) as Record<string, CachedUsageSnapshot>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeClaudeUsageCacheFile(
+  cache: Record<string, CachedUsageSnapshot>,
+  cachePath: string
+): void {
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+    fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2), 'utf-8');
+  } catch {
+    /* best-effort cache write */
+  }
+}
+
+function serializeClaudeUsageSnapshot(snapshot: UsageSnapshot): CachedUsageSnapshot {
+  return {
+    capturedAt: snapshot.capturedAt?.toISOString() || null,
+    windows: snapshot.windows.map((window) => ({
+      key: window.key,
+      label: window.label,
+      shortLabel: window.shortLabel,
+      usedPercent: window.usedPercent,
+      resetsAt: window.resetsAt?.toISOString() || null,
+      windowMinutes: window.windowMinutes,
+    })),
+  };
+}
+
+function deserializeClaudeUsageSnapshot(
+  snapshot: CachedUsageSnapshot,
+  now: Date
+): UsageSnapshot | null {
+  const capturedAt = parseDateValue(snapshot.capturedAt);
+  const windows = snapshot.windows
+    .map((window) => ({
+      key: window.key,
+      label: window.label,
+      shortLabel: window.shortLabel,
+      usedPercent: window.usedPercent,
+      resetsAt: parseDateValue(window.resetsAt),
+      windowMinutes: window.windowMinutes,
+    }))
+    .filter((window) => isCachedUsageWindowFresh(window, capturedAt, now));
+
+  if (windows.length === 0) {
+    return null;
+  }
+
+  return {
+    source: 'last_seen',
+    sourceLabel: CACHED_CLAUDE_USAGE_SOURCE_LABEL,
+    capturedAt,
+    windows,
+  };
+}
+
+function isCachedUsageWindowFresh(
+  window: UsageWindow,
+  capturedAt: Date | null,
+  now: Date
+): boolean {
+  if (window.resetsAt && window.resetsAt.getTime() <= now.getTime()) {
+    return false;
+  }
+  if (capturedAt && window.windowMinutes !== null) {
+    const expiresAt = capturedAt.getTime() + window.windowMinutes * 60 * 1000;
+    if (expiresAt <= now.getTime()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function getClaudeAccessToken(oauth: ClaudeOauthCredentials): Promise<string | null> {

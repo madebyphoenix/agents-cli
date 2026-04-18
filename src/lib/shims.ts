@@ -799,6 +799,26 @@ export function getShimPath(agent: AgentId): string {
 }
 
 /**
+ * Return the first executable path that would be launched for this agent when
+ * resolving against PATH, excluding the managed shim itself.
+ */
+export function getPathShadowingExecutable(agent: AgentId): string | null {
+  const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const shimPath = path.resolve(getShimPath(agent));
+  const cliCommand = AGENTS[agent].cliCommand;
+
+  for (const dir of pathDirs) {
+    const candidate = path.resolve(dir, cliCommand);
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
+    return candidate === shimPath ? null : candidate;
+  }
+
+  return null;
+}
+
+/**
  * Check if shims directory is in PATH.
  */
 export function isShimsInPath(): boolean {

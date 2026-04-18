@@ -19,7 +19,7 @@ import type { AgentId } from '../lib/types.js';
 import {
   formatUsageSection,
   formatUsageSummary,
-  getUsageInfo,
+  getUsageInfoForIdentity,
   getUsageInfoByIdentity,
   getUsageLookupKey,
 } from '../lib/usage.js';
@@ -546,10 +546,11 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
   // 1. Agent CLI info
   console.log(chalk.bold('Agent CLIs\n'));
   const accountInfo = await getAccountInfo(agentId, home);
-  const usageInfo = await getUsageInfo(agentId, {
+  const usageInfo = await getUsageInfoForIdentity({
+    agentId,
     home,
     cliVersion: version,
-    organizationId: accountInfo.organizationId,
+    info: accountInfo,
   });
   const emailStr = accountInfo.email ? chalk.cyan(`  ${accountInfo.email}`) : '';
   const status = chalk.green(version);

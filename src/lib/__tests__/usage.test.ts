@@ -1,12 +1,16 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 
 import type { AccountInfo } from '../agents.js';
 import {
   buildCanonicalUsageContext,
-  getClaudeKeychainServices,
   formatUsageSummary,
   getClaudeKeychainService,
+  readClaudeUsageCache,
   isClaudeUsageOrgMatch,
+  writeClaudeUsageCache,
   type UsageSnapshot,
 } from '../usage.js';
 
@@ -148,12 +152,8 @@ describe('Claude usage scoping', () => {
     expect(first).not.toBe(second);
   });
 
-  it('falls back to the shared keychain service after the managed-home service', () => {
-    expect(getClaudeKeychainServices('/tmp/claude-a')).toEqual([
-      getClaudeKeychainService('/tmp/claude-a'),
-      'Claude Code-credentials',
-    ]);
-    expect(getClaudeKeychainServices()).toEqual(['Claude Code-credentials']);
+  it('does not reuse the shared keychain service for managed Claude homes', () => {
+    expect(getClaudeKeychainService('/tmp/claude-a')).not.toBe('Claude Code-credentials');
   });
 
   it('keeps usage eligible when the live org is missing', () => {
@@ -163,5 +163,91 @@ describe('Claude usage scoping', () => {
   it('rejects usage only when both org ids exist and mismatch', () => {
     expect(isClaudeUsageOrgMatch('org-requested', 'org-live')).toBe(false);
     expect(isClaudeUsageOrgMatch('org-requested', 'org-requested')).toBe(true);
+  });
+});
+
+describe('Claude usage cache', () => {
+  it('persists and reloads the last seen live snapshot by usage key', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-usage-cache-'));
+    const cachePath = path.join(tempDir, 'claude-usage.json');
+    const snapshot: UsageSnapshot = {
+      source: 'live',
+      sourceLabel: 'live account data',
+      capturedAt: new Date('2026-04-17T12:00:00Z'),
+      windows: [
+        {
+          key: 'session',
+          label: 'Current session',
+          shortLabel: 'S',
+          usedPercent: 40,
+          resetsAt: new Date('2026-04-17T16:00:00Z'),
+          windowMinutes: 300,
+        },
+        {
+          key: 'week',
+          label: 'Current week',
+          shortLabel: 'W',
+          usedPercent: 80,
+          resetsAt: new Date('2026-04-23T12:00:00Z'),
+          windowMinutes: 10080,
+        },
+      ],
+    };
+
+    try {
+      writeClaudeUsageCache('claude:org=shared', snapshot, cachePath);
+      const cached = readClaudeUsageCache(
+        'claude:org=shared',
+        cachePath,
+        new Date('2026-04-17T13:00:00Z')
+      );
+
+      expect(cached?.source).toBe('last_seen');
+      expect(cached?.sourceLabel).toBe('last seen live account data');
+      expect(cached?.windows.map((window) => window.shortLabel)).toEqual(['S', 'W']);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('drops cached windows that have already expired', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-usage-cache-'));
+    const cachePath = path.join(tempDir, 'claude-usage.json');
+    const snapshot: UsageSnapshot = {
+      source: 'live',
+      sourceLabel: 'live account data',
+      capturedAt: new Date('2026-04-17T12:00:00Z'),
+      windows: [
+        {
+          key: 'session',
+          label: 'Current session',
+          shortLabel: 'S',
+          usedPercent: 40,
+          resetsAt: new Date('2026-04-17T13:00:00Z'),
+          windowMinutes: 300,
+        },
+        {
+          key: 'week',
+          label: 'Current week',
+          shortLabel: 'W',
+          usedPercent: 80,
+          resetsAt: new Date('2026-04-23T12:00:00Z'),
+          windowMinutes: 10080,
+        },
+      ],
+    };
+
+    try {
+      writeClaudeUsageCache('claude:org=shared', snapshot, cachePath);
+      const cached = readClaudeUsageCache(
+        'claude:org=shared',
+        cachePath,
+        new Date('2026-04-17T14:00:00Z')
+      );
+
+      expect(cached?.windows.map((window) => window.shortLabel)).toEqual(['W']);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

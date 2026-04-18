@@ -53,15 +53,21 @@ export function renderSummary(events: SessionEvent[]): string {
   for (const event of events) {
     if (event.type === 'message') {
       if (event.role === 'user' && !firstUserMessage) {
-        const topic = extractSessionTopic(event.content || '');
-        if (topic) {
-          firstUserMessage = event.content || '';
+        const content = event.content || '';
+        // Skip local command caveat messages (user ran them, not agent)
+        if (!/^\s*<local-command-caveat>/i.test(content)) {
+          const topic = extractSessionTopic(content);
+          if (topic) {
+            firstUserMessage = content;
+          }
         }
       }
       if (event.role === 'assistant' && event.content) {
         lastAssistantMessage = event.content;
       }
     } else if (event.type === 'tool_use') {
+      // Skip local command tool_use events (user commands, not agent actions)
+      if (event._local) continue;
       const tool = event.tool || '';
       const p = event.path || event.args?.file_path || event.args?.path || '';
 

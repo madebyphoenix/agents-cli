@@ -16,7 +16,7 @@ import type { AccountInfo } from '../lib/agents.js';
 import type { UsageSnapshot } from '../lib/usage.js';
 import {
   formatUsageSummary,
-  getUsageInfo,
+  getUsageInfoForIdentity,
   getUsageInfoByIdentity,
   getUsageLookupKey,
 } from '../lib/usage.js';
@@ -50,6 +50,8 @@ import {
   removeShim,
   shimExists,
   getShimsDir,
+  getShimPath,
+  getPathShadowingExecutable,
   isShimsInPath,
   getPathSetupInstructions,
   addShimsToPath,
@@ -109,6 +111,18 @@ async function setDefaultVersion(
     }
   }
   switchHomeFileSymlinks(agent, installedVersion);
+  warnIfShimShadowed(agent);
+}
+
+function warnIfShimShadowed(agent: AgentId): void {
+  const shadowedBy = getPathShadowingExecutable(agent);
+  if (!shadowedBy) {
+    return;
+  }
+
+  console.log(chalk.yellow(`  Warning: ${AGENTS[agent].cliCommand} currently resolves to ${shadowedBy}`));
+  console.log(chalk.gray(`  Managed shim: ${getShimPath(agent)}`));
+  console.log(chalk.gray(`  ${getPathSetupInstructions().split('\n').join('\n  ')}`));
 }
 
 export function registerVersionsCommands(program: Command): void {
@@ -244,10 +258,11 @@ export function registerVersionsCommands(program: Command): void {
                   // Fetch account info for context in the prompt
                   const home = getVersionHomePath(agent, installedVersion);
                   const info = await getAccountInfo(agent, home);
-                  const usage = await getUsageInfo(agent, {
+                  const usage = await getUsageInfoForIdentity({
+                    agentId: agent,
                     home,
                     cliVersion: installedVersion,
-                    organizationId: info.organizationId,
+                    info,
                   });
                   const accountHint = formatAccountHint(info, usage.snapshot);
 
@@ -666,6 +681,7 @@ export function registerVersionsCommands(program: Command): void {
 
           // Switch home-level files (e.g., ~/.claude.json -> version's auth file)
           switchHomeFileSymlinks(agentId, finalVersion);
+          warnIfShimShadowed(agentId);
 
           const useEmail = await getAccountEmail(agentId, getVersionHomePath(agentId, finalVersion));
           const useEmailStr = useEmail ? chalk.cyan(` (${useEmail})`) : '';

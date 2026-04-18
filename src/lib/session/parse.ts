@@ -144,20 +144,23 @@ export function parseClaude(filePath: string): SessionEvent[] {
           const toolName = block.name || 'unknown';
           const toolInput = block.input || {};
           const toolId = block.id;
+          const isLocal = toolInput.is_local === true;
 
           if (toolId) {
             toolUseMap.set(toolId, { tool: toolName, args: toolInput });
           }
 
-          events.push({
+          const event: any = {
             type: 'tool_use',
-            agent: 'claude',
+            agent: 'claude' as const,
             timestamp,
             tool: toolName,
             args: toolInput,
             path: toolInput.file_path || undefined,
             command: toolName === 'Bash' ? toolInput.command : undefined,
-          });
+          };
+          if (isLocal) event._local = true;
+          events.push(event);
         }
       }
     } else if (type === 'user') {
