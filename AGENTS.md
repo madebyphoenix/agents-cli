@@ -182,5 +182,5 @@ bun install && bun run build && bun test
 See `docs/` for architecture deep-dives:
 - `01-version-management.md` - Version install, switching, isolation
 - `02-resource-sync.md` - Resource syncing between central and version homes
-- `03-routines.md` - Scheduled jobs with sandboxed permissions (currently `03-cron-jobs.md` in docs/)
+- `03-routines.md` - Scheduled jobs (routines) with sandboxed permissions
 - `04-landscape.md` - Competitive landscape vs Rivet, Agentloom, mise, cass, and others

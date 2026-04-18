@@ -404,6 +404,7 @@ export function registerPackagesCommands(program: Command): void {
               }
 
               for (const agentId of targets.directAgents) {
+                if (!AGENTS[agentId].capabilities.commands) continue;
                 if (!gitCliStates[agentId]?.installed && listInstalledVersions(agentId).length === 0) continue;
                 const result = installCommand(sourcePath, agentId, command.name, 'symlink');
                 if (result.error) {
@@ -439,7 +440,11 @@ export function registerPackagesCommands(program: Command): void {
             );
             let syncedVersions = 0;
             for (const skill of skills) {
-              installSkillCentrally(skill.path, skill.name);
+              const centralResult = installSkillCentrally(skill.path, skill.name);
+              if (!centralResult.success) {
+                console.log(`  ${chalk.red('x')} ${skill.name}: ${centralResult.error}`);
+                continue;
+              }
               const result = installSkill(skill.path, skill.name, directAgents);
               const status = result.success ? chalk.green('+') : chalk.red('x');
               const detail = result.success ? skill.name : `${skill.name}: ${result.error}`;
@@ -465,9 +470,12 @@ export function registerPackagesCommands(program: Command): void {
             const directHookAgents = targets.directAgents.filter(
               (id) => AGENTS[id].supportsHooks && gitCliStates[id]?.installed
             ) as AgentId[];
-            await installHooksCentrally(localPath);
+            const centralResult = await installHooksCentrally(localPath);
             const result = await installHooks(localPath, directHookAgents, { scope: 'user' });
             console.log(`  Installed ${result.installed.length} direct hook instance(s)`);
+            if (centralResult.errors.length > 0) {
+              console.log(`  ${centralResult.errors.length} hook installation(s) failed in central storage`);
+            }
 
             const hookNames = hooks;
             for (const [agentId, versions] of targets.versionSelections) {

@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import type {
   RegistryType,
   RegistryConfig,
@@ -215,6 +216,16 @@ export function parsePackageIdentifier(identifier: string): {
 
   // https://... or git@... -> git source
   if (identifier.startsWith('https://') || identifier.startsWith('git@')) {
+    return { type: 'git', name: identifier };
+  }
+
+  // Local repo/path
+  if (
+    identifier.startsWith('/') ||
+    identifier.startsWith('./') ||
+    identifier.startsWith('../') ||
+    fs.existsSync(identifier)
+  ) {
     return { type: 'git', name: identifier };
   }
 

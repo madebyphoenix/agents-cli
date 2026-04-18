@@ -76,6 +76,8 @@ vi.mock('../src/lib/shims.js', () => ({
 import {
   parseAgentSpec,
   resolveAgentVersionTargets,
+  resolveInstalledAgentTargets,
+  resolveConfiguredAgentTargets,
   compareVersions,
   getNewResources,
   hasNewResources,
@@ -202,6 +204,62 @@ describe('resolveAgentVersionTargets', () => {
     const result = resolveAgentVersionTargets('claude@2.0.0', ['claude'], { allVersions: true });
 
     expect(result.versionSelections.get('claude')).toEqual(['2.0.0']);
+  });
+});
+
+describe('resolveInstalledAgentTargets', () => {
+  it('routes bare unmanaged agents to direct homes', () => {
+    const result = resolveInstalledAgentTargets('codex', ['codex']);
+
+    expect(result.selectedAgents).toEqual(['codex']);
+    expect(result.directAgents).toEqual(['codex']);
+    expect(result.versionSelections.get('codex')).toBeUndefined();
+  });
+
+  it('routes explicit versions to managed homes', () => {
+    installManagedVersion('codex', '0.1.0');
+    installManagedVersion('codex', '0.2.0');
+
+    const result = resolveInstalledAgentTargets('codex@0.2.0', ['codex']);
+
+    expect(result.directAgents).toEqual([]);
+    expect(result.versionSelections.get('codex')).toEqual(['0.2.0']);
+  });
+
+  it('keeps broad and exact targets together when both are requested', () => {
+    installManagedVersion('claude', '2.0.0');
+    installManagedVersion('claude', '2.1.0');
+    META = { agents: { claude: '2.1.0' } };
+
+    const result = resolveInstalledAgentTargets('claude,claude@2.0.0', ['claude']);
+
+    expect(result.versionSelections.get('claude')).toEqual(['2.1.0', '2.0.0']);
+  });
+});
+
+describe('resolveConfiguredAgentTargets', () => {
+  it('uses broad agents as default/newest managed targets', () => {
+    installManagedVersion('claude', '2.0.0');
+    installManagedVersion('claude', '2.1.0');
+    META = { agents: { claude: '2.1.0' } };
+
+    const result = resolveConfiguredAgentTargets(['claude'], undefined, ['claude']);
+
+    expect(result.versionSelections.get('claude')).toEqual(['2.1.0']);
+  });
+
+  it('merges configured exact version pins with broad agent targets', () => {
+    installManagedVersion('claude', '2.0.0');
+    installManagedVersion('claude', '2.1.0');
+    META = { agents: { claude: '2.1.0' } };
+
+    const result = resolveConfiguredAgentTargets(
+      ['claude'],
+      { claude: ['2.0.0'] },
+      ['claude'],
+    );
+
+    expect(result.versionSelections.get('claude')).toEqual(['2.1.0', '2.0.0']);
   });
 });
 
