@@ -440,28 +440,32 @@ async function loadClaudeOauth(home?: string): Promise<ClaudeOauthCredentials | 
     return null;
   }
 
-  try {
-    const account = os.userInfo().username;
-    const { stdout } = await execFileAsync('security', [
-      'find-generic-password',
-      '-a',
-      account,
-      '-s',
-      getClaudeKeychainService(home),
-      '-w',
-    ]);
+  const account = os.userInfo().username;
+  for (const service of getClaudeKeychainServices(home)) {
+    try {
+      const { stdout } = await execFileAsync('security', [
+        'find-generic-password',
+        '-a',
+        account,
+        '-s',
+        service,
+        '-w',
+      ]);
 
-    const payload = JSON.parse(stdout.trim()) as ClaudeKeychainPayload;
-    if (!payload.claudeAiOauth) {
-      return null;
+      const payload = JSON.parse(stdout.trim()) as ClaudeKeychainPayload;
+      if (!payload.claudeAiOauth) {
+        continue;
+      }
+      return {
+        ...payload.claudeAiOauth,
+        organizationUuid: normalizeString(payload.organizationUuid),
+      };
+    } catch {
+      /* try the next Claude credential scope */
     }
-    return {
-      ...payload.claudeAiOauth,
-      organizationUuid: normalizeString(payload.organizationUuid),
-    };
-  } catch {
-    return null;
   }
+
+  return null;
 }
 
 export function getClaudeKeychainService(home?: string): string {
@@ -472,6 +476,14 @@ export function getClaudeKeychainService(home?: string): string {
   const configDir = path.join(home, '.claude').normalize('NFC');
   const hash = createHash('sha256').update(configDir).digest('hex').slice(0, 8);
   return `${CLAUDE_KEYCHAIN_SERVICE}-${hash}`;
+}
+
+export function getClaudeKeychainServices(home?: string): string[] {
+  const services = [getClaudeKeychainService(home)];
+  if (services[0] !== CLAUDE_KEYCHAIN_SERVICE) {
+    services.push(CLAUDE_KEYCHAIN_SERVICE);
+  }
+  return services;
 }
 
 export function isClaudeUsageOrgMatch(

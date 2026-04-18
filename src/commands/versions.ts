@@ -46,6 +46,7 @@ import {
 } from '../lib/versions.js';
 import {
   createShim,
+  createVersionedAlias,
   removeShim,
   shimExists,
   getShimsDir,
@@ -98,6 +99,8 @@ async function setDefaultVersion(
   installedVersion: string,
 ): Promise<void> {
   setGlobalDefault(agent, installedVersion);
+  createShim(agent);
+  createVersionedAlias(agent, installedVersion);
   const symlinkResult = await switchConfigSymlink(agent, installedVersion);
   if (symlinkResult.success) {
     console.log(chalk.green('  Set as default'));
@@ -650,6 +653,7 @@ export function registerVersionsCommands(program: Command): void {
 
           // Regenerate shim so it uses the latest script format
           createShim(agentId);
+          createVersionedAlias(agentId, finalVersion);
 
           // Switch config symlink (e.g., ~/.claude -> version's config)
           // No conflict prompts - just backup existing config if needed

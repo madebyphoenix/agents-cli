@@ -2,6 +2,7 @@ const WHOLE_MESSAGE_SKIP_PATTERNS = [
   /<permissions instructions>/i,
   /<collaboration_mode>/i,
   /^# AGENTS\.md instructions for\b/im,
+  /<local-command-caveat>/i,
 ];
 
 const NOISE_LINE_PATTERNS = [

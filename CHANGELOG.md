@@ -11,6 +11,7 @@
 - Session topics now skip injected scaffolding and use the first human prompt
 - Codex session rows now show the real CLI build from `cli_version` (for example `codex@0.113.0`)
 - Gemini, OpenCode, and OpenClaw session rows now resolve and display agent versions consistently in the shared `Agent` column
+- Claude usage lookup now falls back across scoped and legacy Keychain services when loading OAuth credentials
 
 ## 1.11.0
 

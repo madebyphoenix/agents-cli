@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AccountInfo } from '../agents.js';
 import {
   buildCanonicalUsageContext,
+  getClaudeKeychainServices,
   formatUsageSummary,
   getClaudeKeychainService,
   isClaudeUsageOrgMatch,
@@ -145,6 +146,14 @@ describe('Claude usage scoping', () => {
     expect(first).toMatch(/^Claude Code-credentials-[0-9a-f]{8}$/);
     expect(second).toMatch(/^Claude Code-credentials-[0-9a-f]{8}$/);
     expect(first).not.toBe(second);
+  });
+
+  it('falls back to the shared keychain service after the managed-home service', () => {
+    expect(getClaudeKeychainServices('/tmp/claude-a')).toEqual([
+      getClaudeKeychainService('/tmp/claude-a'),
+      'Claude Code-credentials',
+    ]);
+    expect(getClaudeKeychainServices()).toEqual(['Claude Code-credentials']);
   });
 
   it('keeps usage eligible when the live org is missing', () => {
