@@ -278,11 +278,9 @@ function filterSessionsByQuery(
       if (b.score !== a.score) return b.score - a.score;
       const cmA = contentIndex.get(a.session.id);
       const cmB = contentIndex.get(b.session.id);
-      if (cmA && cmB && cmA._matchedTerms && cmB._matchedTerms) {
-        if (cmB._matchedTerms.length !== cmA._matchedTerms.length) {
-          return cmB._matchedTerms.length - cmA._matchedTerms.length;
-        }
-      }
+      const bmA = cmA?._bm25Score ?? 0;
+      const bmB = cmB?._bm25Score ?? 0;
+      if (bmB !== bmA) return bmB - bmA;
       return new Date(b.session.timestamp).getTime() - new Date(a.session.timestamp).getTime();
     })
     .map(entry => {
@@ -378,7 +376,7 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
         const contentResults = searchContentIndex(allSessions, idQuery);
         if (contentResults.size > 0) {
           const matchedSessions = Array.from(contentResults.values())
-            .sort((a, b) => (a._matchedTerms?.length ?? 0) - (b._matchedTerms?.length ?? 0));
+            .sort((a, b) => (b._bm25Score ?? 0) - (a._bm25Score ?? 0));
           if (matchedSessions.length === 1) {
             session = matchedSessions[0];
             console.log(chalk.gray(

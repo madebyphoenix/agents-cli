@@ -98,9 +98,9 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
   }
   saveIndex([...toSave.values()]);
 
-  // Build content index for all discovered sessions
-  const contentIndex = await buildContentIndex(sessions);
-  saveContentIndex(contentIndex);
+  // Build BM25 content index for all discovered sessions
+  const bm25 = buildBM25Index(sessions);
+  saveBM25Index(bm25);
 
   const projectQuery = options?.project?.trim();
 
@@ -201,70 +201,130 @@ function saveIndex(sessions: SessionMeta[]): void {
 }
 
 // ---------------------------------------------------------------------------
-// Content index (inverted term -> session terms)
+// BM25 content index
 // ---------------------------------------------------------------------------
 
-async function buildContentIndex(sessions: SessionMeta[]): Promise<Map<string, Set<string>>> {
-  const index = new Map<string, Set<string>>();
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
+const BM25_INDEX_VERSION = 2;
+
+export interface BM25Index {
+  N: number;
+  avgdl: number;
+  docLengths: Map<string, number>;
+  postings: Map<string, Map<string, number>>;
+}
+
+function tokenizeCounted(text: string): { length: number; counts: Map<string, number> } {
+  const counts = new Map<string, number>();
+  let length = 0;
+  const raw = text.toLowerCase().split(/[^a-z0-9]+/);
+  for (const token of raw) {
+    if (token.length < 2) continue;
+    length++;
+    counts.set(token, (counts.get(token) ?? 0) + 1);
+  }
+  return { length, counts };
+}
+
+function collectSessionText(s: SessionMeta): string {
+  const parts: string[] = [];
+  if (s.topic) parts.push(s.topic);
+  if (s.project) parts.push(s.project);
+  if (s.cwd) parts.push(s.cwd);
+  if (s.gitBranch) parts.push(s.gitBranch);
+  if (s.account) parts.push(s.account);
+  if (s._userTerms) parts.push(s._userTerms.join('\n'));
+  return parts.join('\n');
+}
+
+export function buildBM25Index(sessions: SessionMeta[]): BM25Index {
+  const docLengths = new Map<string, number>();
+  const postings = new Map<string, Map<string, number>>();
+  let totalLength = 0;
+
   for (const session of sessions) {
-    const terms = extractSessionTerms(session);
-    for (const term of terms) {
-      if (!index.has(term)) index.set(term, new Set());
-      index.get(term)!.add(session.id);
+    const { length, counts } = tokenizeCounted(collectSessionText(session));
+    docLengths.set(session.id, length);
+    totalLength += length;
+    for (const [term, tf] of counts) {
+      let termPostings = postings.get(term);
+      if (!termPostings) {
+        termPostings = new Map();
+        postings.set(term, termPostings);
+      }
+      termPostings.set(session.id, tf);
     }
   }
-  return index;
+
+  const N = sessions.length;
+  const avgdl = N > 0 ? totalLength / N : 0;
+  return { N, avgdl, docLengths, postings };
 }
 
-function extractSessionTerms(session: SessionMeta): string[] {
-  const textParts: string[] = [];
-  if (session.topic) textParts.push(session.topic);
-  if (session.project) textParts.push(session.project);
-  if (session.cwd) textParts.push(session.cwd);
-  if (session.gitBranch) textParts.push(session.gitBranch);
-  if (session.account) textParts.push(session.account);
-  if (session._userTerms) textParts.push(session._userTerms.join('\n'));
-  return tokenizeText(textParts.join('\n'));
-}
-
-function tokenizeText(text: string): string[] {
-  const seen = new Set<string>();
-  const terms: string[] = [];
-  const tokens = text.toLowerCase().split(/[^a-z0-9]+/);
-  for (const token of tokens) {
-    if (token.length < 2 || seen.has(token)) continue;
-    seen.add(token);
-    terms.push(token);
-  }
-  return terms;
-}
-
-function saveContentIndex(index: Map<string, Set<string>>): void {
+function saveBM25Index(index: BM25Index): void {
   try {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
     const lines: string[] = [];
-    for (const [term, sessionIds] of index) {
-      lines.push(JSON.stringify({ term, sessions: [...sessionIds] }));
+    lines.push(JSON.stringify({ v: BM25_INDEX_VERSION, N: index.N, avgdl: index.avgdl }));
+    for (const [sid, len] of index.docLengths) {
+      lines.push(JSON.stringify({ d: sid, l: len }));
+    }
+    for (const [term, termPostings] of index.postings) {
+      const p: Array<[string, number]> = [];
+      for (const [sid, tf] of termPostings) p.push([sid, tf]);
+      lines.push(JSON.stringify({ t: term, p }));
     }
     fs.writeFileSync(CONTENT_INDEX_PATH, lines.join('\n') + '\n', 'utf-8');
-  } catch { /* index save failure is non-fatal */ }
+  } catch { /* non-fatal */ }
 }
 
-function loadContentIndex(): Map<string, Set<string>> {
-  const index = new Map<string, Set<string>>();
-  if (!fs.existsSync(CONTENT_INDEX_PATH)) return index;
+function loadBM25Index(): BM25Index | null {
+  if (!fs.existsSync(CONTENT_INDEX_PATH)) return null;
+  let content: string;
   try {
-    const content = fs.readFileSync(CONTENT_INDEX_PATH, 'utf-8');
-    for (const line of content.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        const entry = JSON.parse(line) as { term: string; sessions: string[] };
-        if (entry.term && entry.sessions) {
-          index.set(entry.term, new Set(entry.sessions));
-        }
-      } catch { /* malformed index entry, skip */ }
+    content = fs.readFileSync(CONTENT_INDEX_PATH, 'utf-8');
+  } catch {
+    return null;
+  }
+
+  const lines = content.split('\n').filter(l => l.trim());
+  if (lines.length === 0) return null;
+
+  let header: any;
+  try {
+    header = JSON.parse(lines[0]);
+  } catch {
+    return null;
+  }
+  if (header?.v !== BM25_INDEX_VERSION) return null;
+
+  const index: BM25Index = {
+    N: Number(header.N) || 0,
+    avgdl: Number(header.avgdl) || 0,
+    docLengths: new Map(),
+    postings: new Map(),
+  };
+
+  for (let i = 1; i < lines.length; i++) {
+    let entry: any;
+    try {
+      entry = JSON.parse(lines[i]);
+    } catch {
+      continue;
     }
-  } catch { /* index load failure is non-fatal */ }
+    if (typeof entry.d === 'string' && typeof entry.l === 'number') {
+      index.docLengths.set(entry.d, entry.l);
+    } else if (typeof entry.t === 'string' && Array.isArray(entry.p)) {
+      const termPostings = new Map<string, number>();
+      for (const pair of entry.p) {
+        if (Array.isArray(pair) && pair.length >= 2) {
+          termPostings.set(String(pair[0]), Number(pair[1]));
+        }
+      }
+      index.postings.set(entry.t, termPostings);
+    }
+  }
   return index;
 }
 
@@ -1345,49 +1405,78 @@ export function parseTimeFilter(input: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Content index search
+// BM25 content index search
 // ---------------------------------------------------------------------------
 
 /**
- * Score sessions by matching against terms from the content index.
- * Returns sessions with matched terms attached for highlighting.
+ * Pure BM25 scorer over an in-memory index. Returns sessionId -> score+matched terms,
+ * sorted by score descending (Map preserves insertion order).
+ */
+export function scoreBM25(
+  index: BM25Index,
+  query: string,
+): Map<string, { score: number; matchedTerms: string[] }> {
+  const result = new Map<string, { score: number; matchedTerms: string[] }>();
+  if (index.N === 0) return result;
+
+  const { counts: queryTerms } = tokenizeCounted(query);
+  if (queryTerms.size === 0) return result;
+
+  const avgdl = index.avgdl || 1;
+  const scored = new Map<string, { score: number; matchedTerms: string[] }>();
+
+  for (const [term] of queryTerms) {
+    const termPostings = index.postings.get(term);
+    if (!termPostings) continue;
+
+    const df = termPostings.size;
+    const idf = Math.log(1 + (index.N - df + 0.5) / (df + 0.5));
+
+    for (const [sessionId, tf] of termPostings) {
+      const dl = index.docLengths.get(sessionId) ?? avgdl;
+      const norm = 1 - BM25_B + BM25_B * (dl / avgdl);
+      const termScore = idf * (tf * (BM25_K1 + 1)) / (tf + BM25_K1 * norm);
+
+      const entry = scored.get(sessionId);
+      if (!entry) {
+        scored.set(sessionId, { score: termScore, matchedTerms: [term] });
+      } else {
+        entry.score += termScore;
+        if (!entry.matchedTerms.includes(term)) entry.matchedTerms.push(term);
+      }
+    }
+  }
+
+  const sorted = [...scored.entries()].sort((a, b) => b[1].score - a[1].score);
+  for (const [sid, info] of sorted) result.set(sid, info);
+  return result;
+}
+
+/**
+ * Score sessions using Okapi BM25 against the persisted content index.
+ * Returns a Map sorted by score descending, with matched terms attached.
  */
 export function searchContentIndex(
   sessions: SessionMeta[],
   query: string,
 ): Map<string, SessionMeta> {
-  const index = loadContentIndex();
-  if (index.size === 0) return new Map();
+  const index = loadBM25Index();
+  if (!index) return new Map();
 
-  const terms = tokenizeText(query);
-  if (terms.length === 0) return new Map();
+  const scored = scoreBM25(index, query);
+  if (scored.size === 0) return new Map();
 
-  const scored = new Map<string, { score: number; matchedTerms: string[] }>();
-
-  for (const term of terms) {
-    const matchingSessions = index.get(term);
-    if (!matchingSessions) continue;
-
-    for (const sessionId of matchingSessions) {
-      const entry = scored.get(sessionId);
-      if (!entry) {
-        scored.set(sessionId, { score: 1, matchedTerms: [term] });
-      } else {
-        entry.score += 1;
-        if (!entry.matchedTerms.includes(term)) {
-          entry.matchedTerms.push(term);
-        }
-      }
-    }
-  }
-
+  const sessionsById = new Map(sessions.map(s => [s.id, s]));
   const result = new Map<string, SessionMeta>();
   for (const [sessionId, info] of scored) {
-    const session = sessions.find(s => s.id === sessionId);
+    const session = sessionsById.get(sessionId);
     if (session) {
-      result.set(sessionId, { ...session, _matchedTerms: info.matchedTerms });
+      result.set(sessionId, {
+        ...session,
+        _matchedTerms: info.matchedTerms,
+        _bm25Score: info.score,
+      });
     }
   }
-
   return result;
 }

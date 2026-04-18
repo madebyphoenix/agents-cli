@@ -38,6 +38,8 @@ export interface SessionMeta {
   _userTerms?: string[];
   /** Terms that matched the current search query */
   _matchedTerms?: string[];
+  /** BM25 relevance score from the most recent content-index search */
+  _bm25Score?: number;
 }
 
 export type ViewMode = 'transcript' | 'summary' | 'trace' | 'json';
