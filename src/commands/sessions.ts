@@ -78,6 +78,8 @@ async function listAction(options: ListOptions): Promise<void> {
         padRight('Agent', 18) +
         padRight('Project', 16) +
         padRight('When', 14) +
+        padRight('Msgs', 8) +
+        padRight('Tokens', 10) +
         'Topic'
       )
     );
@@ -98,6 +100,8 @@ async function listAction(options: ListOptions): Promise<void> {
         agentColor(padRight(truncate(agentLabel, 16), 18)) +
         chalk.cyan(padRight(truncate(project, 14), 16)) +
         chalk.gray(padRight(when, 14)) +
+        chalk.gray(padRight(formatCompactMetric(session.messageCount), 8)) +
+        chalk.gray(padRight(formatCompactMetric(session.tokenCount), 10)) +
         chalk.white(truncate(topic, 40))
       );
     }
@@ -164,6 +168,8 @@ function formatPickerLabel(s: SessionMeta): string {
     agentColor(padRight(truncate(agentLabel, 16), 18)) +
     chalk.cyan(padRight(truncate(project, 14), 16)) +
     chalk.gray(padRight(when, 14)) +
+    chalk.gray(padRight(formatCompactMetric(s.messageCount), 8)) +
+    chalk.gray(padRight(formatCompactMetric(s.tokenCount), 10)) +
     chalk.white(truncate(topic, 30))
   );
 }
@@ -531,6 +537,17 @@ function padRight(s: string, width: number): string {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + '.' : s;
+}
+
+function formatCompactMetric(value?: number): string {
+  if (value === undefined) return '-';
+  if (value < 1000) return String(value);
+  if (value < 1_000_000) {
+    const compact = value / 1000;
+    return compact >= 100 ? `${Math.round(compact)}k` : `${compact.toFixed(1).replace(/\.0$/, '')}k`;
+  }
+  const compact = value / 1_000_000;
+  return compact >= 100 ? `${Math.round(compact)}m` : `${compact.toFixed(1).replace(/\.0$/, '')}m`;
 }
 
 function formatRelativeTime(isoTimestamp: string): string {

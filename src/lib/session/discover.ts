@@ -20,6 +20,27 @@ export interface DiscoverOptions {
   limit?: number;
 }
 
+interface ClaudeSessionScan {
+  timestamp?: string;
+  cwd?: string;
+  gitBranch?: string;
+  version?: string;
+  topic?: string;
+  messageCount: number;
+  tokenCount?: number;
+}
+
+interface CodexSessionScan {
+  sessionId?: string;
+  timestamp?: string;
+  cwd?: string;
+  gitBranch?: string;
+  version?: string;
+  topic?: string;
+  messageCount: number;
+  tokenCount?: number;
+}
+
 /**
  * Discover sessions across all installed agents, versions, and backups.
  * Merges with a persistent index so sessions survive version removal.
@@ -142,18 +163,7 @@ function saveIndex(sessions: SessionMeta[]): void {
     for (const s of sessions) {
       if (seen.has(s.id)) continue;
       seen.add(s.id);
-      lines.push(JSON.stringify({
-        id: s.id,
-        shortId: s.shortId,
-        agent: s.agent,
-        timestamp: s.timestamp,
-        project: s.project,
-        cwd: s.cwd,
-        filePath: s.filePath,
-        gitBranch: s.gitBranch,
-        version: s.version,
-        account: s.account,
-      }));
+      lines.push(JSON.stringify(s));
     }
     fs.writeFileSync(INDEX_PATH, lines.join('\n') + '\n', 'utf-8');
   } catch (err: any) {
@@ -305,42 +315,25 @@ async function discoverClaudeSessions(): Promise<SessionMeta[]> {
 }
 
 async function readClaudeMeta(filePath: string, sessionId: string, account?: string): Promise<SessionMeta | null> {
-  const lines = await readFirstLines(filePath, 10);
+  const scan = await scanClaudeSession(filePath);
 
-  let topic: string | undefined;
-  for (const line of lines) {
-    let parsed: any;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    // Extract topic from first user message
-    if (!topic && parsed.type === 'user' && parsed.message?.content) {
-      const text = Array.isArray(parsed.message.content)
-        ? parsed.message.content.find((b: any) => b.type === 'text')?.text
-        : typeof parsed.message.content === 'string' ? parsed.message.content : undefined;
-      if (text) topic = extractTopic(text);
-    }
-
-    // Look for first user or assistant line with timestamp/cwd
-    if ((parsed.type === 'user' || parsed.type === 'assistant') && parsed.timestamp) {
-      const cwd = parsed.cwd || '';
-      return {
-        id: sessionId,
-        shortId: sessionId.slice(0, 8),
-        agent: 'claude',
-        timestamp: parsed.timestamp,
-        project: cwd ? path.basename(cwd) : undefined,
-        cwd,
-        filePath,
-        gitBranch: parsed.gitBranch || undefined,
-        version: parsed.version || undefined,
-        account,
-        topic,
-      };
-    }
+  if (scan.timestamp) {
+    const cwd = scan.cwd || '';
+    return {
+      id: sessionId,
+      shortId: sessionId.slice(0, 8),
+      agent: 'claude',
+      timestamp: scan.timestamp,
+      project: cwd ? path.basename(cwd) : undefined,
+      cwd,
+      filePath,
+      gitBranch: scan.gitBranch,
+      version: scan.version,
+      account,
+      topic: scan.topic,
+      messageCount: scan.messageCount,
+      tokenCount: scan.tokenCount,
+    };
   }
 
   // Fallback: use file mtime
@@ -352,6 +345,9 @@ async function readClaudeMeta(filePath: string, sessionId: string, account?: str
     timestamp: stat ? stat.mtime.toISOString() : new Date().toISOString(),
     filePath,
     account,
+    messageCount: scan.messageCount,
+    tokenCount: scan.tokenCount,
+    topic: scan.topic,
   };
 }
 
@@ -433,47 +429,24 @@ async function discoverCodexSessions(): Promise<SessionMeta[]> {
 }
 
 async function readCodexMeta(filePath: string, account?: string): Promise<SessionMeta | null> {
-  const lines = await readFirstLines(filePath, 5);
-  if (lines.length === 0) return null;
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(lines[0]);
-  } catch {
-    return null;
-  }
-
-  if (parsed.type !== 'session_meta') return null;
-
-  const payload = parsed.payload || {};
-  const sessionId = payload.id || '';
+  const scan = await scanCodexSession(filePath);
+  const sessionId = scan.sessionId || '';
   if (!sessionId) return null;
 
-  // Extract topic from first user message in subsequent lines
-  let topic: string | undefined;
-  for (let i = 1; i < lines.length; i++) {
-    try {
-      const ev = JSON.parse(lines[i]);
-      if (ev.type === 'message' && ev.role === 'user' && ev.content) {
-        const text = typeof ev.content === 'string' ? ev.content
-          : Array.isArray(ev.content) ? ev.content.find((b: any) => b.type === 'input_text')?.text : undefined;
-        if (text) { topic = extractTopic(text); break; }
-      }
-    } catch { /* malformed event line */ }
-  }
-
-  const cwd = payload.cwd || '';
+  const cwd = scan.cwd || '';
   return {
     id: sessionId,
     shortId: sessionId.slice(0, 8),
     agent: 'codex',
-    timestamp: payload.timestamp || parsed.timestamp || new Date().toISOString(),
+    timestamp: scan.timestamp || new Date().toISOString(),
     project: cwd ? path.basename(cwd) : undefined,
     cwd,
     filePath,
-    gitBranch: payload.git?.branch || undefined,
-    version: payload.version || undefined,
-    topic,
+    gitBranch: scan.gitBranch,
+    version: scan.version,
+    topic: scan.topic,
+    messageCount: scan.messageCount,
+    tokenCount: scan.tokenCount,
     account,
   };
 }
@@ -532,19 +505,16 @@ function readGeminiMeta(
   hashDir: string,
   projectMap: Map<string, { name: string; path: string }>
 ): SessionMeta | null {
-  // Read the first ~2KB to get top-level fields without parsing entire messages array
-  const fd = fs.openSync(filePath, 'r');
-  const buf = Buffer.alloc(2048);
-  const bytesRead = fs.readSync(fd, buf, 0, 2048, 0);
-  fs.closeSync(fd);
+  let session: any;
+  try {
+    session = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
 
-  const header = buf.toString('utf-8', 0, bytesRead);
-
-  // Extract fields via regex (avoids parsing potentially huge messages array)
-  const sessionId = extractJsonField(header, 'sessionId');
-  const startTime = extractJsonField(header, 'startTime');
-  const projectHash = extractJsonField(header, 'projectHash');
-
+  const sessionId = typeof session.sessionId === 'string' ? session.sessionId : '';
+  const startTime = typeof session.startTime === 'string' ? session.startTime : '';
+  const projectHash = typeof session.projectHash === 'string' ? session.projectHash : '';
   if (!sessionId) return null;
 
   // Resolve project name from hash
@@ -554,10 +524,31 @@ function readGeminiMeta(
 
   const stat = safeStatSync(filePath);
 
-  // Try to extract first user message from the header bytes
+  const messages = Array.isArray(session.messages) ? session.messages : [];
   let topic: string | undefined;
-  const userMsgMatch = header.match(/"role"\s*:\s*"user"[\s\S]*?"text"\s*:\s*"([^"]{1,200})"/);
-  if (userMsgMatch) topic = extractTopic(userMsgMatch[1]);
+  let messageCount = 0;
+  let tokenCount = 0;
+  let sawTokenCount = false;
+
+  for (const message of messages) {
+    if (message.type === 'user') {
+      const text = extractGeminiMessageText(message.content);
+      if (text) {
+        messageCount++;
+        if (!topic) topic = extractTopic(text);
+      }
+    } else if (message.type === 'gemini') {
+      if (extractGeminiMessageText(message.content)) {
+        messageCount++;
+      }
+    }
+
+    const total = getGeminiTokenCount(message.tokens);
+    if (total !== null) {
+      tokenCount += total;
+      sawTokenCount = true;
+    }
+  }
 
   return {
     id: sessionId,
@@ -568,6 +559,8 @@ function readGeminiMeta(
     cwd,
     filePath,
     topic,
+    messageCount,
+    tokenCount: sawTokenCount ? tokenCount : undefined,
   };
 }
 
@@ -662,9 +655,32 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
     // Query sessions. time_created is millisecond epoch. Limit to 200 most recent.
     // Use session.title as topic (OpenCode auto-generates good titles).
     const query = `
-      SELECT id, title, directory, version, time_created
-      FROM session
-      WHERE parent_id IS NULL
+      SELECT
+        s.id,
+        s.title,
+        s.directory,
+        s.version,
+        s.time_created,
+        COALESCE(stats.message_count, 0),
+        stats.token_count,
+        COALESCE(stats.has_token_data, 0)
+      FROM session s
+      LEFT JOIN (
+        SELECT
+          session_id,
+          COUNT(*) AS message_count,
+          SUM(
+            COALESCE(json_extract(data, '$.tokens.input'), 0) +
+            COALESCE(json_extract(data, '$.tokens.output'), 0) +
+            COALESCE(json_extract(data, '$.tokens.reasoning'), 0) +
+            COALESCE(json_extract(data, '$.tokens.cache.read'), 0) +
+            COALESCE(json_extract(data, '$.tokens.cache.write'), 0)
+          ) AS token_count,
+          MAX(CASE WHEN json_type(data, '$.tokens') IS NOT NULL THEN 1 ELSE 0 END) AS has_token_data
+        FROM message
+        GROUP BY session_id
+      ) stats ON stats.session_id = s.id
+      WHERE s.parent_id IS NULL
       ORDER BY time_created DESC
       LIMIT 200;
     `.replace(/\n/g, ' ');
@@ -678,10 +694,13 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
 
     for (const line of out.split('\n')) {
       if (!line.trim()) continue;
-      const [id, title, directory, version, timeCreatedStr] = line.split('|||');
+      const [id, title, directory, version, timeCreatedStr, messageCountStr, tokenCountStr, hasTokenDataStr] = line.split('|||');
       if (!id) continue;
 
       const timeCreated = parseInt(timeCreatedStr, 10);
+      const messageCount = parseInt(messageCountStr, 10);
+      const tokenCount = parseInt(tokenCountStr, 10);
+      const hasTokenData = hasTokenDataStr === '1';
       const timestamp = isNaN(timeCreated) ? new Date().toISOString() : new Date(timeCreated).toISOString();
       const topic = title || undefined;
 
@@ -696,6 +715,8 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
         version: version || undefined,
         account,
         topic,
+        messageCount: Number.isNaN(messageCount) ? undefined : messageCount,
+        tokenCount: hasTokenData && !Number.isNaN(tokenCount) ? tokenCount : undefined,
       });
     }
 
@@ -798,6 +819,149 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
   return sessions;
 }
 
+async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
+  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+  let timestamp: string | undefined;
+  let cwd: string | undefined;
+  let gitBranch: string | undefined;
+  let version: string | undefined;
+  let topic: string | undefined;
+  let messageCount = 0;
+  let tokenCount = 0;
+  let sawTokenCount = false;
+  const seenAssistantIds = new Set<string>();
+
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      if (!timestamp && (parsed.type === 'user' || parsed.type === 'assistant') && parsed.timestamp) {
+        timestamp = parsed.timestamp;
+        cwd = parsed.cwd || '';
+        gitBranch = parsed.gitBranch || undefined;
+        version = parsed.version || undefined;
+      }
+
+      if (parsed.type === 'user') {
+        const text = extractClaudeUserText(parsed);
+        if (text) {
+          messageCount++;
+          if (!topic) topic = extractTopic(text);
+        }
+        continue;
+      }
+
+      if (parsed.type !== 'assistant') continue;
+
+      const assistantId = typeof parsed.message?.id === 'string'
+        ? parsed.message.id
+        : typeof parsed.uuid === 'string'
+          ? parsed.uuid
+          : undefined;
+
+      const logicalId = assistantId || `${parsed.timestamp || ''}:${seenAssistantIds.size}`;
+      if (seenAssistantIds.has(logicalId)) continue;
+      seenAssistantIds.add(logicalId);
+      messageCount++;
+
+      const usage = getClaudeUsageTotal(parsed.message?.usage || parsed.usage);
+      if (usage !== null) {
+        tokenCount += usage;
+        sawTokenCount = true;
+      }
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+
+  return {
+    timestamp,
+    cwd,
+    gitBranch,
+    version,
+    topic,
+    messageCount,
+    tokenCount: sawTokenCount ? tokenCount : undefined,
+  };
+}
+
+async function scanCodexSession(filePath: string): Promise<CodexSessionScan> {
+  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+  let sessionId: string | undefined;
+  let timestamp: string | undefined;
+  let cwd: string | undefined;
+  let gitBranch: string | undefined;
+  let version: string | undefined;
+  let topic: string | undefined;
+  let messageCount = 0;
+  let tokenCount: number | undefined;
+
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      if (parsed.type === 'session_meta') {
+        const payload = parsed.payload || {};
+        sessionId = payload.id || sessionId;
+        timestamp = payload.timestamp || parsed.timestamp || timestamp;
+        cwd = payload.cwd || cwd;
+        gitBranch = payload.git?.branch || gitBranch;
+        version = payload.version || version;
+        continue;
+      }
+
+      if (parsed.type === 'response_item' && parsed.payload?.type === 'message') {
+        const role = parsed.payload.role === 'user' || parsed.payload.role === 'developer'
+          ? 'user'
+          : 'assistant';
+        const text = extractCodexMessageText(parsed.payload.content, role);
+        if (!text) continue;
+        messageCount++;
+        if (role === 'user' && !topic) topic = extractTopic(text);
+        continue;
+      }
+
+      if (parsed.type === 'event_msg' && parsed.payload?.type === 'token_count') {
+        const total = getCodexTokenCount(parsed.payload.info?.total_token_usage);
+        if (total !== null) tokenCount = total;
+      }
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+
+  return {
+    sessionId,
+    timestamp,
+    cwd,
+    gitBranch,
+    version,
+    topic,
+    messageCount,
+    tokenCount,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
@@ -859,12 +1023,6 @@ export function walkForFiles(dir: string, ext: string, limit: number): string[] 
   return results.slice(0, limit).map(r => r.path);
 }
 
-function extractJsonField(text: string, field: string): string {
-  const re = new RegExp(`"${field}"\\s*:\\s*"([^"]*)"`, 'i');
-  const match = text.match(re);
-  return match ? match[1] : '';
-}
-
 function sha256(input: string): string {
   return crypto.createHash('sha256').update(input).digest('hex');
 }
@@ -891,4 +1049,108 @@ function extractTopic(text: string): string {
   // Take first line only
   const firstLine = clean.split('\n')[0].trim();
   return firstLine;
+}
+
+function extractClaudeUserText(parsed: any): string | undefined {
+  if (parsed.isMeta === true) return undefined;
+
+  const content = parsed.message?.content;
+  if (typeof content === 'string') {
+    const text = content.trim();
+    return isLocalCommandMessage(text) ? undefined : text || undefined;
+  }
+
+  if (!Array.isArray(content)) return undefined;
+
+  const text = content
+    .filter((block: any) => block.type === 'text')
+    .map((block: any) => String(block.text || '').trim())
+    .find((value: string) => value && !value.startsWith('[Request interrupted'));
+
+  if (!text || isLocalCommandMessage(text)) return undefined;
+  return text;
+}
+
+function isLocalCommandMessage(text: string): boolean {
+  return /<local-command-caveat>|<bash-(input|stdout|stderr)>/i.test(text);
+}
+
+function getClaudeUsageTotal(usage: any): number | null {
+  if (!usage || typeof usage !== 'object') return null;
+  return sumKnownNumbers([
+    usage.input_tokens,
+    usage.output_tokens,
+    usage.cache_creation_input_tokens,
+    usage.cache_read_input_tokens,
+  ]);
+}
+
+function extractCodexMessageText(contentBlocks: any, role: 'user' | 'assistant'): string | undefined {
+  if (!Array.isArray(contentBlocks)) return undefined;
+
+  const matches = role === 'user'
+    ? contentBlocks.filter((block: any) => block.type === 'input_text')
+    : contentBlocks.filter((block: any) => block.type === 'output_text');
+
+  const text = matches
+    .map((block: any) => String(block.text || '').trim())
+    .find((value: string) => {
+      if (!value) return false;
+      if (role === 'user' && (value.length >= 2000 || value.includes('<permissions instructions>') || value.startsWith('# AGENTS.md instructions'))) {
+        return false;
+      }
+      return true;
+    });
+
+  return text || undefined;
+}
+
+function getCodexTokenCount(totalTokenUsage: any): number | null {
+  if (!totalTokenUsage || typeof totalTokenUsage !== 'object') return null;
+  return sumKnownNumbers([
+    totalTokenUsage.input_tokens,
+    totalTokenUsage.cached_input_tokens,
+    totalTokenUsage.output_tokens,
+    totalTokenUsage.reasoning_output_tokens,
+  ]);
+}
+
+function extractGeminiMessageText(content: any): string {
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part: any) => {
+        if (typeof part === 'string') return part;
+        if (typeof part?.text === 'string') return part.text;
+        return '';
+      })
+      .join('\n')
+      .trim();
+  }
+  return '';
+}
+
+function getGeminiTokenCount(tokens: any): number | null {
+  if (!tokens || typeof tokens !== 'object') return null;
+  if (typeof tokens.total === 'number') return tokens.total;
+  return sumKnownNumbers([
+    tokens.input,
+    tokens.output,
+    tokens.cached,
+    tokens.thoughts,
+    tokens.tool,
+  ]);
+}
+
+function sumKnownNumbers(values: unknown[]): number | null {
+  let total = 0;
+  let found = false;
+
+  for (const value of values) {
+    if (typeof value !== 'number' || Number.isNaN(value)) continue;
+    total += value;
+    found = true;
+  }
+
+  return found ? total : null;
 }

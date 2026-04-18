@@ -26,6 +26,7 @@ export interface SessionMeta {
   filePath: string;
   gitBranch?: string;
   messageCount?: number;
+  tokenCount?: number;
   version?: string;
   account?: string;
   topic?: string;
