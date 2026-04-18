@@ -15,6 +15,7 @@ const HOME = os.homedir();
 const AGENTS_DIR = path.join(HOME, '.agents');
 const SESSIONS_DIR = path.join(AGENTS_DIR, 'sessions');
 const INDEX_PATH = path.join(SESSIONS_DIR, 'index.jsonl');
+const CONTENT_INDEX_PATH = path.join(SESSIONS_DIR, 'content_index.jsonl');
 
 export interface DiscoverOptions {
   agent?: SessionAgentId;
@@ -22,6 +23,10 @@ export interface DiscoverOptions {
   all?: boolean;
   cwd?: string;
   limit?: number;
+  /** Filter sessions newer than this (ISO timestamp or "7d", "30d", "90d") */
+  since?: string;
+  /** Filter sessions older than this (ISO timestamp) */
+  until?: string;
 }
 
 interface ClaudeSessionScan {
@@ -89,12 +94,26 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
   }
   saveIndex([...toSave.values()]);
 
+  // Build content index for all discovered sessions
+  const contentIndex = buildContentIndex(sessions);
+  saveContentIndex(contentIndex);
+
   const projectQuery = options?.project?.trim();
 
   // Filter by project (case-insensitive substring match)
   if (projectQuery) {
     const query = projectQuery.toLowerCase();
     sessions = sessions.filter(s => s.project?.toLowerCase().includes(query));
+  }
+
+  // Apply time range filters
+  if (options?.since || options?.until) {
+    const sinceMs = options.since ? parseTimeFilter(options.since) : 0;
+    const untilMs = options.until ? new Date(options.until).getTime() : Infinity;
+    sessions = sessions.filter(s => {
+      const ts = new Date(s.timestamp).getTime();
+      return ts >= sinceMs && ts <= untilMs;
+    });
   }
 
   // An explicit project search should scan across directories instead of

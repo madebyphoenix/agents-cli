@@ -30,8 +30,8 @@ export interface SessionMeta {
   version?: string;
   account?: string;
   topic?: string;
-  /** Inverted index: term -> frequency across all user messages */
-  _contentIndex?: Map<string, number>;
+  /** Inverted index: term -> frequency across all user messages (stored as JSON object) */
+  _contentIndex?: Record<string, number>;
   /** Terms that matched the current search query */
   _matchedTerms?: string[];
 }
