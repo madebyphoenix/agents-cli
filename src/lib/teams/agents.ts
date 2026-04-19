@@ -47,6 +47,7 @@ export function computePathLCA(paths: string[]): string | null {
 }
 
 export enum AgentStatus {
+  PENDING = 'pending',     // staged with unresolved --after deps
   RUNNING = 'running',
   COMPLETED = 'completed',
   FAILED = 'failed',
@@ -363,6 +364,12 @@ export class AgentProcess {
   version: string | null = null;
   remoteSessionId: string | null = null;
   name: string | null = null;
+  // Names of teammates in the same team that this teammate is waiting on.
+  // Empty array = no deps = can run immediately. Populated by `teams add --after`.
+  after: string[] = [];
+  // Stashed so we can resolve the model at launch time when a pending teammate
+  // is finally started (could be later than spawn time; model map may shift).
+  effort: EffortLevel | null = null;
   private eventsCache: any[] = [];
   private lastReadPos: number = 0;
   private baseDir: string | null = null;
@@ -386,11 +393,15 @@ export class AgentProcess {
     prUrl: string | null = null,
     version: string | null = null,
     remoteSessionId: string | null = null,
-    name: string | null = null
+    name: string | null = null,
+    after: string[] = [],
+    effort: EffortLevel | null = null
   ) {
     this.agentId = agentId;
     this.remoteSessionId = remoteSessionId;
     this.name = name;
+    this.after = after;
+    this.effort = effort;
     this.taskName = taskName;
     this.agentType = agentType;
     this.prompt = prompt;
@@ -445,6 +456,8 @@ export class AgentProcess {
       version: this.version,
       remote_session_id: this.remoteSessionId,
       name: this.name,
+      after: this.after,
+      effort: this.effort,
     };
   }
 
@@ -572,6 +585,8 @@ export class AgentProcess {
       version: this.version,
       remote_session_id: this.remoteSessionId,
       name: this.name,
+      after: this.after,
+      effort: this.effort,
     };
     const metaPath = await this.getMetaPath();
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
@@ -614,7 +629,9 @@ export class AgentProcess {
         meta.pr_url || null,
         meta.version || null,
         meta.remote_session_id || null,
-        meta.name || null
+        meta.name || null,
+        Array.isArray(meta.after) ? meta.after : [],
+        meta.effort || null
       );
       return agent;
     } catch {
