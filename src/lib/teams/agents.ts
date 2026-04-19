@@ -632,6 +632,14 @@ export class AgentProcess {
       const modeMap: Record<string, Mode> = { edit: 'edit', ralph: 'ralph', cloud: 'cloud' };
       const resolvedMode: Mode = modeMap[meta.mode] || 'plan';
 
+      // AgentStatus is a string enum. Validate meta.status against its VALUES
+      // (not its keys) — `AgentStatus["pending"]` is undefined but
+      // `AgentStatus.PENDING === "pending"` works.
+      const validStatuses = Object.values(AgentStatus);
+      const resolvedStatus: AgentStatus = validStatuses.includes(meta.status as AgentStatus)
+        ? (meta.status as AgentStatus)
+        : AgentStatus.RUNNING;
+
       const agent = new AgentProcess(
         meta.agent_id,
         meta.task_name || 'default',
@@ -640,7 +648,7 @@ export class AgentProcess {
         meta.cwd || null,
         resolvedMode,
         meta.pid || null,
-        AgentStatus[meta.status as keyof typeof AgentStatus] || AgentStatus.RUNNING,
+        resolvedStatus,
         new Date(meta.started_at),
         meta.completed_at ? new Date(meta.completed_at) : null,
         baseDir,
