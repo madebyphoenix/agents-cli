@@ -108,10 +108,17 @@ function createScanProgressTracker(
   };
 }
 
+const PICKER_RECENT_COUNT = 15;
+const PICKER_POOL_LIMIT = 200;
+
 async function sessionsAction(query: string | undefined, options: SessionsOptions): Promise<void> {
   const { agent, version } = parseAgentFilter(options.agent);
 
-  const limit = parseInt(options.limit || '50', 10);
+  // Interactive picker loads a deep pool but shows only recent sessions
+  // until the user starts typing. Non-interactive/JSON uses the explicit limit.
+  const isInteractive = !options.json && isInteractiveTerminal();
+  const limit = parseInt(options.limit || (isInteractive ? String(PICKER_POOL_LIMIT) : '50'), 10);
+  const since = options.since ?? (isInteractive && !options.all ? '30d' : undefined);
   const spinner = options.json ? null : ora().start();
   const tracker = createScanProgressTracker(LOAD_VERBS, 'sessions', spinner);
 
@@ -122,7 +129,7 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
       cwd: process.cwd(),
       project: options.project,
       limit,
-      since: options.since,
+      since,
       until: options.until,
       onProgress: tracker.onProgress,
     });
@@ -355,9 +362,13 @@ async function pickSessionInteractive(
     return await sessionPicker({
       message,
       sessions,
-      filter: (query: string) => filterSessionsByQuery(sessions, query),
+      filter: (query: string) => {
+        // No query: show only recent sessions. Typing: search the full pool.
+        if (!query.trim()) return sessions.slice(0, PICKER_RECENT_COUNT);
+        return filterSessionsByQuery(sessions, query);
+      },
       labelFor: (s: SessionMeta, query: string) => formatPickerLabel(s, query),
-      pageSize: 12,
+      pageSize: PICKER_RECENT_COUNT,
       initialSearch,
     });
   } catch (err) {
