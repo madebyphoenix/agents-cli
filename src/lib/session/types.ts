@@ -32,6 +32,8 @@ export interface SessionMeta {
   version?: string;
   account?: string;
   topic?: string;
+  /** Custom name the user gave the session (e.g. Claude Code /rename). */
+  label?: string;
   /** Terms that matched the current search query */
   _matchedTerms?: string[];
   /** BM25 relevance score from the most recent content-index search */

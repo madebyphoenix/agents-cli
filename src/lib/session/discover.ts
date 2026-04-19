@@ -15,6 +15,7 @@ import {
   getScanStampByPath,
   getScanStampsForPaths,
   recordScans,
+  syncLabels,
   upsertSessionsBatch,
   querySessions,
   ftsSearch,
@@ -297,8 +298,46 @@ function getClaudeAccount(): string | undefined {
 // Claude
 // ---------------------------------------------------------------------------
 
+/**
+ * Build a map of Claude sessionId -> user-given label from ~/.claude/sessions/*.json.
+ * Each JSON has shape { pid, sessionId, cwd, startedAt, name?, ... }. The
+ * `name` field only exists if the user ran /rename in that session.
+ * For sessionId collisions (re-resume of the same session), prefer the most
+ * recent startedAt.
+ */
+function buildClaudeLabelMap(): Map<string, string | null> {
+  const map = new Map<string, { label: string | null; startedAt: number }>();
+  const dir = path.join(HOME, '.claude', 'sessions');
+  if (!fs.existsSync(dir)) return new Map();
+
+  let files: string[];
+  try {
+    files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+  } catch {
+    return new Map();
+  }
+
+  for (const f of files) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8'));
+      if (typeof data.sessionId !== 'string') continue;
+      const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : null;
+      const startedAt = typeof data.startedAt === 'number' ? data.startedAt : 0;
+      const existing = map.get(data.sessionId);
+      if (!existing || startedAt > existing.startedAt) {
+        map.set(data.sessionId, { label: name, startedAt });
+      }
+    } catch { /* unreadable session metadata file */ }
+  }
+
+  const out = new Map<string, string | null>();
+  for (const [sid, { label }] of map) out.set(sid, label);
+  return out;
+}
+
 async function scanClaudeIncremental(onProgress?: (p: ScanProgress) => void): Promise<void> {
   const account = getClaudeAccount();
+  const labelMap = buildClaudeLabelMap();
   const filePaths: string[] = [];
   const seen = new Set<string>();
 
@@ -332,37 +371,44 @@ async function scanClaudeIncremental(onProgress?: (p: ScanProgress) => void): Pr
   }
 
   const changed = filterChangedFiles(filePaths);
-  if (changed.length === 0) return;
 
-  onProgress?.({ agent: 'claude', parsed: 0, total: changed.length });
+  if (changed.length > 0) {
+    onProgress?.({ agent: 'claude', parsed: 0, total: changed.length });
 
-  const entries: ScanEntry[] = [];
-  const touched: Array<{ filePath: string; scan: ScanStamp }> = [];
-  let parsed = 0;
-  for (const { filePath, scan } of changed) {
-    try {
-      const sessionId = path.basename(filePath).replace('.jsonl', '');
-      const result = await readClaudeMeta(filePath, sessionId, account);
-      if (result) {
-        entries.push({ meta: result.meta, content: result.content, scan });
-      } else {
+    const entries: ScanEntry[] = [];
+    const touched: Array<{ filePath: string; scan: ScanStamp }> = [];
+    let parsed = 0;
+    for (const { filePath, scan } of changed) {
+      try {
+        const sessionId = path.basename(filePath).replace('.jsonl', '');
+        const label = labelMap.get(sessionId) ?? undefined;
+        const result = await readClaudeMeta(filePath, sessionId, account, label);
+        if (result) {
+          entries.push({ meta: result.meta, content: result.content, scan });
+        } else {
+          touched.push({ filePath, scan });
+        }
+      } catch {
         touched.push({ filePath, scan });
       }
-    } catch {
-      touched.push({ filePath, scan });
+      parsed++;
+      onProgress?.({ agent: 'claude', parsed, total: changed.length });
     }
-    parsed++;
-    onProgress?.({ agent: 'claude', parsed, total: changed.length });
+
+    upsertSessionsBatch(entries);
+    recordScans(touched);
   }
 
-  upsertSessionsBatch(entries);
-  recordScans(touched);
+  // Pick up /rename changes on sessions whose JSONL didn't change.
+  // Only bother for sessions we actually have a Claude row for.
+  if (labelMap.size > 0) syncLabels(labelMap);
 }
 
 async function readClaudeMeta(
   filePath: string,
   sessionId: string,
   account?: string,
+  label?: string,
 ): Promise<{ meta: SessionMeta; content: string } | null> {
   const scan = await scanClaudeSession(filePath);
 
@@ -381,6 +427,7 @@ async function readClaudeMeta(
       version: scan.version,
       account,
       topic: scan.topic,
+      label,
       messageCount: scan.messageCount,
       tokenCount: scan.tokenCount,
     };
@@ -393,6 +440,7 @@ async function readClaudeMeta(
       timestamp: stat ? stat.mtime.toISOString() : new Date().toISOString(),
       filePath,
       account,
+      label,
       messageCount: scan.messageCount,
       tokenCount: scan.tokenCount,
       topic: scan.topic,

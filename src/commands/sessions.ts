@@ -53,18 +53,52 @@ interface ClaudeResumeMatch {
 
 const CLAUDE_RESUME_MATCH_WINDOW_MS = 10 * 60_000;
 
-function createScanProgressTracker(base: string, spinner: ReturnType<typeof ora> | null) {
+const LOAD_VERBS = ['Loading', 'Scanning', 'Gathering', 'Indexing', 'Reading'];
+const FIND_VERBS = ['Finding', 'Searching', 'Locating', 'Matching'];
+
+interface ProgressTracker {
+  onProgress: (progress: ScanProgress) => void;
+  stop: () => void;
+}
+
+function createScanProgressTracker(
+  verbs: string[],
+  suffix: string,
+  spinner: ReturnType<typeof ora> | null,
+): ProgressTracker {
   const counts = new Map<SessionAgentId, { parsed: number; total: number }>();
-  return (progress: ScanProgress) => {
+  let verbIndex = 0;
+
+  const render = (): void => {
     if (!spinner) return;
-    counts.set(progress.agent, { parsed: progress.parsed, total: progress.total });
+    const verb = verbs[verbIndex % verbs.length];
     const parts: string[] = [];
     for (const agent of SESSION_AGENTS) {
       const c = counts.get(agent);
       if (!c || c.total === 0) continue;
       parts.push(`${agent} ${c.parsed}/${c.total}`);
     }
+    const base = `${verb} ${suffix}...`;
     spinner.text = parts.length > 0 ? `${base} (${parts.join(' · ')})` : base;
+  };
+
+  const interval = spinner
+    ? setInterval(() => {
+        verbIndex++;
+        render();
+      }, 900)
+    : null;
+
+  render();
+
+  return {
+    onProgress: (progress: ScanProgress) => {
+      counts.set(progress.agent, { parsed: progress.parsed, total: progress.total });
+      render();
+    },
+    stop: () => {
+      if (interval) clearInterval(interval);
+    },
   };
 }
 
@@ -72,9 +106,8 @@ async function listAction(options: ListOptions): Promise<void> {
   const agent = parseAgentFilter(options.agent);
 
   const limit = parseInt(options.limit || '20', 10);
-  const baseText = 'Loading sessions...';
-  const spinner = options.json ? null : ora(baseText).start();
-  const onProgress = createScanProgressTracker(baseText, spinner);
+  const spinner = options.json ? null : ora().start();
+  const tracker = createScanProgressTracker(LOAD_VERBS, 'sessions', spinner);
 
   try {
     const sessions = await discoverSessions({
@@ -85,9 +118,10 @@ async function listAction(options: ListOptions): Promise<void> {
       limit,
       since: options.since,
       until: options.until,
-      onProgress,
+      onProgress: tracker.onProgress,
     });
 
+    tracker.stop();
     spinner?.stop();
 
     if (options.json) {
@@ -151,6 +185,7 @@ async function listAction(options: ListOptions): Promise<void> {
 
     console.log(chalk.gray(`\n${sessions.length} session${sessions.length === 1 ? '' : 's'}. Use 'agents sessions view <id>' to read.`));
   } catch (err: any) {
+    tracker.stop();
     spinner?.stop();
     console.error(chalk.red(`Failed to discover sessions: ${err.message}`));
     process.exit(1);
@@ -429,9 +464,12 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
   else if (options.json) mode = 'json';
   const agent = parseAgentFilter(options.agent);
 
-  const baseText = idQuery ? 'Finding session...' : 'Loading sessions...';
-  const spinner = ora(baseText).start();
-  const onProgress = createScanProgressTracker(baseText, spinner);
+  const spinner = ora().start();
+  const tracker = createScanProgressTracker(
+    idQuery ? FIND_VERBS : LOAD_VERBS,
+    idQuery ? 'session' : 'sessions',
+    spinner,
+  );
 
   try {
     const allSessions = await discoverSessions({
@@ -442,8 +480,9 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
       limit: 5000,
       since: options.since,
       until: options.until,
-      onProgress,
+      onProgress: tracker.onProgress,
     });
+    tracker.stop();
     let session: SessionMeta | undefined;
 
     if (!idQuery) {
@@ -536,6 +575,7 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
     await renderSession(session, mode);
   } catch (err: any) {
     if (isPromptCancelled(err)) return;
+    tracker.stop();
     spinner.stop();
     console.error(chalk.red(`Failed to read session: ${err.message}`));
     process.exit(1);

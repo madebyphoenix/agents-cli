@@ -8,7 +8,11 @@ const HOME = os.homedir();
 const SESSIONS_DIR = path.join(HOME, '.agents', 'sessions');
 const DB_PATH = path.join(SESSIONS_DIR, 'sessions.db');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+
+// BM25 column weights for session_text: label > topic > project > content.
+// Higher weights make matches in that column rank higher.
+const BM25_WEIGHTS = [5.0, 2.0, 1.5, 1.0] as const;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -22,6 +26,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   cwd TEXT,
   git_branch TEXT,
   topic TEXT,
+  label TEXT,
   message_count INTEGER,
   token_count INTEGER,
   file_path TEXT NOT NULL,
@@ -36,6 +41,9 @@ CREATE INDEX IF NOT EXISTS idx_sessions_file_path ON sessions(file_path);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS session_text USING fts5(
   session_id UNINDEXED,
+  label,
+  topic,
+  project,
   content,
   tokenize = 'unicode61 remove_diacritics 2'
 );
@@ -68,6 +76,7 @@ export interface SessionRow {
   cwd: string | null;
   git_branch: string | null;
   topic: string | null;
+  label: string | null;
   message_count: number | null;
   token_count: number | null;
   file_path: string;
@@ -93,6 +102,36 @@ export interface QueryOptions {
 
 let dbInstance: Database.Database | null = null;
 
+/**
+ * Apply schema migrations from `fromVersion` → SCHEMA_VERSION. The new
+ * `CREATE IF NOT EXISTS` at SCHEMA doesn't help when column sets or FTS
+ * column definitions change — those need explicit migration here.
+ */
+function migrateSchema(db: Database.Database, fromVersion: number): void {
+  if (fromVersion < 2) {
+    // v1 → v2: add `label` column to sessions and switch session_text from
+    // single `content` column to multi-column (label, topic, project, content).
+    const cols = db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>;
+    if (!cols.some(c => c.name === 'label')) {
+      db.exec(`ALTER TABLE sessions ADD COLUMN label TEXT`);
+    }
+    // FTS5 virtual tables can't be ALTERed — drop and recreate. Scan ledger
+    // is cleared so every file gets re-parsed on next run, repopulating FTS5.
+    db.exec(`
+      DROP TABLE IF EXISTS session_text;
+      CREATE VIRTUAL TABLE session_text USING fts5(
+        session_id UNINDEXED,
+        label,
+        topic,
+        project,
+        content,
+        tokenize = 'unicode61 remove_diacritics 2'
+      );
+      DELETE FROM scan_ledger;
+    `);
+  }
+}
+
 export function getDB(): Database.Database {
   if (dbInstance) return dbInstance;
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -103,8 +142,13 @@ export function getDB(): Database.Database {
   db.exec(SCHEMA);
 
   const current = db.prepare(`SELECT value FROM meta WHERE key = 'schema_version'`).get() as { value: string } | undefined;
+  const currentVersion = current ? parseInt(current.value, 10) : 0;
+
   if (!current) {
     db.prepare(`INSERT INTO meta(key, value) VALUES ('schema_version', ?)`).run(String(SCHEMA_VERSION));
+  } else if (currentVersion < SCHEMA_VERSION) {
+    migrateSchema(db, currentVersion);
+    db.prepare(`INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)`).run(String(SCHEMA_VERSION));
   }
 
   // One-shot cleanup of the pre-SQLite JSONL indexes. Safe — nothing reads
@@ -204,11 +248,11 @@ export function recordScans(entries: Array<{ filePath: string; scan: ScanStamp }
 const upsertSessionStmt = (db: Database.Database) => db.prepare(`
   INSERT INTO sessions (
     id, short_id, agent, version, account, timestamp,
-    project, cwd, git_branch, topic, message_count, token_count,
+    project, cwd, git_branch, topic, label, message_count, token_count,
     file_path, file_mtime_ms, file_size, scanned_at
   ) VALUES (
     @id, @short_id, @agent, @version, @account, @timestamp,
-    @project, @cwd, @git_branch, @topic, @message_count, @token_count,
+    @project, @cwd, @git_branch, @topic, @label, @message_count, @token_count,
     @file_path, @file_mtime_ms, @file_size, @scanned_at
   )
   ON CONFLICT(id) DO UPDATE SET
@@ -221,6 +265,7 @@ const upsertSessionStmt = (db: Database.Database) => db.prepare(`
     cwd = excluded.cwd,
     git_branch = excluded.git_branch,
     topic = excluded.topic,
+    label = excluded.label,
     message_count = excluded.message_count,
     token_count = excluded.token_count,
     file_path = excluded.file_path,
@@ -232,7 +277,7 @@ const upsertSessionStmt = (db: Database.Database) => db.prepare(`
 const deleteTextStmt = (db: Database.Database) =>
   db.prepare(`DELETE FROM session_text WHERE session_id = ?`);
 const insertTextStmt = (db: Database.Database) =>
-  db.prepare(`INSERT INTO session_text (session_id, content) VALUES (?, ?)`);
+  db.prepare(`INSERT INTO session_text (session_id, label, topic, project, content) VALUES (?, ?, ?, ?, ?)`);
 
 let cachedStmts: {
   upsert?: Database.Statement<SessionRow>;
@@ -269,6 +314,7 @@ export function upsertSession(meta: SessionMeta, content: string, scan?: ScanSta
     cwd: meta.cwd ?? null,
     git_branch: meta.gitBranch ?? null,
     topic: meta.topic ?? null,
+    label: meta.label ?? null,
     message_count: meta.messageCount ?? null,
     token_count: meta.tokenCount ?? null,
     file_path: meta.filePath,
@@ -280,7 +326,13 @@ export function upsertSession(meta: SessionMeta, content: string, scan?: ScanSta
   const txn = db.transaction(() => {
     upsert.run(row);
     delText.run(meta.id);
-    if (content) insText.run(meta.id, content);
+    insText.run(
+      meta.id,
+      meta.label ?? '',
+      meta.topic ?? '',
+      meta.project ?? '',
+      content ?? '',
+    );
   });
   txn();
 }
@@ -314,6 +366,7 @@ export function upsertSessionsBatch(
         cwd: meta.cwd ?? null,
         git_branch: meta.gitBranch ?? null,
         topic: meta.topic ?? null,
+        label: meta.label ?? null,
         message_count: meta.messageCount ?? null,
         token_count: meta.tokenCount ?? null,
         file_path: meta.filePath,
@@ -322,13 +375,59 @@ export function upsertSessionsBatch(
         scanned_at: now,
       });
       delText.run(meta.id);
-      if (content) insText.run(meta.id, content);
+      insText.run(
+        meta.id,
+        meta.label ?? '',
+        meta.topic ?? '',
+        meta.project ?? '',
+        content ?? '',
+      );
       if (scan && meta.filePath) {
         ledger.run(meta.filePath, scan.fileMtimeMs, scan.fileSize, now);
       }
     }
   });
   txn(entries);
+}
+
+/**
+ * Sync labels for a set of sessions. For each id in the map, if the stored
+ * label differs, update both `sessions.label` and the FTS5 label column.
+ * Leaves FTS5 content/topic/project untouched — cheap to call every run.
+ */
+export function syncLabels(labelMap: Map<string, string | null>): number {
+  if (labelMap.size === 0) return 0;
+  const db = getDB();
+  const ids = [...labelMap.keys()];
+  const CHUNK = 500;
+  const updates: Array<{ id: string; label: string | null }> = [];
+
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const chunk = ids.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => '?').join(',');
+    const rows = db
+      .prepare(`SELECT id, label FROM sessions WHERE id IN (${placeholders})`)
+      .all(...chunk) as Array<{ id: string; label: string | null }>;
+    for (const row of rows) {
+      const live = labelMap.get(row.id) ?? null;
+      if ((live ?? '') !== (row.label ?? '')) {
+        updates.push({ id: row.id, label: live });
+      }
+    }
+  }
+  if (updates.length === 0) return 0;
+
+  const updSessions = db.prepare(`UPDATE sessions SET label = ? WHERE id = ?`);
+  const updFts = db.prepare(`UPDATE session_text SET label = ? WHERE session_id = ?`);
+
+  const txn = db.transaction((items: typeof updates) => {
+    for (const { id, label } of items) {
+      updSessions.run(label, id);
+      updFts.run(label ?? '', id);
+    }
+  });
+  txn(updates);
+  return updates.length;
 }
 
 function rowToMeta(row: SessionRow): SessionMeta {
@@ -346,6 +445,7 @@ function rowToMeta(row: SessionRow): SessionMeta {
     version: row.version ?? undefined,
     account: row.account ?? undefined,
     topic: row.topic ?? undefined,
+    label: row.label ?? undefined,
   };
 }
 
@@ -444,7 +544,7 @@ export function ftsSearch(input: string, limit = 200): FtsHit[] {
   try {
     const rows = db
       .prepare(`
-        SELECT session_id, bm25(session_text) AS rank
+        SELECT session_id, bm25(session_text, ${BM25_WEIGHTS.join(', ')}) AS rank
         FROM session_text
         WHERE session_text MATCH ?
         ORDER BY rank ASC
