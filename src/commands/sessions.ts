@@ -155,7 +155,7 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     }
 
     if (sessions.length === 0) {
-      console.log(chalk.gray(formatNoSessionsMessage(options.all, false, options.project)));
+      console.log(chalk.gray(formatNoSessionsMessage(options.all, options.project)));
       return;
     }
 
@@ -217,7 +217,7 @@ async function listAction(query: string | undefined, options: ListOptions): Prom
     }
 
     if (filtered.length === 0) {
-      console.log(chalk.gray(formatNoSessionsMessage(options.all, false, options.project)));
+      console.log(chalk.gray(formatNoSessionsMessage(options.all, options.project)));
       return;
     }
 
@@ -658,7 +658,6 @@ export function registerSessionsCommands(program: Command): void {
 
 function formatNoSessionsMessage(
   showAll: boolean | undefined,
-  _unused = false,
   project?: string,
 ): string {
   const projectQuery = project?.trim();
