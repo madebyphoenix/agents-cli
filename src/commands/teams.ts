@@ -187,13 +187,13 @@ function printAgentDetail(a: AgentStatusDetail): void {
   if (a.pr_url) console.log(`    ${chalk.gray('PR')} ${a.pr_url}`);
 }
 
-// Classify a team into a single bucket for --state filtering.
+// Classify a team into a single bucket for --status filtering.
 //  - empty:   no teammates
 //  - working: at least one teammate still running
 //  - mixed:   has at least one done AND at least one failed/stopped
 //  - failed:  at least one failed or stopped, none done
 //  - done:    all non-running teammates are completed
-function classifyTeamState(t: TaskInfo): 'empty' | 'working' | 'done' | 'failed' | 'mixed' {
+function classifyTeamStatus(t: TaskInfo): 'empty' | 'working' | 'done' | 'failed' | 'mixed' {
   if (t.agent_count === 0) return 'empty';
   if (t.running > 0) return 'working';
   const bad = t.failed + t.stopped;
@@ -267,13 +267,13 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
     .alias('ls')
     .description('List your teams, most recent activity first')
     .option('-a, --agent <agent>', 'Only teams with a teammate of this agent, e.g. claude or claude@2.1.112')
-    .option('--state <state>', 'Only teams in this state: working|done|failed|mixed|empty')
+    .option('--status <status>', 'Only teams with this status: working|done|failed|mixed|empty')
     .option('--since <time>', 'Teams active newer than this (e.g. "2h", "7d", ISO date)')
     .option('--until <time>', 'Teams active older than this (e.g. "30d", ISO date)')
     .option('-n, --limit <n>', 'Max teams to show', '20')
     .option('--json', 'Output JSON')
     .action(async (query: string | undefined, opts: {
-      agent?: string; state?: string; since?: string; until?: string;
+      agent?: string; status?: string; since?: string; until?: string;
       limit: string; json?: boolean;
     }) => {
       const mgr = new AgentManager();
@@ -311,14 +311,14 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
         });
       }
 
-      // --- --state: classify each team, filter ---
-      if (opts.state) {
-        const want = opts.state.toLowerCase();
-        const validStates = ['working', 'done', 'failed', 'mixed', 'empty'];
-        if (!validStates.includes(want)) {
-          die(`Invalid --state '${opts.state}'. Use one of: ${validStates.join(', ')}`);
+      // --- --status: classify each team, filter ---
+      if (opts.status) {
+        const want = opts.status.toLowerCase();
+        const validStatuses = ['working', 'done', 'failed', 'mixed', 'empty'];
+        if (!validStatuses.includes(want)) {
+          die(`Invalid --status '${opts.status}'. Use one of: ${validStatuses.join(', ')}`);
         }
-        merged = merged.filter((t) => classifyTeamState(t) === want);
+        merged = merged.filter((t) => classifyTeamStatus(t) === want);
       }
 
       // --- --since / --until: filter by activity window ---
@@ -341,7 +341,7 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
       }
 
       if (merged.length === 0) {
-        if (query || opts.agent || opts.state || opts.since || opts.until) {
+        if (query || opts.agent || opts.status || opts.since || opts.until) {
           console.log(chalk.gray('No teams match those filters.'));
         } else {
           console.log(chalk.gray("You haven't started any teams yet."));
@@ -351,16 +351,16 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
       }
 
       const nameWidth = Math.max(12, ...merged.map((t) => t.task_name.length));
-      console.log(chalk.bold(`${'TEAM'.padEnd(nameWidth)}  MEMBERS  STATE                          UPDATED`));
+      console.log(chalk.bold(`${'TEAM'.padEnd(nameWidth)}  MEMBERS  STATUS                         UPDATED`));
       for (const t of merged) {
         const parts: string[] = [];
         if (t.running) parts.push(chalk.yellow(`${t.running} working`));
         if (t.completed) parts.push(chalk.green(`${t.completed} done`));
         if (t.failed) parts.push(chalk.red(`${t.failed} failed`));
         if (t.stopped) parts.push(chalk.gray(`${t.stopped} stopped`));
-        const state = parts.join(' ') || chalk.gray(t.agent_count === 0 ? 'empty' : '-');
+        const status = parts.join(' ') || chalk.gray(t.agent_count === 0 ? 'empty' : '-');
         console.log(
-          `${chalk.cyan(t.task_name.padEnd(nameWidth))}  ${String(t.agent_count).padEnd(7)}  ${state.padEnd(30)} ${chalk.gray(relTime(t.modified_at))}`
+          `${chalk.cyan(t.task_name.padEnd(nameWidth))}  ${String(t.agent_count).padEnd(7)}  ${status.padEnd(30)} ${chalk.gray(relTime(t.modified_at))}`
         );
       }
     });

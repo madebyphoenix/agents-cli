@@ -306,38 +306,18 @@ async function listAction(query: string | undefined, options: ListOptions): Prom
 }
 
 function printSessionTable(sessions: SessionMeta[]): void {
-  console.log(
-    chalk.gray(
-      padRight('ID', 10) +
-      padRight('Account', 20) +
-      padRight('Agent', 18) +
-      padRight('Project', 16) +
-      padRight('When', 14) +
-      padRight('Msgs', 8) +
-      padRight('Tokens', 10) +
-      'Topic'
-    )
-  );
-
   for (const session of sessions) {
     const agentColor = colorAgent(session.agent);
     const when = formatRelativeTime(session.timestamp);
     const project = session.project || '-';
-    const account = session.account || '';
-    const agentLabel = session.version
-      ? `${session.agent}@${session.version}`
-      : session.agent;
     const topic = (session as any).label ?? session.topic ?? '';
 
     console.log(
       chalk.white(padRight(session.shortId, 10)) +
-      chalk.gray(padRight(truncate(account, 18), 20)) +
-      agentColor(padRight(truncate(agentLabel, 16), 18)) +
+      agentColor(padRight(truncate(session.agent, 9), 10)) +
       chalk.cyan(padRight(truncate(project, 14), 16)) +
-      chalk.gray(padRight(when, 14)) +
-      chalk.gray(padRight(formatCompactMetric(session.messageCount), 8)) +
-      chalk.gray(padRight(formatCompactMetric(session.tokenCount), 10)) +
-      chalk.white(truncate(topic, 40))
+      chalk.white(padRight(truncate(topic, 50), 52)) +
+      chalk.gray(when)
     );
   }
 
@@ -953,17 +933,6 @@ function padRight(s: string, width: number): string {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + '.' : s;
-}
-
-function formatCompactMetric(value?: number): string {
-  if (value === undefined) return '-';
-  if (value < 1000) return String(value);
-  if (value < 1_000_000) {
-    const compact = value / 1000;
-    return compact >= 100 ? `${Math.round(compact)}k` : `${compact.toFixed(1).replace(/\.0$/, '')}k`;
-  }
-  const compact = value / 1_000_000;
-  return compact >= 100 ? `${Math.round(compact)}m` : `${compact.toFixed(1).replace(/\.0$/, '')}m`;
 }
 
 function formatRelativeTime(isoTimestamp: string): string {
