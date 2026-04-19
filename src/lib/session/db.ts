@@ -533,35 +533,70 @@ export function buildFtsQuery(input: string): { expr: string; terms: string[] } 
 }
 
 /**
- * Run an FTS5 MATCH query and return hits sorted by BM25 (best first).
- * Note: FTS5's bm25() returns negative numbers; we flip the sign so higher = better.
+ * Label-first search. Sessions whose custom label substring-matches the query
+ * always rank ahead of FTS5 hits — this gives predictable behavior when a user
+ * types the exact name they gave a session via /rename.
+ *
+ * Tiers (highest → lowest):
+ *   1. Exact label match (case-insensitive): score 1_000_000
+ *   2. Label prefix match:                   score   900_000
+ *   3. Label contains query:                 score   800_000
+ *   4. FTS5 BM25 hits:                       score   1..1000 (scaled)
+ *
+ * Note: FTS5's bm25() returns negative numbers; we flip the sign for tier 4
+ * so "higher = better" is consistent across all tiers.
  */
 export function ftsSearch(input: string, limit = 200): FtsHit[] {
   const db = getDB();
+  const trimmed = input.trim();
+  if (!trimmed) return [];
+
   const { expr, terms } = buildFtsQuery(input);
-  if (!expr) return [];
+  const lower = trimmed.toLowerCase();
+  const seen = new Set<string>();
+  const hits: FtsHit[] = [];
 
-  try {
-    const rows = db
-      .prepare(`
-        SELECT session_id, bm25(session_text, ${BM25_WEIGHTS.join(', ')}) AS rank
-        FROM session_text
-        WHERE session_text MATCH ?
-        ORDER BY rank ASC
-        LIMIT ?
-      `)
-      .all(expr, limit) as { session_id: string; rank: number }[];
+  // Tier 1-3: label-based matches, ordered by exactness.
+  const labelRows = db.prepare(`
+    SELECT id, label FROM sessions
+    WHERE label IS NOT NULL AND LOWER(label) LIKE ?
+  `).all(`%${lower}%`) as Array<{ id: string; label: string }>;
 
-    return rows.map(r => ({
-      sessionId: r.session_id,
-      // Flip sign: FTS5 returns negative ranks, smaller is better.
-      score: -r.rank,
-      matchedTerms: terms,
-    }));
-  } catch {
-    // Invalid MATCH expression — fall back to empty.
-    return [];
+  for (const row of labelRows) {
+    const labelLower = row.label.toLowerCase();
+    let score: number;
+    if (labelLower === lower) score = 1_000_000;
+    else if (labelLower.startsWith(lower)) score = 900_000;
+    else score = 800_000;
+    hits.push({ sessionId: row.id, score, matchedTerms: ['label'] });
+    seen.add(row.id);
   }
+
+  // Tier 4: FTS5 content match, skipping anything already surfaced via label.
+  if (expr) {
+    try {
+      const rows = db
+        .prepare(`
+          SELECT session_id, bm25(session_text, ${BM25_WEIGHTS.join(', ')}) AS rank
+          FROM session_text
+          WHERE session_text MATCH ?
+          ORDER BY rank ASC
+          LIMIT ?
+        `)
+        .all(expr, limit) as { session_id: string; rank: number }[];
+
+      for (const r of rows) {
+        if (seen.has(r.session_id)) continue;
+        hits.push({ sessionId: r.session_id, score: -r.rank, matchedTerms: terms });
+        seen.add(r.session_id);
+      }
+    } catch {
+      /* invalid MATCH expression — tier 4 just yields nothing */
+    }
+  }
+
+  hits.sort((a, b) => b.score - a.score);
+  return hits.slice(0, limit);
 }
 
 export function getRowCount(): { sessions: number; textRows: number } {
