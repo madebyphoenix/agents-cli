@@ -100,7 +100,7 @@ Automation:
   routines                        Schedule agents to run on a timer
   daemon                          Start/stop the routines scheduler
   exec <agent> <prompt>           Run an agent non-interactively
-  teams                           Orchestrate agents as named teams (spawn, status, stop)
+  teams                           Put AI agents on a team (create, add, status, disband)
   pty                             Interactive PTY sessions for AI agents
 
 Automation tips:

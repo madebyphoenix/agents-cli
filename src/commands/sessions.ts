@@ -319,31 +319,29 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
 function highlightTerms(text: string, query: string): string {
   if (!query.trim()) return chalk.white(text);
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  let result = text;
   for (const term of terms) {
-    const idx = result.toLowerCase().indexOf(term);
+    const idx = text.toLowerCase().indexOf(term);
     if (idx !== -1) {
-      const before = result.slice(0, idx);
-      const match = result.slice(idx, idx + term.length);
-      const after = result.slice(idx + term.length);
-      result = before + chalk.bold.white(match) + after;
-      break; // one highlight per term to avoid index drift from chalk codes
+      const before = text.slice(0, idx);
+      const match = text.slice(idx, idx + term.length);
+      const after = text.slice(idx + term.length);
+      return chalk.white(before) + chalk.bold.white(match) + chalk.white(after);
     }
   }
-  return chalk.white(result);
+  return chalk.white(text);
 }
 
 function formatPickerLabel(s: SessionMeta, query: string): string {
   const agentColor = colorAgent(s.agent);
   const when = formatRelativeTime(s.timestamp);
   const project = s.project || '-';
-  const displayText = truncate((s as any).label ?? s.topic ?? '', 50);
+  const displayText = padRight(truncate((s as any).label ?? s.topic ?? '', 50), 52);
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
     agentColor(padRight(truncate(s.agent, 9), 10)) +
     chalk.cyan(padRight(truncate(project, 14), 16)) +
-    padRight(highlightTerms(displayText, query), 52) +
+    highlightTerms(displayText, query) +
     chalk.gray(when)
   );
 }
@@ -660,7 +658,7 @@ export function registerSessionsCommands(program: Command): void {
 
 function formatNoSessionsMessage(
   showAll: boolean | undefined,
-  _picker = false,
+  _unused = false,
   project?: string,
 ): string {
   const projectQuery = project?.trim();
