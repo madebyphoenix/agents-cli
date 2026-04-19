@@ -24,6 +24,7 @@ import {
   teamExists,
 } from '../lib/teams/registry.js';
 import { isVersionInstalled } from '../lib/versions.js';
+import { parseTimeFilter } from '../lib/session/discover.js';
 
 const AGENT_NAMES: Record<AgentType, string> = {
   claude: 'Claude',
@@ -186,6 +187,21 @@ function printAgentDetail(a: AgentStatusDetail): void {
   if (a.pr_url) console.log(`    ${chalk.gray('PR')} ${a.pr_url}`);
 }
 
+// Classify a team into a single bucket for --state filtering.
+//  - empty:   no teammates
+//  - working: at least one teammate still running
+//  - mixed:   has at least one done AND at least one failed/stopped
+//  - failed:  at least one failed or stopped, none done
+//  - done:    all non-running teammates are completed
+function classifyTeamState(t: TaskInfo): 'empty' | 'working' | 'done' | 'failed' | 'mixed' {
+  if (t.agent_count === 0) return 'empty';
+  if (t.running > 0) return 'working';
+  const bad = t.failed + t.stopped;
+  if (t.completed > 0 && bad > 0) return 'mixed';
+  if (bad > 0) return 'failed';
+  return 'done';
+}
+
 // Merge persistent team registry with tasks derived from live agents so empty
 // teams (created but no teammates yet) still show up.
 function mergeTeams(
@@ -247,16 +263,77 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
 
   // list
   teams
-    .command('list')
+    .command('list [query]')
     .alias('ls')
     .description('List your teams, most recent activity first')
+    .option('-a, --agent <agent>', 'Only teams with a teammate of this agent, e.g. claude or claude@2.1.112')
+    .option('--state <state>', 'Only teams in this state: working|done|failed|mixed|empty')
+    .option('--since <time>', 'Teams active newer than this (e.g. "2h", "7d", ISO date)')
+    .option('--until <time>', 'Teams active older than this (e.g. "30d", ISO date)')
     .option('-n, --limit <n>', 'Max teams to show', '20')
     .option('--json', 'Output JSON')
-    .action(async (opts: { limit: string; json?: boolean }) => {
+    .action(async (query: string | undefined, opts: {
+      agent?: string; state?: string; since?: string; until?: string;
+      limit: string; json?: boolean;
+    }) => {
       const mgr = new AgentManager();
       const limit = Math.max(1, parseInt(opts.limit, 10) || 20);
-      const [tasks, registry] = await Promise.all([handleTasks(mgr, 1000), loadTeams()]);
-      const merged = mergeTeams(registry, tasks.tasks).slice(0, limit);
+      const [tasks, registry, everyAgent] = await Promise.all([
+        handleTasks(mgr, 1000),
+        loadTeams(),
+        mgr.listAll(),
+      ]);
+
+      // Group agents by team so we can filter on agent-type / version.
+      const byTeam = new Map<string, { agent_type: string; version: string | null }[]>();
+      for (const a of everyAgent) {
+        const arr = byTeam.get(a.taskName) || [];
+        arr.push({ agent_type: a.agentType, version: a.version });
+        byTeam.set(a.taskName, arr);
+      }
+
+      let merged = mergeTeams(registry, tasks.tasks);
+
+      // --- query: substring match on team name ---
+      if (query) {
+        const q = query.toLowerCase();
+        merged = merged.filter((t) => t.task_name.toLowerCase().includes(q));
+      }
+
+      // --- --agent: filter teams containing a matching teammate ---
+      if (opts.agent) {
+        const [wantType, wantVersion] = opts.agent.split('@');
+        merged = merged.filter((t) => {
+          const teammates = byTeam.get(t.task_name) || [];
+          return teammates.some(
+            (m) => m.agent_type === wantType && (!wantVersion || m.version === wantVersion)
+          );
+        });
+      }
+
+      // --- --state: classify each team, filter ---
+      if (opts.state) {
+        const want = opts.state.toLowerCase();
+        const validStates = ['working', 'done', 'failed', 'mixed', 'empty'];
+        if (!validStates.includes(want)) {
+          die(`Invalid --state '${opts.state}'. Use one of: ${validStates.join(', ')}`);
+        }
+        merged = merged.filter((t) => classifyTeamState(t) === want);
+      }
+
+      // --- --since / --until: filter by activity window ---
+      if (opts.since) {
+        const cutoff = parseTimeFilter(opts.since);
+        if (!cutoff) die(`Could not parse --since '${opts.since}'`);
+        merged = merged.filter((t) => new Date(t.modified_at).getTime() >= cutoff);
+      }
+      if (opts.until) {
+        const cutoff = parseTimeFilter(opts.until);
+        if (!cutoff) die(`Could not parse --until '${opts.until}'`);
+        merged = merged.filter((t) => new Date(t.modified_at).getTime() <= cutoff);
+      }
+
+      merged = merged.slice(0, limit);
 
       if (isJsonMode(opts)) {
         console.log(JSON.stringify({ teams: merged }, null, 2));
@@ -264,8 +341,12 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
       }
 
       if (merged.length === 0) {
-        console.log(chalk.gray("You haven't started any teams yet."));
-        console.log(chalk.gray('  Start one with:  agents teams create <name>'));
+        if (query || opts.agent || opts.state || opts.since || opts.until) {
+          console.log(chalk.gray('No teams match those filters.'));
+        } else {
+          console.log(chalk.gray("You haven't started any teams yet."));
+          console.log(chalk.gray('  Start one with:  agents teams create <name>'));
+        }
         return;
       }
 
