@@ -392,6 +392,10 @@ export class AgentProcess {
   // Stashed so we can resolve the model at launch time when a pending teammate
   // is finally started (could be later than spawn time; model map may shift).
   effort: EffortLevel | null = null;
+  // --model override; when set, used instead of the effort→model map.
+  model: string | null = null;
+  // Extra env vars passed through to the child process (from --env KEY=VALUE).
+  envOverrides: Record<string, string> | null = null;
   private eventsCache: any[] = [];
   private lastReadPos: number = 0;
   private baseDir: string | null = null;
@@ -417,13 +421,17 @@ export class AgentProcess {
     remoteSessionId: string | null = null,
     name: string | null = null,
     after: string[] = [],
-    effort: EffortLevel | null = null
+    effort: EffortLevel | null = null,
+    model: string | null = null,
+    envOverrides: Record<string, string> | null = null
   ) {
     this.agentId = agentId;
     this.remoteSessionId = remoteSessionId;
     this.name = name;
     this.after = after;
     this.effort = effort;
+    this.model = model;
+    this.envOverrides = envOverrides;
     this.taskName = taskName;
     this.agentType = agentType;
     this.prompt = prompt;
@@ -480,6 +488,8 @@ export class AgentProcess {
       name: this.name,
       after: this.after,
       effort: this.effort,
+      model: this.model,
+      env_overrides: this.envOverrides,
     };
   }
 
@@ -609,6 +619,8 @@ export class AgentProcess {
       name: this.name,
       after: this.after,
       effort: this.effort,
+      model: this.model,
+      env_overrides: this.envOverrides,
     };
     const metaPath = await this.getMetaPath();
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
@@ -661,7 +673,9 @@ export class AgentProcess {
         meta.remote_session_id || null,
         meta.name || null,
         Array.isArray(meta.after) ? meta.after : [],
-        meta.effort || null
+        meta.effort || null,
+        meta.model || null,
+        meta.env_overrides || null
       );
       return agent;
     } catch {
@@ -866,7 +880,9 @@ export class AgentProcess {
     workspaceDir: string | null = null,
     version: string | null = null,
     name: string | null = null,
-    after: string[] = []
+    after: string[] = [],
+    model: string | null = null,
+    envOverrides: Record<string, string> | null = null
   ): Promise<AgentProcess> {
     await this.initialize();
     const resolvedMode = resolveMode(mode, this.defaultMode);
@@ -952,7 +968,9 @@ export class AgentProcess {
       null,
       name,
       cleanAfter,
-      effort
+      effort,
+      model,
+      envOverrides && Object.keys(envOverrides).length > 0 ? envOverrides : null
     );
 
     const agentDir = await agent.getAgentDir();
@@ -987,7 +1005,9 @@ export class AgentProcess {
     }
 
     const effort = agent.effort ?? 'default';
-    const resolvedModel: string = this.effortModelMap[effort][agent.agentType];
+    // Explicit --model override wins over the effort→model map.
+    const resolvedModel: string =
+      agent.model ?? this.effortModelMap[effort][agent.agentType];
     const cmd = this.buildCommand(
       agent.agentType,
       agent.prompt,
@@ -1011,6 +1031,9 @@ export class AgentProcess {
         stdio: ['ignore', stdoutFd, stdoutFd],
         cwd: agent.cwd || undefined,
         detached: true,
+        env: agent.envOverrides
+          ? { ...process.env, ...agent.envOverrides }
+          : process.env,
       });
 
       childProcess.unref();

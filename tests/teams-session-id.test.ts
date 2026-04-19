@@ -310,6 +310,39 @@ describe('AgentProcess: remoteSessionId extraction', () => {
       expect(bob?.status).toBe('pending'); // blocked — user decides
     });
 
+    it('--model override is stored and wins over effort→model map', async () => {
+      const base = freshBase();
+      const mgr = new AgentManager(50, 10, base);
+      // Stage a teammate so we don't depend on claude binary being installed.
+      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'fast', null, null, null, 'alice');
+      const bob = await mgr.spawn(
+        't', 'claude', 'y', null, 'plan', 'fast', null, null, null, 'bob',
+        ['alice'],
+        'claude-opus-4-6'   // model override
+      );
+      expect(bob.model).toBe('claude-opus-4-6');
+      // Round-trip through disk.
+      const reloaded = await AgentProcess.loadFromDisk(bob.agentId, base);
+      expect(reloaded?.model).toBe('claude-opus-4-6');
+      void alice;
+    });
+
+    it('--env overrides are stored and round-trip through disk', async () => {
+      const base = freshBase();
+      const mgr = new AgentManager(50, 10, base);
+      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'fast', null, null, null, 'alice');
+      const bob = await mgr.spawn(
+        't', 'claude', 'y', null, 'plan', 'fast', null, null, null, 'bob',
+        ['alice'],
+        null,
+        { DEBUG: '1', FEATURE_FLAG: 'on' }
+      );
+      expect(bob.envOverrides).toEqual({ DEBUG: '1', FEATURE_FLAG: 'on' });
+      const reloaded = await AgentProcess.loadFromDisk(bob.agentId, base);
+      expect(reloaded?.envOverrides).toEqual({ DEBUG: '1', FEATURE_FLAG: 'on' });
+      void alice;
+    });
+
     it('loadFromDisk round-trips status correctly (including PENDING)', async () => {
       const base = freshBase();
       const mgr = new AgentManager(50, 10, base);

@@ -107,7 +107,9 @@ export async function handleSpawn(
   workspaceDir: string | null = null,
   version: string | null = null,
   name: string | null = null,
-  after: string[] = []
+  after: string[] = [],
+  model: string | null = null,
+  envOverrides: Record<string, string> | null = null
 ): Promise<SpawnResult> {
   const defaultMode = manager.getDefaultMode();
   const resolvedMode = resolveMode(mode, defaultMode);
@@ -158,7 +160,9 @@ export async function handleSpawn(
       workspaceDir,
       version,
       name,
-      after
+      after,
+      model,
+      envOverrides
     );
 
     debug(`[ralph] Spawned ${agentType} agent ${agent.agentId} for autonomous execution`);
@@ -224,7 +228,9 @@ export async function handleSpawn(
     workspaceDir,
     version,
     name,
-    after
+    after,
+    model,
+    envOverrides
   );
 
   debug(`[spawn] Spawned ${agentType} agent ${agent.agentId} for task "${taskName}"`);

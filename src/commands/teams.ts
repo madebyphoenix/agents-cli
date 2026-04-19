@@ -25,6 +25,7 @@ import {
 } from '../lib/teams/registry.js';
 import { isVersionInstalled } from '../lib/versions.js';
 import { parseTimeFilter } from '../lib/session/discover.js';
+import { parseExecEnv } from '../lib/exec.js';
 
 const AGENT_NAMES: Record<AgentType, string> = {
   claude: 'Claude',
@@ -406,11 +407,19 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
     .option('-n, --name <name>', 'Give this teammate a friendly name (e.g. alice). Unique within team.')
     .option('-m, --mode <mode>', `How much they can do: ${VALID_MODES.join('|')}`, 'edit')
     .option('-e, --effort <effort>', `Model tier: ${VALID_EFFORTS.join('|')}`, 'default')
+    .option('--model <model>', 'Override the effort→model mapping (e.g. claude-opus-4-6)')
+    .option(
+      '--env <key=value>',
+      'Pass an environment variable to this teammate (repeatable)',
+      (val: string, prev: string[]) => [...prev, val],
+      []
+    )
     .option('--cwd <dir>', 'Where they should work (defaults to current directory)')
     .option('--after <names>', "Wait for these teammates to finish first (comma-separated names). Stages as PENDING; kick off with 'teams start'.")
     .option('--json', 'Output JSON')
     .action(async (team: string, teammate: string, task: string, opts: {
-      name?: string; mode: string; effort: string; cwd?: string; after?: string; json?: boolean;
+      name?: string; mode: string; effort: string; model?: string; env: string[];
+      cwd?: string; after?: string; json?: boolean;
     }) => {
       if (!(VALID_MODES as readonly string[]).includes(opts.mode)) {
         die(`Invalid mode '${opts.mode}'. Use one of: ${VALID_MODES.join(', ')}`);
@@ -441,6 +450,13 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
         die("--after requires --name (dependencies reference teammates by name).");
       }
 
+      let envOverrides: Record<string, string> | undefined;
+      try {
+        envOverrides = parseExecEnv(opts.env);
+      } catch (err) {
+        die((err as Error).message);
+      }
+
       // Auto-create the team if it doesn't exist yet (friendlier UX than erroring).
       await ensureTeam(team);
 
@@ -459,7 +475,9 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
           cwd,
           version,
           opts.name ?? null,
-          after
+          after,
+          opts.model ?? null,
+          envOverrides ?? null
         );
 
         if (isJsonMode(opts)) {
