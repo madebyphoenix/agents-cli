@@ -90,17 +90,52 @@ function formatTokens(n: number): string {
   return (v >= 100 ? Math.round(v).toString() : v.toFixed(1).replace(/\.0$/, '')) + 'm';
 }
 
+/** Patterns that indicate a user message is system context, not a real prompt. */
+const SYSTEM_MESSAGE_PATTERNS = [
+  /^\s*<environment_context>/i,
+  /^\s*<system-reminder>/i,
+  /^\s*<permissions\s/i,
+  /^\s*<collaboration_mode>/i,
+  /^\s*<local-command-caveat>/i,
+  /^\s*# AGENTS\.md instructions for\b/i,
+];
+
+/** Strip XML/HTML tags and clean up content for display. */
+function stripTags(text: string): string {
+  // Remove complete tag pairs with their content for known system tags
+  let cleaned = text.replace(/<(system-reminder|environment_context|permissions[^>]*)>[\s\S]*?<\/\1>/gi, '');
+  // Remove remaining XML-like tags
+  cleaned = cleaned.replace(/<\/?[a-z_-]+[^>]*>/gi, '');
+  return cleaned;
+}
+
+/** Clean a message for preview display — strip tags, noise lines, markdown cruft. */
+function cleanForPreview(text: string): string {
+  let cleaned = stripTags(text);
+  // Strip markdown headers
+  cleaned = cleaned.replace(/^#{1,6}\s+/gm, '');
+  // Strip code fence markers
+  cleaned = cleaned.replace(/^```\w*$/gm, '');
+  // Strip bold/italic markers
+  cleaned = cleaned.replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1');
+  // Collapse whitespace
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+  return cleaned.trim();
+}
+
 function formatCompactPreview(events: ReturnType<typeof parseSession>): string {
   let firstUser = '';
   let lastAssistant = '';
   const filesModified = new Set<string>();
   const filesRead = new Set<string>();
   let toolCalls = 0;
+  let planFile = '';
 
   for (const event of events) {
     if (event.type === 'message') {
       if (event.role === 'user' && !firstUser && event.content) {
-        if (!/^\s*<local-command-caveat>/i.test(event.content)) {
+        // Skip system/environment messages entirely
+        if (!SYSTEM_MESSAGE_PATTERNS.some(p => p.test(event.content!))) {
           firstUser = event.content;
         }
       }
@@ -114,6 +149,10 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>): string {
         filesModified.add(p);
       } else if (['Read', 'read_file', 'view_file', 'cat_file', 'get_file'].includes(tool) && p) {
         filesRead.add(p);
+      }
+      // Detect plan files
+      if (!planFile && p && /\/plans\/[^/]+\.md$/.test(p)) {
+        planFile = p;
       }
       toolCalls++;
     }
@@ -135,9 +174,23 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>): string {
     lines.push(chalk.cyan('Activity: ') + chalk.gray(activity.join(' · ')));
   }
 
+  if (planFile) {
+    const basename = planFile.split('/').pop() || planFile;
+    lines.push(chalk.cyan('Plan: ') + chalk.white(basename));
+  }
+
   if (lastAssistant) {
-    const first = lastAssistant.split('\n').find(l => l.trim()) || '';
-    lines.push(chalk.cyan('Last: ') + chalk.white(truncate(first.trim(), 120)));
+    const cleaned = cleanForPreview(lastAssistant);
+    const meaningful = cleaned.split('\n')
+      .map(l => l.trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    if (meaningful.length > 0) {
+      lines.push(chalk.cyan('Last response:'));
+      for (const line of meaningful) {
+        lines.push(chalk.white('  ' + truncate(line, 100)));
+      }
+    }
   }
 
   if (lines.length === 0) {
