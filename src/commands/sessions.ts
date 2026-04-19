@@ -12,7 +12,7 @@ import { parseSession } from '../lib/session/parse.js';
 import { renderTranscript, renderSummary, renderTrace, renderJson } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
 import { colorAgent } from '../lib/agents.js';
-import { isInteractiveTerminal, isPromptCancelled, requireInteractiveSelection } from './utils.js';
+import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
 import { sessionPicker, type PickedSession } from './sessions-picker.js';
 
 const SESSION_AGENT_FILTER_HELP = `Filter by agent, e.g. claude, codex, claude@2.0.65`;
@@ -108,15 +108,15 @@ function createScanProgressTracker(
   };
 }
 
-async function listAction(options: ListOptions): Promise<void> {
-  const agent = parseAgentFilter(options.agent);
+async function sessionsAction(query: string | undefined, options: SessionsOptions): Promise<void> {
+  const { agent, version } = parseAgentFilter(options.agent);
 
-  const limit = parseInt(options.limit || '20', 10);
+  const limit = parseInt(options.limit || '50', 10);
   const spinner = options.json ? null : ora().start();
   const tracker = createScanProgressTracker(LOAD_VERBS, 'sessions', spinner);
 
   try {
-    const sessions = await discoverSessions({
+    let sessions = await discoverSessions({
       agent,
       all: options.all,
       cwd: process.cwd(),
@@ -130,8 +130,23 @@ async function listAction(options: ListOptions): Promise<void> {
     tracker.stop();
     spinner?.stop();
 
+    if (version) {
+      sessions = sessions.filter(s => s.version === version);
+    }
+
+    // Smart routing: if query looks like a session ID, render directly
+    if (query) {
+      const idMatches = resolveSessionById(sessions, query);
+      if (idMatches.length === 1) {
+        const mode = resolveViewMode(options);
+        await renderSession(idMatches[0], mode);
+        return;
+      }
+    }
+
     if (options.json) {
-      const serializable = sessions.map(s => {
+      const filtered = query ? filterSessionsByQuery(sessions, query) : sessions;
+      const serializable = filtered.map(s => {
         const { _matchedTerms, _bm25Score, ...rest } = s;
         return rest;
       });
@@ -145,7 +160,7 @@ async function listAction(options: ListOptions): Promise<void> {
     }
 
     if (isInteractiveTerminal()) {
-      const picked = await pickSessionInteractive(sessions, formatSearchMessage(options));
+      const picked = await pickSessionInteractive(sessions, formatSearchMessage(options), query);
       if (picked) {
         await handlePickedSession(picked);
         return;
@@ -153,49 +168,112 @@ async function listAction(options: ListOptions): Promise<void> {
       return;
     }
 
-    // Print header
-    console.log(
-      chalk.gray(
-        padRight('ID', 10) +
-        padRight('Account', 20) +
-        padRight('Agent', 18) +
-        padRight('Project', 16) +
-        padRight('When', 14) +
-        padRight('Msgs', 8) +
-        padRight('Tokens', 10) +
-        'Topic'
-      )
-    );
-
-    for (const session of sessions) {
-      const agentColor = colorAgent(session.agent);
-      const when = formatRelativeTime(session.timestamp);
-      const project = session.project || '-';
-      const account = session.account || '';
-      const agentLabel = session.version
-        ? `${session.agent}@${session.version}`
-        : session.agent;
-      const topic = session.topic || '';
-
-      console.log(
-        chalk.white(padRight(session.shortId, 10)) +
-        chalk.gray(padRight(truncate(account, 18), 20)) +
-        agentColor(padRight(truncate(agentLabel, 16), 18)) +
-        chalk.cyan(padRight(truncate(project, 14), 16)) +
-        chalk.gray(padRight(when, 14)) +
-        chalk.gray(padRight(formatCompactMetric(session.messageCount), 8)) +
-        chalk.gray(padRight(formatCompactMetric(session.tokenCount), 10)) +
-        chalk.white(truncate(topic, 40))
-      );
-    }
-
-    console.log(chalk.gray(`\n${sessions.length} session${sessions.length === 1 ? '' : 's'}. Use 'agents sessions view <id>' to read.`));
+    // Non-interactive fallback (piped output)
+    const filtered = query ? filterSessionsByQuery(sessions, query) : sessions;
+    printSessionTable(filtered);
   } catch (err: any) {
     tracker.stop();
     spinner?.stop();
     console.error(chalk.red(`Failed to discover sessions: ${err.message}`));
     process.exit(1);
   }
+}
+
+async function listAction(query: string | undefined, options: ListOptions): Promise<void> {
+  const { agent, version } = parseAgentFilter(options.agent);
+
+  const limit = parseInt(options.limit || '20', 10);
+  const spinner = options.json ? null : ora().start();
+  const tracker = createScanProgressTracker(LOAD_VERBS, 'sessions', spinner);
+
+  try {
+    let sessions = await discoverSessions({
+      agent,
+      all: options.all,
+      cwd: process.cwd(),
+      project: options.project,
+      limit,
+      since: options.since,
+      until: options.until,
+      onProgress: tracker.onProgress,
+    });
+
+    tracker.stop();
+    spinner?.stop();
+
+    if (version) {
+      sessions = sessions.filter(s => s.version === version);
+    }
+
+    const filtered = query ? filterSessionsByQuery(sessions, query) : sessions;
+
+    if (options.json) {
+      const serializable = filtered.map(s => {
+        const { _matchedTerms, _bm25Score, ...rest } = s;
+        return rest;
+      });
+      process.stdout.write(JSON.stringify(serializable, null, 2) + '\n');
+      return;
+    }
+
+    if (filtered.length === 0) {
+      console.log(chalk.gray(formatNoSessionsMessage(options.all, false, options.project)));
+      return;
+    }
+
+    printSessionTable(filtered);
+  } catch (err: any) {
+    tracker.stop();
+    spinner?.stop();
+    console.error(chalk.red(`Failed to discover sessions: ${err.message}`));
+    process.exit(1);
+  }
+}
+
+function printSessionTable(sessions: SessionMeta[]): void {
+  console.log(
+    chalk.gray(
+      padRight('ID', 10) +
+      padRight('Account', 20) +
+      padRight('Agent', 18) +
+      padRight('Project', 16) +
+      padRight('When', 14) +
+      padRight('Msgs', 8) +
+      padRight('Tokens', 10) +
+      'Topic'
+    )
+  );
+
+  for (const session of sessions) {
+    const agentColor = colorAgent(session.agent);
+    const when = formatRelativeTime(session.timestamp);
+    const project = session.project || '-';
+    const account = session.account || '';
+    const agentLabel = session.version
+      ? `${session.agent}@${session.version}`
+      : session.agent;
+    const topic = (session as any).label ?? session.topic ?? '';
+
+    console.log(
+      chalk.white(padRight(session.shortId, 10)) +
+      chalk.gray(padRight(truncate(account, 18), 20)) +
+      agentColor(padRight(truncate(agentLabel, 16), 18)) +
+      chalk.cyan(padRight(truncate(project, 14), 16)) +
+      chalk.gray(padRight(when, 14)) +
+      chalk.gray(padRight(formatCompactMetric(session.messageCount), 8)) +
+      chalk.gray(padRight(formatCompactMetric(session.tokenCount), 10)) +
+      chalk.white(truncate(topic, 40))
+    );
+  }
+
+  console.log(chalk.gray(`\n${sessions.length} session${sessions.length === 1 ? '' : 's'}.`));
+}
+
+function resolveViewMode(options: { transcript?: boolean; trace?: boolean; json?: boolean }): ViewMode {
+  if (options.transcript) return 'transcript';
+  if (options.trace) return 'trace';
+  if (options.json) return 'json';
+  return 'summary';
 }
 
 async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void> {
@@ -342,40 +420,6 @@ function buildResumeCommand(session: SessionMeta): string[] | null {
   }
 }
 
-async function pickSession(
-  sessions: SessionMeta[],
-  message = 'Search sessions:',
-): Promise<SessionMeta | null> {
-  try {
-    return await search({
-      message,
-      pageSize: 12,
-      source: async (input) => {
-        const matches = filterSessionsByQuery(sessions, input).slice(0, 30);
-        if (matches.length === 0) {
-          return [{
-            name: input?.trim()
-              ? `No sessions found for "${input.trim()}"`
-              : 'No sessions found',
-            value: null,
-            disabled: 'Keep typing',
-          }];
-        }
-
-        return matches.map(s => ({
-          name: formatPickerLabel(s),
-          value: s,
-          description: formatSearchDescription(s),
-          short: s.shortId,
-        }));
-      },
-      validate: (value) => value ? true : 'No matching sessions.',
-    });
-  } catch (err) {
-    if (isPromptCancelled(err)) return null;
-    throw err;
-  }
-}
 
 interface AgentFilter {
   agent?: SessionAgentId;
@@ -399,10 +443,6 @@ function formatSearchMessage(options: SessionFilterOptions): string {
   if (options.project?.trim()) filters.push(`project: ${options.project.trim()}`);
   if (filters.length === 0) return 'Search sessions:';
   return `Search sessions (${filters.join(', ')}):`;
-}
-
-function formatSearchDescription(session: SessionMeta): string {
-  return [session.id, session.cwd].filter(Boolean).join('  ');
 }
 
 export function filterSessionsByQuery(
@@ -491,112 +531,66 @@ function scoreSessionQuery(session: SessionMeta, terms: string[]): number {
   return score;
 }
 
-async function viewAction(idQuery: string | undefined, options: ViewOptions): Promise<void> {
-  // Default to summary, opt into full transcript
-  let mode: ViewMode = 'summary';
-  if (options.transcript) mode = 'transcript';
-  else if (options.trace) mode = 'trace';
-  else if (options.json) mode = 'json';
-  const agent = parseAgentFilter(options.agent);
+async function viewAction(idQuery: string, options: ViewOptions): Promise<void> {
+  const mode = resolveViewMode(options);
 
   const spinner = ora().start();
-  const tracker = createScanProgressTracker(
-    idQuery ? FIND_VERBS : LOAD_VERBS,
-    idQuery ? 'session' : 'sessions',
-    spinner,
-  );
+  const tracker = createScanProgressTracker(FIND_VERBS, 'session', spinner);
 
   try {
     const allSessions = await discoverSessions({
-      agent,
-      all: Boolean(idQuery) || options.all,
+      all: true,
       cwd: process.cwd(),
-      project: options.project,
       limit: 5000,
-      since: options.since,
-      until: options.until,
       onProgress: tracker.onProgress,
     });
     tracker.stop();
     let session: SessionMeta | undefined;
 
-    if (!idQuery) {
-      // No ID provided -- show interactive picker
-      spinner.stop();
+    const matches = resolveSessionById(allSessions, idQuery);
+    let queryMatches: SessionMeta[] = matches.length > 0 ? matches : filterSessionsByQuery(allSessions, idQuery);
 
-      if (allSessions.length === 0) {
-        console.log(chalk.gray(formatNoSessionsMessage(options.all, true)));
-        return;
-      }
-
-      if (!isInteractiveTerminal()) {
-        requireInteractiveSelection('Selecting a session to view', [
-          'agents sessions list',
-          'agents sessions view <id>',
-        ]);
-      }
-
-      const picked = await pickSession(allSessions, formatSearchMessage(options));
-      if (!picked) return;
-      session = picked;
-    } else {
-      const matches = resolveSessionById(allSessions, idQuery);
-      let queryMatches: SessionMeta[] = matches.length > 0 ? matches : filterSessionsByQuery(allSessions, idQuery);
-
-      // Content search fallback when no title/topic/project matches
-      if (queryMatches.length === 0) {
-        const contentResults = searchContentIndex(allSessions, idQuery);
-        if (contentResults.size > 0) {
-          const matchedSessions = Array.from(contentResults.values())
-            .sort((a, b) => (b._bm25Score ?? 0) - (a._bm25Score ?? 0));
-          if (matchedSessions.length === 1) {
-            session = matchedSessions[0];
-            console.log(chalk.gray(
-              `Found by content match (terms: ${matchedSessions[0]._matchedTerms?.join(', ')})`
-            ));
-          } else {
-            queryMatches = matchedSessions;
-          }
-        }
-      }
-
-      if (queryMatches.length === 0) {
-        spinner.stop();
-        const historyEntry = findClaudeHistoryEntry(idQuery);
-        if (historyEntry) {
-          const resumeMatch = resolveClaudeHistoryEntryToTranscript(historyEntry, allSessions);
-          if (resumeMatch) {
-            session = resumeMatch.session;
-            console.log(chalk.gray(
-              `Resolved Claude history entry ${idQuery} to transcript ${resumeMatch.session.id}.`
-            ));
-          } else {
-            renderClaudeHistoryOnlyId(idQuery, historyEntry, allSessions);
-            process.exit(1);
-          }
+    // Content search fallback when no title/topic/project matches
+    if (queryMatches.length === 0) {
+      const contentResults = searchContentIndex(allSessions, idQuery);
+      if (contentResults.size > 0) {
+        const matchedSessions = Array.from(contentResults.values())
+          .sort((a, b) => (b._bm25Score ?? 0) - (a._bm25Score ?? 0));
+        if (matchedSessions.length === 1) {
+          session = matchedSessions[0];
         } else {
-          console.error(chalk.red(`No session found matching: ${idQuery}`));
-          console.error(chalk.gray('Run "agents sessions" to list available sessions.'));
-          process.exit(1);
+          queryMatches = matchedSessions;
         }
       }
+    }
 
-      if (queryMatches.length === 0) {
-        // session already resolved from history fallback
-      } else if (queryMatches.length > 1) {
-        spinner.stop();
-        if (!isInteractiveTerminal()) {
-          console.error(chalk.red(`Multiple sessions match: ${idQuery}`));
-          console.error(chalk.gray('Pass a longer ID/query or one of these exact IDs:'));
-          for (const match of queryMatches.slice(0, 10)) {
-            console.error(chalk.cyan(`  ${match.id}`));
-          }
+    if (queryMatches.length === 0 && !session) {
+      spinner.stop();
+      const historyEntry = findClaudeHistoryEntry(idQuery);
+      if (historyEntry) {
+        const resumeMatch = resolveClaudeHistoryEntryToTranscript(historyEntry, allSessions);
+        if (resumeMatch) {
+          session = resumeMatch.session;
+        } else {
+          renderClaudeHistoryOnlyId(idQuery, historyEntry, allSessions);
           process.exit(1);
         }
-        // Multiple matches -- let the user pick
-        const picked = await pickSession(queryMatches, formatSearchMessage(options));
-        if (!picked) return;
-        session = picked;
+      } else {
+        console.error(chalk.red(`No session found matching: ${idQuery}`));
+        console.error(chalk.gray('Run "agents sessions" to browse sessions.'));
+        process.exit(1);
+      }
+    }
+
+    if (!session) {
+      if (queryMatches.length > 1) {
+        spinner.stop();
+        console.error(chalk.red(`Multiple sessions match "${idQuery}":`));
+        for (const match of queryMatches.slice(0, 10)) {
+          console.error(chalk.cyan(`  ${match.shortId}  ${match.id}  ${(match as any).label ?? match.topic ?? ''}`));
+        }
+        console.error(chalk.gray('Pass a longer ID to narrow it down.'));
+        process.exit(1);
       } else {
         session = queryMatches[0];
       }
@@ -620,57 +614,53 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
 export function registerSessionsCommands(program: Command): void {
   const sessionsCmd = program
     .command('sessions')
-    .description('List and view agent sessions for the current directory by default')
-    .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
+    .argument('[query]', 'Session ID (renders directly) or search query (opens picker)')
+    .description('Browse, search, and resume agent sessions')
+    .option('-a, --agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
     .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
-    .option('-n, --limit <n>', 'Max sessions to show', '20')
-    .option('--json', 'Output sessions as JSON array')
-    .action(async (options: ListOptions) => {
-      await listAction(options);
+    .option('-n, --limit <n>', 'Max sessions to show', '50')
+    .option('--transcript', 'Show full conversation transcript (with ID)')
+    .option('--trace', 'Show reasoning trace as markdown (with ID)')
+    .option('--json', 'Output as JSON')
+    .action(async (query: string | undefined, options: SessionsOptions) => {
+      await sessionsAction(query, options);
     });
 
   sessionsCmd
     .command('list')
-    .description('List sessions for the current directory by default')
-    .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
+    .argument('[query]', 'Search query to filter sessions')
+    .description('List sessions (non-interactive, for scripts and AI agents)')
+    .option('-a, --agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
     .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
     .option('--json', 'Output sessions as JSON array')
-    .action(async (options: ListOptions, command) => {
+    .action(async (query: string | undefined, options: ListOptions, command) => {
       const parentOptions = typeof command?.parent?.opts === 'function'
         ? command.parent.opts()
         : {};
-      await listAction({ ...parentOptions, ...options });
+      await listAction(query, { ...parentOptions, ...options });
     });
 
   sessionsCmd
-    .command('view [id]')
-    .description('View a session by ID or search query (picker defaults to live search)')
-    .option('--agent <agent>', SESSION_AGENT_FILTER_HELP)
-    .option('--all', 'Show sessions from every directory')
-    .option('--project <name>', 'Filter by project name across all directories')
-    .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
-    .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
+    .command('view <id>')
+    .description('Render a session by ID (non-interactive)')
     .option('--transcript', 'Show full conversation transcript')
     .option('--trace', 'Show reasoning trace as markdown')
     .option('--json', 'Output normalized events as JSON')
-    .action(async (id: string | undefined, options: ViewOptions, command) => {
-      const parentOptions = typeof command?.parent?.opts === 'function'
-        ? command.parent.opts()
-        : {};
-      await viewAction(id, { ...parentOptions, ...options });
+    .action(async (id: string, options: ViewOptions) => {
+      await viewAction(id, options);
     });
 }
 
 function formatNoSessionsMessage(
   showAll: boolean | undefined,
-  picker = false,
+  _picker = false,
   project?: string,
 ): string {
   const projectQuery = project?.trim();
@@ -678,7 +668,7 @@ function formatNoSessionsMessage(
     return `No sessions found for project "${projectQuery}".`;
   }
   if (showAll) return 'No sessions found.';
-  const command = picker ? 'agents sessions view --all' : 'agents sessions --all';
+  const command = 'agents sessions --all';
   return `No sessions found for ${process.cwd()}. Run "${command}" to see sessions from every directory.`;
 }
 
@@ -754,7 +744,7 @@ function renderClaudeHistoryOnlyId(
       );
     }
 
-    console.error(chalk.gray('Use one of the transcript IDs above with "agents sessions view <id>".'));
+    console.error(chalk.gray('Use one of the transcript IDs above with "agents sessions <id>".'));
     return;
   }
 

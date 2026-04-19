@@ -360,6 +360,7 @@ export class AgentProcess {
   cloudSessionId: string | null = null;
   cloudProvider: string | null = null;
   prUrl: string | null = null;
+  version: string | null = null;
   private eventsCache: any[] = [];
   private lastReadPos: number = 0;
   private baseDir: string | null = null;
@@ -380,7 +381,8 @@ export class AgentProcess {
     workspaceDir: string | null = null,
     cloudSessionId: string | null = null,
     cloudProvider: string | null = null,
-    prUrl: string | null = null
+    prUrl: string | null = null,
+    version: string | null = null
   ) {
     this.agentId = agentId;
     this.taskName = taskName;
@@ -398,6 +400,7 @@ export class AgentProcess {
     this.cloudSessionId = cloudSessionId;
     this.cloudProvider = cloudProvider;
     this.prUrl = prUrl;
+    this.version = version;
   }
 
   get isEditMode(): boolean {
@@ -433,6 +436,7 @@ export class AgentProcess {
       cloud_session_id: this.cloudSessionId,
       cloud_provider: this.cloudProvider,
       pr_url: this.prUrl,
+      version: this.version,
     };
   }
 
@@ -548,6 +552,7 @@ export class AgentProcess {
       cloud_session_id: this.cloudSessionId,
       cloud_provider: this.cloudProvider,
       pr_url: this.prUrl,
+      version: this.version,
     };
     const metaPath = await this.getMetaPath();
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
@@ -587,7 +592,8 @@ export class AgentProcess {
         meta.workspace_dir || null,
         meta.cloud_session_id || null,
         meta.cloud_provider || null,
-        meta.pr_url || null
+        meta.pr_url || null,
+        meta.version || null
       );
       return agent;
     } catch {
@@ -789,7 +795,8 @@ export class AgentProcess {
     mode: Mode | null = null,
     effort: EffortLevel = 'default',
     parentSessionId: string | null = null,
-    workspaceDir: string | null = null
+    workspaceDir: string | null = null,
+    version: string | null = null
   ): Promise<AgentProcess> {
     await this.initialize();
     const resolvedMode = resolveMode(mode, this.defaultMode);
@@ -824,6 +831,9 @@ export class AgentProcess {
 
     const agentId = randomUUID().substring(0, 8);
     const cmd = this.buildCommand(agentType, prompt, resolvedMode, resolvedModel, resolvedCwd);
+    if (version && cmd.length > 0) {
+      cmd[0] = `${cmd[0]}@${version}`;
+    }
 
     const agent = new AgentProcess(
       agentId,
@@ -838,7 +848,11 @@ export class AgentProcess {
       null,
       this.agentsDir,
       parentSessionId,
-      workspaceDir
+      workspaceDir,
+      null,
+      null,
+      null,
+      version
     );
 
     const agentDir = await agent.getAgentDir();

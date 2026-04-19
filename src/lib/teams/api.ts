@@ -34,6 +34,7 @@ export interface SpawnResult {
   agent_type: string;
   status: string;
   started_at: string;
+  version?: string | null;
 }
 
 export interface AgentStatusDetail {
@@ -54,6 +55,7 @@ export interface AgentStatusDetail {
   cloud_session_id?: string | null;
   cloud_provider?: string | null;
   pr_url?: string | null;
+  version?: string | null;
 }
 
 export interface TaskStatusResult {
@@ -95,7 +97,8 @@ export async function handleSpawn(
   mode: string | null,
   effort: 'fast' | 'default' | 'detailed' | null = 'default',
   parentSessionId: string | null = null,
-  workspaceDir: string | null = null
+  workspaceDir: string | null = null,
+  version: string | null = null
 ): Promise<SpawnResult> {
   const defaultMode = manager.getDefaultMode();
   const resolvedMode = resolveMode(mode, defaultMode);
@@ -143,7 +146,8 @@ export async function handleSpawn(
       resolvedMode,
       resolvedEffort,
       parentSessionId,
-      workspaceDir
+      workspaceDir,
+      version
     );
 
     debug(`[ralph] Spawned ${agentType} agent ${agent.agentId} for autonomous execution`);
@@ -154,6 +158,7 @@ export async function handleSpawn(
       agent_type: agent.agentType,
       status: agent.status,
       started_at: agent.startedAt.toISOString(),
+      version: agent.version,
     };
   }
 
@@ -202,7 +207,8 @@ export async function handleSpawn(
     resolvedMode,
     resolvedEffort,
     parentSessionId,
-    workspaceDir
+    workspaceDir,
+    version
   );
 
   debug(`[spawn] Spawned ${agentType} agent ${agent.agentId} for task "${taskName}"`);
@@ -213,6 +219,7 @@ export async function handleSpawn(
     agent_type: agent.agentType,
     status: agent.status,
     started_at: agent.startedAt.toISOString(),
+    version: agent.version,
   };
 }
 
@@ -295,6 +302,7 @@ export async function handleStatus(
       agent_type: agent.agentType,
       status: agent.status,
       duration: agent.duration(),
+      version: agent.version,
       files_created: delta.new_files_created,
       files_modified: delta.new_files_modified,
       files_read: delta.new_files_read,
