@@ -384,8 +384,10 @@ describe('hasNewResources', () => {
     const diff = { ...emptyResources(), hooks: ['pre-commit.sh'] };
     // claude supports hooks
     expect(hasNewResources(diff, 'claude')).toBe(true);
-    // codex does NOT support hooks
-    expect(hasNewResources(diff, 'codex')).toBe(false);
+    // codex now supports hooks (version-gate applies at sync time, not here)
+    expect(hasNewResources(diff, 'codex')).toBe(true);
+    // cursor does NOT support hooks
+    expect(hasNewResources(diff, 'cursor')).toBe(false);
   });
 
   it('filters memory by commands capability (same gate)', () => {
@@ -775,12 +777,12 @@ describe('syncResourcesToVersion', () => {
       expect(stat.mode & 0o111).toBeGreaterThan(0); // has execute bits
     });
 
-    it('skips hooks for agents that do not support them', () => {
+    it('skips hooks for codex versions below minimum floor', () => {
       setupCentralResources();
-      const versionHome = path.join(AGENTS_DIR, 'versions', 'codex', '1.0.0', 'home');
+      const versionHome = path.join(AGENTS_DIR, 'versions', 'codex', '0.113.0', 'home');
       fs.mkdirSync(versionHome, { recursive: true });
 
-      const result = syncResourcesToVersion('codex', '1.0.0');
+      const result = syncResourcesToVersion('codex', '0.113.0');
       expect(result.hooks).toBe(false);
       expect(fs.existsSync(path.join(versionHome, '.codex', 'hooks'))).toBe(false);
     });

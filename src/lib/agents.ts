@@ -20,6 +20,8 @@ const execAsync = promisify(exec);
 
 const HOME = os.homedir();
 
+export const CODEX_HOOKS_MIN_VERSION = '0.116.0';
+
 const CLI_VERSION_CACHE_PATH = path.join(HOME, '.agents', '.cli-version-cache.json');
 
 interface CliVersionCacheEntry {
@@ -104,8 +106,8 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     instructionsFile: 'AGENTS.md',
     format: 'markdown',
     variableSyntax: '$ARGUMENTS',
-    supportsHooks: false,
-    capabilities: { hooks: false, mcp: true, allowlist: false, skills: true, commands: true, plugins: false },
+    supportsHooks: true,
+    capabilities: { hooks: true, mcp: true, allowlist: false, skills: true, commands: true, plugins: false },
   },
   gemini: {
     id: 'gemini',
@@ -277,7 +279,7 @@ export const SKILLS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
 export const COMMANDS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
   (id) => AGENTS[id].capabilities.commands
 );
-export const HOOKS_CAPABLE_AGENTS = ['claude', 'gemini', 'openclaw'] as const;
+export const HOOKS_CAPABLE_AGENTS = ['claude', 'codex', 'gemini', 'openclaw'] as const;
 export const PLUGINS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
   (id) => AGENTS[id].capabilities.plugins
 );

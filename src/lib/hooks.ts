@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
+import * as TOML from 'smol-toml';
 import { AGENTS, ALL_AGENT_IDS } from './agents.js';
 import { getAgentsDir, getHooksDir as getCentralHooksDir, getProjectAgentsDir } from './state.js';
 import { getEffectiveHome } from './versions.js';
@@ -462,24 +463,31 @@ export function registerHooksToSettings(
   versionHome: string,
   hookManifest?: Record<string, ManifestHook>
 ): { registered: string[]; errors: string[] } {
-  const registered: string[] = [];
-  const errors: string[] = [];
-
-  // Only Claude supports settings.json hooks registration
-  if (agentId !== 'claude') {
-    return { registered, errors };
-  }
-
   const manifest = hookManifest || parseHookManifest();
   if (Object.keys(manifest).length === 0) {
-    return { registered, errors };
+    return { registered: [], errors: [] };
   }
+
+  if (agentId === 'claude') {
+    return registerHooksForClaude(versionHome, manifest);
+  }
+  if (agentId === 'codex') {
+    return registerHooksForCodex(versionHome, manifest);
+  }
+  return { registered: [], errors: [] };
+}
+
+function registerHooksForClaude(
+  versionHome: string,
+  manifest: Record<string, ManifestHook>
+): { registered: string[]; errors: string[] } {
+  const registered: string[] = [];
+  const errors: string[] = [];
 
   const agentsDir = getAgentsDir();
   const configDir = path.join(versionHome, '.claude');
   const settingsPath = path.join(configDir, 'settings.json');
 
-  // Read existing settings
   let config: Record<string, unknown> = {};
   if (fs.existsSync(settingsPath)) {
     try {
@@ -490,24 +498,16 @@ export function registerHooksToSettings(
     }
   }
 
-  // Ensure hooks object exists
   if (!config.hooks || typeof config.hooks !== 'object') {
     config.hooks = {};
   }
   const hooks = config.hooks as Record<string, unknown[]>;
 
-  // Marker prefix for managed hooks — we only touch hooks with this path prefix
   const managedPrefix = path.join(agentsDir, 'hooks') + '/';
 
   for (const [name, hookDef] of Object.entries(manifest)) {
-    // Skip if not for this agent
-    if (hookDef.agents && !hookDef.agents.includes(agentId)) {
-      continue;
-    }
-
-    if (!hookDef.events || hookDef.events.length === 0) {
-      continue;
-    }
+    if (hookDef.agents && !hookDef.agents.includes('claude')) continue;
+    if (!hookDef.events || hookDef.events.length === 0) continue;
 
     const commandPath = path.join(agentsDir, 'hooks', hookDef.script);
     if (!fs.existsSync(commandPath)) {
@@ -516,7 +516,6 @@ export function registerHooksToSettings(
     }
 
     for (const event of hookDef.events) {
-      // Ensure event array exists
       if (!hooks[event]) {
         hooks[event] = [];
       }
@@ -529,7 +528,6 @@ export function registerHooksToSettings(
       const matcher = hookDef.matcher || '';
       const timeout = hookDef.timeout || 600;
 
-      // Find existing matcher group or create one
       let matcherGroup = eventEntries.find((e) => (e.matcher || '') === matcher);
       if (!matcherGroup) {
         matcherGroup = { matcher, hooks: [] };
@@ -540,22 +538,13 @@ export function registerHooksToSettings(
         matcherGroup.hooks = [];
       }
 
-      // Check if this hook is already registered (by command path)
-      const existingIdx = matcherGroup.hooks.findIndex(
-        (h) => h.command === commandPath
-      );
+      const existingIdx = matcherGroup.hooks.findIndex((h) => h.command === commandPath);
 
-      const hookEntry = {
-        type: 'command' as const,
-        command: commandPath,
-        timeout,
-      };
+      const hookEntry = { type: 'command' as const, command: commandPath, timeout };
 
       if (existingIdx >= 0) {
-        // Update existing
         matcherGroup.hooks[existingIdx] = hookEntry;
       } else {
-        // Add new
         matcherGroup.hooks.push(hookEntry);
       }
 
@@ -563,12 +552,110 @@ export function registerHooksToSettings(
     }
   }
 
-  // Write back
   try {
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(config, null, 2), 'utf-8');
   } catch (err) {
     errors.push(`Failed to write settings.json: ${(err as Error).message}`);
+  }
+
+  return { registered, errors };
+}
+
+function registerHooksForCodex(
+  versionHome: string,
+  manifest: Record<string, ManifestHook>
+): { registered: string[]; errors: string[] } {
+  const registered: string[] = [];
+  const errors: string[] = [];
+
+  const agentsDir = getAgentsDir();
+  const configDir = path.join(versionHome, '.codex');
+  const hooksPath = path.join(configDir, 'hooks.json');
+  const configPath = path.join(configDir, 'config.toml');
+
+  // Read existing hooks.json
+  let hooksConfig: Record<string, Array<{ type: string; command: string; timeout: number }>> = {};
+  if (fs.existsSync(hooksPath)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(hooksPath, 'utf-8'));
+      if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+        hooksConfig = existing;
+      }
+    } catch {
+      errors.push('Failed to parse hooks.json');
+      return { registered, errors };
+    }
+  }
+
+  // Marker prefix — only touch hooks whose command is under ~/.agents/hooks/
+  const managedPrefix = path.join(agentsDir, 'hooks') + '/';
+
+  for (const [name, hookDef] of Object.entries(manifest)) {
+    if (hookDef.agents && !hookDef.agents.includes('codex')) continue;
+    // Codex does not support matchers; events map directly to command entries
+    if (!hookDef.events || hookDef.events.length === 0) continue;
+
+    const commandPath = path.join(agentsDir, 'hooks', hookDef.script);
+    if (!fs.existsSync(commandPath)) {
+      errors.push(`${name}: script not found at ${commandPath}`);
+      continue;
+    }
+
+    const timeout = hookDef.timeout || 600;
+
+    for (const event of hookDef.events) {
+      if (!hooksConfig[event]) {
+        hooksConfig[event] = [];
+      }
+
+      const eventEntries = hooksConfig[event];
+
+      // Only touch managed entries (by command path prefix)
+      const existingIdx = eventEntries.findIndex((h) => h.command === commandPath);
+
+      const hookEntry = { type: 'command', command: commandPath, timeout };
+
+      if (existingIdx >= 0) {
+        eventEntries[existingIdx] = hookEntry;
+      } else {
+        eventEntries.push(hookEntry);
+      }
+
+      registered.push(`${name} -> ${event}`);
+    }
+  }
+
+  // Only write files if at least one hook was registered
+  if (registered.length === 0) {
+    return { registered, errors };
+  }
+
+  try {
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(hooksPath, JSON.stringify(hooksConfig, null, 2), 'utf-8');
+  } catch (err) {
+    errors.push(`Failed to write hooks.json: ${(err as Error).message}`);
+    return { registered, errors };
+  }
+
+  // Ensure [features] codex_hooks = true in config.toml
+  try {
+    let tomlConfig: Record<string, unknown> = {};
+    if (fs.existsSync(configPath)) {
+      try {
+        tomlConfig = TOML.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+      } catch { /* start fresh if corrupt */ }
+    }
+
+    if (!tomlConfig.features || typeof tomlConfig.features !== 'object') {
+      tomlConfig.features = {};
+    }
+    (tomlConfig.features as Record<string, unknown>).codex_hooks = true;
+
+    fs.writeFileSync(configPath, TOML.stringify(tomlConfig as Parameters<typeof TOML.stringify>[0]), 'utf-8');
+  } catch (err) {
+    errors.push(`Failed to update config.toml: ${(err as Error).message}`);
   }
 
   return { registered, errors };
