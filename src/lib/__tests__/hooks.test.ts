@@ -1,25 +1,28 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-// We need to stub getAgentsDir before importing hooks
-vi.mock('../state.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../state.js')>();
-  return {
-    ...actual,
-    getAgentsDir: () => agentsDir,
-    getHooksDir: () => path.join(agentsDir, 'hooks'),
-  };
-});
+import { registerHooksToSettings } from '../hooks.js';
+import { CODEX_HOOKS_MIN_VERSION } from '../agents.js';
+import { compareVersions } from '../versions.js';
+import type { ManifestHook } from '../types.js';
 
 let agentsDir: string;
 let tmpDir: string;
 
-import { registerHooksToSettings, parseHookManifest } from '../hooks.js';
-import { CODEX_HOOKS_MIN_VERSION } from '../agents.js';
-import { compareVersions } from '../versions.js';
-import type { ManifestHook } from '../types.js';
+function makeScript(name: string): string {
+  const scriptPath = path.join(agentsDir, 'hooks', name);
+  fs.writeFileSync(scriptPath, '#!/bin/sh\necho hello\n', 'utf-8');
+  fs.chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
+function makeVersionHome(): string {
+  const home = path.join(tmpDir, 'version-home');
+  fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+  return home;
+}
 
 describe('registerHooksToSettings - Codex', () => {
   beforeEach(() => {
@@ -32,20 +35,7 @@ describe('registerHooksToSettings - Codex', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function makeScript(name: string): string {
-    const scriptPath = path.join(agentsDir, 'hooks', name);
-    fs.writeFileSync(scriptPath, '#!/bin/sh\necho hello\n', 'utf-8');
-    fs.chmodSync(scriptPath, 0o755);
-    return scriptPath;
-  }
-
-  function makeVersionHome(): string {
-    const home = path.join(tmpDir, 'version-home');
-    fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
-    return home;
-  }
-
-  it('writes hooks.json with correct event entries', () => {
+  it('writes hooks.json with correct nested schema for UserPromptSubmit', () => {
     const versionHome = makeVersionHome();
     const scriptPath = makeScript('on-prompt.sh');
 
@@ -57,7 +47,7 @@ describe('registerHooksToSettings - Codex', () => {
       },
     };
 
-    const result = registerHooksToSettings('codex', versionHome, manifest);
+    const result = registerHooksToSettings('codex', versionHome, manifest, agentsDir);
 
     expect(result.errors).toHaveLength(0);
     expect(result.registered).toContain('on-prompt -> UserPromptSubmit');
@@ -65,10 +55,48 @@ describe('registerHooksToSettings - Codex', () => {
     const hooksJson = JSON.parse(
       fs.readFileSync(path.join(versionHome, '.codex', 'hooks.json'), 'utf-8')
     );
-    expect(hooksJson.UserPromptSubmit).toHaveLength(1);
-    expect(hooksJson.UserPromptSubmit[0].command).toBe(scriptPath);
-    expect(hooksJson.UserPromptSubmit[0].timeout).toBe(30);
-    expect(hooksJson.UserPromptSubmit[0].type).toBe('command');
+
+    // Top-level "hooks" wrapper must exist
+    expect(hooksJson).toHaveProperty('hooks');
+
+    // Event array holds matcher-group objects
+    const groups = hooksJson.hooks.UserPromptSubmit;
+    expect(groups).toHaveLength(1);
+
+    // UserPromptSubmit groups must NOT have a matcher field
+    expect(groups[0]).not.toHaveProperty('matcher');
+
+    // Nested hooks array holds the actual command entry
+    expect(groups[0].hooks).toHaveLength(1);
+    expect(groups[0].hooks[0].command).toBe(scriptPath);
+    expect(groups[0].hooks[0].timeout).toBe(30);
+    expect(groups[0].hooks[0].type).toBe('command');
+  });
+
+  it('writes PreToolUse hook with matcher field', () => {
+    const versionHome = makeVersionHome();
+    const scriptPath = makeScript('bash-tool-hook.sh');
+
+    const manifest: Record<string, ManifestHook> = {
+      'bash-hook': {
+        script: 'bash-tool-hook.sh',
+        events: ['PreToolUse'],
+        matcher: 'Bash',
+        timeout: 600,
+      },
+    };
+
+    const result = registerHooksToSettings('codex', versionHome, manifest, agentsDir);
+
+    expect(result.errors).toHaveLength(0);
+    const hooksJson = JSON.parse(
+      fs.readFileSync(path.join(versionHome, '.codex', 'hooks.json'), 'utf-8')
+    );
+
+    const groups = hooksJson.hooks.PreToolUse;
+    expect(groups).toHaveLength(1);
+    expect(groups[0].matcher).toBe('Bash');
+    expect(groups[0].hooks[0].command).toBe(scriptPath);
   });
 
   it('writes [features] codex_hooks = true to config.toml', () => {
@@ -79,7 +107,7 @@ describe('registerHooksToSettings - Codex', () => {
       'on-prompt': { script: 'on-prompt.sh', events: ['UserPromptSubmit'] },
     };
 
-    registerHooksToSettings('codex', versionHome, manifest);
+    registerHooksToSettings('codex', versionHome, manifest, agentsDir);
 
     const configPath = path.join(versionHome, '.codex', 'config.toml');
     expect(fs.existsSync(configPath)).toBe(true);
@@ -92,7 +120,6 @@ describe('registerHooksToSettings - Codex', () => {
     const versionHome = makeVersionHome();
     makeScript('on-prompt.sh');
 
-    // Pre-seed config.toml with unrelated content
     const configPath = path.join(versionHome, '.codex', 'config.toml');
     fs.writeFileSync(configPath, 'approval_policy = "suggest"\n', 'utf-8');
 
@@ -100,7 +127,7 @@ describe('registerHooksToSettings - Codex', () => {
       'on-prompt': { script: 'on-prompt.sh', events: ['UserPromptSubmit'] },
     };
 
-    registerHooksToSettings('codex', versionHome, manifest);
+    registerHooksToSettings('codex', versionHome, manifest, agentsDir);
 
     const content = fs.readFileSync(configPath, 'utf-8');
     expect(content).toContain('codex_hooks = true');
@@ -115,34 +142,38 @@ describe('registerHooksToSettings - Codex', () => {
       'on-prompt': { script: 'on-prompt.sh', events: ['UserPromptSubmit'] },
     };
 
-    registerHooksToSettings('codex', versionHome, manifest);
-    registerHooksToSettings('codex', versionHome, manifest);
+    registerHooksToSettings('codex', versionHome, manifest, agentsDir);
+    registerHooksToSettings('codex', versionHome, manifest, agentsDir);
 
     const hooksJson = JSON.parse(
       fs.readFileSync(path.join(versionHome, '.codex', 'hooks.json'), 'utf-8')
     );
-    expect(hooksJson.UserPromptSubmit).toHaveLength(1);
+    expect(hooksJson.hooks.UserPromptSubmit[0].hooks).toHaveLength(1);
   });
 
   it('never touches user-authored entries (managed-prefix guard)', () => {
     const versionHome = makeVersionHome();
     makeScript('on-prompt.sh');
 
-    // Pre-seed hooks.json with a user-authored hook (not under agentsDir)
+    // Pre-seed hooks.json with a user-authored hook in the correct nested format
     const hooksPath = path.join(versionHome, '.codex', 'hooks.json');
     const userHook = { type: 'command', command: '/usr/local/bin/my-hook.sh', timeout: 10 };
-    fs.writeFileSync(hooksPath, JSON.stringify({ UserPromptSubmit: [userHook] }, null, 2));
+    fs.writeFileSync(
+      hooksPath,
+      JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [userHook] }] } }, null, 2)
+    );
 
     const manifest: Record<string, ManifestHook> = {
       'on-prompt': { script: 'on-prompt.sh', events: ['UserPromptSubmit'] },
     };
 
-    registerHooksToSettings('codex', versionHome, manifest);
+    registerHooksToSettings('codex', versionHome, manifest, agentsDir);
 
     const hooksJson = JSON.parse(fs.readFileSync(hooksPath, 'utf-8'));
-    // Should have 2 entries: user hook unchanged + new managed hook
-    expect(hooksJson.UserPromptSubmit).toHaveLength(2);
-    expect(hooksJson.UserPromptSubmit[0]).toEqual(userHook);
+    const group = hooksJson.hooks.UserPromptSubmit[0];
+    // User hook and managed hook share the no-matcher group; user entry is untouched
+    expect(group.hooks).toHaveLength(2);
+    expect(group.hooks[0]).toEqual(userHook);
   });
 
   it('skips hooks agent-filtered to other agents', () => {
@@ -157,17 +188,17 @@ describe('registerHooksToSettings - Codex', () => {
       },
     };
 
-    const result = registerHooksToSettings('codex', versionHome, manifest);
+    const result = registerHooksToSettings('codex', versionHome, manifest, agentsDir);
 
     expect(result.registered).toHaveLength(0);
     expect(fs.existsSync(path.join(versionHome, '.codex', 'hooks.json'))).toBe(false);
   });
 
-  it('handles matcher-less events (Codex does not use matchers)', () => {
+  it('UserPromptSubmit group has no matcher even when manifest defines one', () => {
     const versionHome = makeVersionHome();
     makeScript('on-prompt.sh');
 
-    // Manifest has a matcher (Claude-style) — Codex should still write the entry without it
+    // Manifest has a matcher — for UserPromptSubmit it must be dropped
     const manifest: Record<string, ManifestHook> = {
       'on-prompt': {
         script: 'on-prompt.sh',
@@ -176,15 +207,15 @@ describe('registerHooksToSettings - Codex', () => {
       },
     };
 
-    const result = registerHooksToSettings('codex', versionHome, manifest);
+    const result = registerHooksToSettings('codex', versionHome, manifest, agentsDir);
     expect(result.errors).toHaveLength(0);
     expect(result.registered).toContain('on-prompt -> UserPromptSubmit');
 
     const hooksJson = JSON.parse(
       fs.readFileSync(path.join(versionHome, '.codex', 'hooks.json'), 'utf-8')
     );
-    // Entry written without a matcher field
-    expect(hooksJson.UserPromptSubmit[0]).not.toHaveProperty('matcher');
+    // Group for UserPromptSubmit must not have matcher field
+    expect(hooksJson.hooks.UserPromptSubmit[0]).not.toHaveProperty('matcher');
   });
 
   it('returns error when script file does not exist', () => {
@@ -194,7 +225,7 @@ describe('registerHooksToSettings - Codex', () => {
       'missing-hook': { script: 'does-not-exist.sh', events: ['UserPromptSubmit'] },
     };
 
-    const result = registerHooksToSettings('codex', versionHome, manifest);
+    const result = registerHooksToSettings('codex', versionHome, manifest, agentsDir);
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.errors[0]).toContain('missing-hook');
   });
@@ -232,7 +263,7 @@ describe('registerHooksToSettings - returns empty for unsupported agents', () =>
     const manifest: Record<string, ManifestHook> = {
       'on-prompt': { script: 'on-prompt.sh', events: ['UserPromptSubmit'] },
     };
-    const result = registerHooksToSettings('gemini', path.join(tmpDir, 'home'), manifest);
+    const result = registerHooksToSettings('gemini', path.join(tmpDir, 'home'), manifest, agentsDir);
     expect(result.registered).toHaveLength(0);
     expect(result.errors).toHaveLength(0);
   });
