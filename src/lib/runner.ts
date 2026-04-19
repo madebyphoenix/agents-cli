@@ -12,6 +12,7 @@ import {
 import { getRunsDir } from './state.js';
 import type { AgentId } from './types.js';
 import { prepareJobHome, buildSpawnEnv } from './sandbox.js';
+import { resolveModel, buildReasoningFlags } from './models.js';
 
 export interface RunResult {
   meta: RunMeta;
@@ -49,10 +50,7 @@ export function buildJobCommand(config: JobConfig, resolvedPrompt: string): stri
       }
     }
 
-    const model = config.config?.model as string | undefined;
-    if (model) {
-      cmd.push('--model', model);
-    }
+    appendModelAndReasoning(cmd, config);
   }
 
   if (config.agent === 'codex') {
@@ -65,10 +63,7 @@ export function buildJobCommand(config: JobConfig, resolvedPrompt: string): stri
       cmd.push('--full-auto');
     }
 
-    const model = config.config?.model as string | undefined;
-    if (model) {
-      cmd.push('--model', model);
-    }
+    appendModelAndReasoning(cmd, config);
   }
 
   if (config.agent === 'gemini') {
@@ -76,13 +71,38 @@ export function buildJobCommand(config: JobConfig, resolvedPrompt: string): stri
       cmd.push('--yolo');
     }
 
-    const model = config.config?.model as string | undefined;
-    if (model) {
+    appendModelAndReasoning(cmd, config);
+  }
+
+  return cmd;
+}
+
+/**
+ * Append --model and reasoning flags to a command being assembled.
+ *
+ * Pass-through model resolution: validates against the installed (agent, version)
+ * catalog when possible and writes a warning to stderr on miss, but never blocks.
+ * Reasoning level (config.config.reasoning) maps to per-agent flags via models.ts.
+ */
+function appendModelAndReasoning(cmd: string[], config: JobConfig): void {
+  const model = config.config?.model as string | undefined;
+  if (model) {
+    if (config.version) {
+      const resolved = resolveModel(config.agent, config.version, model);
+      if (resolved.warning) {
+        process.stderr.write(`[agents] ${resolved.warning}\n`);
+      }
+      cmd.push('--model', resolved.forwarded);
+    } else {
       cmd.push('--model', model);
     }
   }
 
-  return cmd;
+  const reasoning = config.config?.reasoning as string | undefined;
+  if (reasoning) {
+    const flags = buildReasoningFlags(config.agent, reasoning);
+    if (flags.length > 0) cmd.push(...flags);
+  }
 }
 
 function generateRunId(): string {
