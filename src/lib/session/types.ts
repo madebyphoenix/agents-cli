@@ -3,7 +3,7 @@ export type SessionAgentId = 'claude' | 'codex' | 'gemini' | 'opencode' | 'openc
 export const SESSION_AGENTS: SessionAgentId[] = ['claude', 'codex', 'gemini', 'opencode', 'openclaw'];
 
 export interface SessionEvent {
-  type: 'message' | 'tool_use' | 'tool_result' | 'thinking' | 'error' | 'init' | 'result';
+  type: 'message' | 'tool_use' | 'tool_result' | 'thinking' | 'error' | 'init' | 'result' | 'usage' | 'attachment';
   agent: SessionAgentId;
   timestamp: string;
   role?: 'user' | 'assistant';
@@ -16,6 +16,15 @@ export interface SessionEvent {
   output?: string;
   /** Internal: marks tool_use events from local commands */
   _local?: boolean;
+  // Fields for usage events (type === 'usage')
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  // Fields for attachment events (type === 'attachment')
+  mediaType?: string;
+  sizeBytes?: number;
 }
 
 export interface SessionMeta {

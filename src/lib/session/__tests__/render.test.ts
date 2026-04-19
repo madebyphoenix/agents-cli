@@ -1,0 +1,538 @@
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import * as os from 'os';
+
+// Mock HOME for normalizeForDedup tests
+const ORIG_HOME = process.env.HOME;
+
+import {
+  unwrapCommand,
+  normalizeForDedup,
+  bucketKey,
+  relativeToCwd,
+  linkPath,
+  collapseRetries,
+  computeSummaryStats,
+  renderSummaryHeader,
+  renderSummary,
+} from '../render.js';
+import type { SessionEvent } from '../types.js';
+
+// ── unwrapCommand ─────────────────────────────────────────────────────────────
+
+describe('unwrapCommand', () => {
+  it('returns bare command unchanged', () => {
+    expect(unwrapCommand('ls -la')).toBe('ls -la');
+  });
+
+  it('unwraps ssh with double-quoted payload', () => {
+    expect(unwrapCommand('ssh host "ls -la"')).toBe('ls -la');
+  });
+
+  it('unwraps ssh with quoted payload plus pipe (pipe is stripped)', () => {
+    // ls is not a wrapper so recursion stops there; pipe after closing quote is stripped
+    expect(unwrapCommand('ssh host "ls -la" | cat')).toBe('ls -la');
+  });
+
+  it('unwraps sudo prefix', () => {
+    expect(unwrapCommand('sudo bun install')).toBe('bun install');
+  });
+
+  it('unwraps cd && prefix', () => {
+    expect(unwrapCommand('cd /tmp && ls')).toBe('ls');
+  });
+
+  it('unwraps bun run prefix', () => {
+    expect(unwrapCommand('bun run build')).toBe('build');
+  });
+
+  it('unwraps npx prefix', () => {
+    expect(unwrapCommand('npx tsc --noEmit')).toBe('tsc --noEmit');
+  });
+
+  it('unwraps nested: ssh + sudo + bun run', () => {
+    expect(unwrapCommand('ssh host "sudo bun run build"')).toBe('build');
+  });
+
+  it('unwraps time prefix', () => {
+    expect(unwrapCommand('time cargo build')).toBe('cargo build');
+  });
+});
+
+// ── normalizeForDedup ─────────────────────────────────────────────────────────
+
+describe('normalizeForDedup', () => {
+  beforeEach(() => {
+    process.env.HOME = '/home/user';
+  });
+  afterEach(() => {
+    process.env.HOME = ORIG_HOME;
+  });
+
+  it('strips short flags', () => {
+    expect(normalizeForDedup('ls -lh /tmp')).toBe('ls /tmp');
+  });
+
+  it('strips long flags', () => {
+    expect(normalizeForDedup('git --no-pager log')).toBe('git log');
+  });
+
+  it('strips long flags with value', () => {
+    expect(normalizeForDedup('git log --format=oneline')).toBe('git log');
+  });
+
+  it('strips trailing pipe to head', () => {
+    expect(normalizeForDedup('ls /tmp | head -20')).toBe('ls /tmp');
+  });
+
+  it('strips trailing pipe to wc', () => {
+    expect(normalizeForDedup('ls /tmp | wc -l')).toBe('ls /tmp');
+  });
+
+  it('strips 2>&1', () => {
+    expect(normalizeForDedup('ls /tmp 2>&1')).toBe('ls /tmp');
+  });
+
+  it('strips ; echo done suffix', () => {
+    expect(normalizeForDedup('bun test; echo done')).toBe('bun test');
+  });
+
+  it('replaces leading $HOME with ~ when command starts with home path', () => {
+    // The ^ anchor replaces only when the string begins with $HOME
+    expect(normalizeForDedup('/home/user/.agents/run.sh')).toBe('~/.agents/run.sh');
+  });
+
+  it('collapses ls -lh + ls -la + ls 2>&1 to same key', () => {
+    const a = normalizeForDedup('ls -lh /home/user/sessions/ | head');
+    const b = normalizeForDedup('ls -la /home/user/sessions/');
+    const c = normalizeForDedup('ls /home/user/sessions/ 2>&1');
+    expect(a).toBe(b);
+    expect(b).toBe(c);
+  });
+});
+
+// ── bucketKey ─────────────────────────────────────────────────────────────────
+
+describe('bucketKey', () => {
+  it('returns two-level key for git', () => {
+    expect(bucketKey('git status')).toBe('git status');
+    expect(bucketKey('git diff HEAD')).toBe('git diff');
+  });
+
+  it('returns two-level key for gh', () => {
+    expect(bucketKey('gh pr view 123')).toBe('gh pr');
+  });
+
+  it('returns two-level key for bun', () => {
+    expect(bucketKey('bun test --watch')).toBe('bun test');
+  });
+
+  it('returns two-level key for cargo', () => {
+    expect(bucketKey('cargo build --release')).toBe('cargo build');
+  });
+
+  it('returns single-token key for ls', () => {
+    expect(bucketKey('ls -la')).toBe('ls');
+  });
+
+  it('returns single-token key for grep', () => {
+    expect(bucketKey('grep -r pattern .')).toBe('grep');
+  });
+
+  it('returns ssh→CMD prefix for ssh-wrapped commands', () => {
+    expect(bucketKey('ssh host "ls -la"')).toBe('ssh\u2192ls');
+  });
+
+  it('returns ssh→two-level for ssh-wrapped openclaw', () => {
+    expect(bucketKey('ssh host "openclaw browser profiles"')).toBe('ssh\u2192openclaw browser');
+  });
+
+  it('returns ssh→git status for ssh-wrapped git', () => {
+    expect(bucketKey('ssh host "git status"')).toBe('ssh\u2192git status');
+  });
+
+  it('returns single token for unknown commands', () => {
+    expect(bucketKey('python3 bench.py')).toBe('python3');
+  });
+});
+
+// ── Category routing ──────────────────────────────────────────────────────────
+
+describe('category routing (via renderSummary commands section)', () => {
+  function buildBashEvents(cmds: string[]): SessionEvent[] {
+    return cmds.map((cmd, i) => ({
+      type: 'tool_use' as const,
+      agent: 'claude' as const,
+      timestamp: new Date(Date.now() + i * 1000).toISOString(),
+      tool: 'Bash',
+      args: { command: cmd },
+      command: cmd,
+    }));
+  }
+
+  it('includes Build/test bucket for bun commands', () => {
+    const events = buildBashEvents(['bun run build', 'bun test']);
+    const out = renderSummary(events);
+    expect(out).toContain('Build/test');
+  });
+
+  it('includes VCS bucket for git commands', () => {
+    const events = buildBashEvents(['git status', 'git diff']);
+    const out = renderSummary(events);
+    expect(out).toContain('VCS');
+  });
+
+  it('includes Remote bucket for ssh commands', () => {
+    const events = buildBashEvents(['ssh host "ls"']);
+    const out = renderSummary(events);
+    expect(out).toContain('Remote');
+  });
+
+  it('Probes bucket uses low signal (inline list, not expanded)', () => {
+    const events = buildBashEvents(['ls /tmp', 'cat file.txt', 'head -n 5 file.txt']);
+    const out = renderSummary(events);
+    expect(out).toContain('Probes');
+    // Low signal: should show inline dash-separated list, not individual lines
+    expect(out).toMatch(/Probes.*—/);
+  });
+
+  it('Other bucket catches uncategorized tokens', () => {
+    const events = buildBashEvents(['python3 bench.py', 'ruby script.rb']);
+    const out = renderSummary(events);
+    expect(out).toContain('Other');
+  });
+
+  it('Wait bucket for sleep commands', () => {
+    const events = buildBashEvents(['sleep 30', 'sleep 10']);
+    const out = renderSummary(events);
+    expect(out).toContain('Wait');
+    // Low signal — inline
+    expect(out).toMatch(/Wait.*—/);
+  });
+});
+
+// ── collapseRetries ───────────────────────────────────────────────────────────
+
+describe('collapseRetries', () => {
+  const base = Date.now();
+
+  it('collapses 3 identical commands within 60s to one entry', () => {
+    const cmds = [
+      { cmd: 'bun test', ts: base },
+      { cmd: 'bun test', ts: base + 10_000 },
+      { cmd: 'bun test', ts: base + 20_000 },
+    ];
+    const result = collapseRetries(cmds);
+    expect(result).toHaveLength(1);
+    expect(result[0].count).toBe(3);
+  });
+
+  it('keeps 2 identical commands within 60s as separate entries', () => {
+    const cmds = [
+      { cmd: 'bun test', ts: base },
+      { cmd: 'bun test', ts: base + 10_000 },
+    ];
+    const result = collapseRetries(cmds);
+    expect(result).toHaveLength(2);
+    expect(result[0].count).toBe(1);
+    expect(result[1].count).toBe(1);
+  });
+
+  it('keeps invocations >60s apart as separate entries', () => {
+    const cmds = [
+      { cmd: 'bun test', ts: base },
+      { cmd: 'bun test', ts: base + 10_000 },
+      { cmd: 'bun test', ts: base + 90_000 }, // >60s gap
+    ];
+    const result = collapseRetries(cmds);
+    // First two: within 60s but count=2, expanded back to 2
+    // Third: new group
+    expect(result.some(r => r.count === 1)).toBe(true);
+  });
+
+  it('collapses flag-variant commands that normalize to same key', () => {
+    const cmds = [
+      { cmd: 'ls -la /tmp', ts: base },
+      { cmd: 'ls -lh /tmp', ts: base + 5_000 },
+      { cmd: 'ls /tmp 2>&1', ts: base + 10_000 },
+    ];
+    const result = collapseRetries(cmds);
+    expect(result).toHaveLength(1);
+    expect(result[0].count).toBe(3);
+  });
+});
+
+// ── relativeToCwd ─────────────────────────────────────────────────────────────
+
+describe('relativeToCwd', () => {
+  beforeEach(() => { process.env.HOME = '/home/user'; });
+  afterEach(() => { process.env.HOME = ORIG_HOME; });
+
+  it('returns cwd-relative path when inside cwd', () => {
+    expect(relativeToCwd('/home/user/project/src/index.ts', '/home/user/project')).toBe('src/index.ts');
+  });
+
+  it('returns . when path equals cwd', () => {
+    expect(relativeToCwd('/home/user/project', '/home/user/project')).toBe('.');
+  });
+
+  it('returns home-relative path when outside cwd', () => {
+    expect(relativeToCwd('/home/user/.claude/settings.json', '/home/user/project')).toBe('~/.claude/settings.json');
+  });
+
+  it('returns absolute path when outside both cwd and home', () => {
+    expect(relativeToCwd('/etc/hosts', '/home/user/project')).toBe('/etc/hosts');
+  });
+
+  it('works without cwd (falls back to home-relative)', () => {
+    expect(relativeToCwd('/home/user/foo.ts')).toBe('~/foo.ts');
+  });
+});
+
+// ── linkPath ──────────────────────────────────────────────────────────────────
+
+describe('linkPath', () => {
+  it('returns plain label when stdout is not TTY', () => {
+    const origIsTTY = process.stdout.isTTY;
+    Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+    const result = linkPath('/some/path', 'label');
+    expect(result).toBe('label');
+    Object.defineProperty(process.stdout, 'isTTY', { value: origIsTTY, configurable: true });
+  });
+
+  it('emits OSC 8 sequence when TTY env is set', () => {
+    const origIsTTY = process.stdout.isTTY;
+    const origTermProgram = process.env.TERM_PROGRAM;
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    process.env.TERM_PROGRAM = 'iTerm.app';
+
+    const result = linkPath('/some/path', 'label');
+    expect(result).toContain('\x1b]8;;file:///some/path\x1b\\');
+    expect(result).toContain('label');
+    expect(result).toContain('\x1b]8;;\x1b\\');
+
+    Object.defineProperty(process.stdout, 'isTTY', { value: origIsTTY, configurable: true });
+    if (origTermProgram === undefined) delete process.env.TERM_PROGRAM;
+    else process.env.TERM_PROGRAM = origTermProgram;
+  });
+});
+
+// ── computeSummaryStats ───────────────────────────────────────────────────────
+
+describe('computeSummaryStats', () => {
+  it('counts user/assistant turns, tools, errors', () => {
+    const events: SessionEvent[] = [
+      { type: 'message', agent: 'claude', timestamp: '2024-01-01T00:00:00Z', role: 'user', content: 'hi' },
+      { type: 'tool_use', agent: 'claude', timestamp: '2024-01-01T00:00:01Z', tool: 'Read', args: {} },
+      { type: 'message', agent: 'claude', timestamp: '2024-01-01T00:00:02Z', role: 'assistant', content: 'done' },
+      { type: 'error', agent: 'claude', timestamp: '2024-01-01T00:00:03Z', content: 'fail' },
+    ];
+    const stats = computeSummaryStats(events);
+    expect(stats.userTurns).toBe(1);
+    expect(stats.assistantTurns).toBe(1);
+    expect(stats.toolCount).toBe(1);
+    expect(stats.errorCount).toBe(1);
+  });
+
+  it('sums token counts from usage events', () => {
+    const events: SessionEvent[] = [
+      {
+        type: 'usage', agent: 'claude', timestamp: '2024-01-01T00:00:00Z',
+        model: 'claude-opus-4-7-20251001',
+        outputTokens: 1000, cacheReadTokens: 50000,
+      },
+      {
+        type: 'usage', agent: 'claude', timestamp: '2024-01-01T00:00:01Z',
+        model: 'claude-opus-4-7-20251001',
+        outputTokens: 500, cacheReadTokens: 10000,
+      },
+    ];
+    const stats = computeSummaryStats(events);
+    expect(stats.outputTokens).toBe(1500);
+    expect(stats.cacheReadTokens).toBe(60000);
+    expect(stats.models).toEqual(['opus-4-7']);
+  });
+
+  it('skips local tool_use events in tool count', () => {
+    const events: SessionEvent[] = [
+      { type: 'tool_use', agent: 'claude', timestamp: '2024-01-01T00:00:00Z', tool: 'Bash', args: {}, _local: true },
+    ];
+    const stats = computeSummaryStats(events);
+    expect(stats.toolCount).toBe(0);
+  });
+});
+
+// ── renderSummaryHeader ───────────────────────────────────────────────────────
+
+describe('renderSummaryHeader', () => {
+  it('formats turn/tool/token/duration stats', () => {
+    const stats = {
+      models: ['opus-4-7'],
+      userTurns: 10,
+      assistantTurns: 10,
+      toolCount: 50,
+      errorCount: 2,
+      outputTokens: 361_000,
+      cacheReadTokens: 67_500_000,
+      firstTs: 0,
+      lastTs: 12 * 60_000,
+    };
+    const out = renderSummaryHeader(stats);
+    expect(out).toContain('20 turns');
+    expect(out).toContain('50 tools');
+    expect(out).toContain('2 errors');
+    expect(out).toContain('67.5M cached');
+    expect(out).toContain('361K out');
+    expect(out).toContain('12 min');
+  });
+
+  it('omits token section when no tokens recorded', () => {
+    const stats = {
+      models: [],
+      userTurns: 5,
+      assistantTurns: 5,
+      toolCount: 0,
+      errorCount: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      firstTs: 0,
+      lastTs: 0,
+    };
+    const out = renderSummaryHeader(stats);
+    expect(out).not.toContain('cached');
+    expect(out).not.toContain('out');
+  });
+});
+
+// ── renderSummary integration ─────────────────────────────────────────────────
+
+describe('renderSummary', () => {
+  function makeEvent(overrides: Partial<SessionEvent>): SessionEvent {
+    return {
+      type: 'message',
+      agent: 'claude',
+      timestamp: '2024-01-01T00:00:00Z',
+      ...overrides,
+    };
+  }
+
+  it('dedupes Read vs Modified: modified file not in read count', () => {
+    const events: SessionEvent[] = [
+      makeEvent({ type: 'tool_use', tool: 'Read', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
+      makeEvent({ type: 'tool_use', tool: 'Edit', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
+    ];
+    const out = renderSummary(events, '/project');
+    // a.ts should appear in Modified, not in Read
+    expect(out).toContain('Modified');
+    // The Read section should not appear since the only read file was also modified
+    // (and would be deduped out, leaving 0 read-only files)
+    const readMatch = out.match(/Read\s+\((\d+)\)/);
+    if (readMatch) {
+      expect(parseInt(readMatch[1])).toBe(0);
+    }
+  });
+
+  it('renders final message up to 3000 chars', () => {
+    const longMsg = 'x'.repeat(4000);
+    const events: SessionEvent[] = [
+      makeEvent({ role: 'assistant', content: longMsg }),
+    ];
+    const out = renderSummary(events);
+    expect(out).toContain('x'.repeat(100));
+    // Should truncate at 3000
+    expect(out.indexOf('...')).toBeGreaterThan(0);
+    expect(out.indexOf('x'.repeat(3001))).toBe(-1);
+  });
+
+  it('renders prompt without 300-char cap', () => {
+    const longPrompt = 'Implement a feature that '.repeat(20); // >300 chars
+    const events: SessionEvent[] = [
+      makeEvent({ role: 'user', content: longPrompt }),
+    ];
+    const out = renderSummary(events);
+    // Should not be truncated at 300 chars
+    expect(out.length).toBeGreaterThan(300);
+    // Should not contain '...' from truncation
+    const promptSection = out.split('\n').find(l => l.includes('Prompt:'));
+    expect(promptSection).toBeTruthy();
+    expect(promptSection?.endsWith('...')).toBe(false);
+  });
+
+  it('shows attachment count line for image blocks', () => {
+    const events: SessionEvent[] = [
+      makeEvent({ type: 'attachment', mediaType: 'image/png', sizeBytes: 1024 }),
+      makeEvent({ type: 'attachment', mediaType: 'image/jpeg', sizeBytes: 2048 }),
+    ];
+    const out = renderSummary(events);
+    expect(out).toContain('2 screenshot');
+    expect(out).toContain('image/png');
+    expect(out).toContain('image/jpeg');
+  });
+
+  it('shows TodoWrite items in Plan section', () => {
+    const events: SessionEvent[] = [
+      makeEvent({
+        type: 'tool_use',
+        tool: 'TodoWrite',
+        args: {
+          todos: [
+            { content: 'Write tests', status: 'pending' },
+            { content: 'Build project', status: 'pending' },
+          ],
+        },
+      }),
+    ];
+    const out = renderSummary(events);
+    expect(out).toContain('Plan');
+    expect(out).toContain('Write tests');
+    expect(out).toContain('Build project');
+  });
+
+  it('shows subagent spawns in Subagents section', () => {
+    const events: SessionEvent[] = [
+      makeEvent({
+        type: 'tool_use',
+        tool: 'Agent',
+        args: {
+          description: 'Explore the codebase',
+          subagent_type: 'Explore',
+        },
+      }),
+    ];
+    const out = renderSummary(events);
+    expect(out).toContain('Subagents');
+    expect(out).toContain('Explore the codebase');
+    expect(out).toContain('Explore');
+  });
+
+  it('shows error count and first failing tool', () => {
+    const events: SessionEvent[] = [
+      makeEvent({ type: 'error', tool: 'Bash', args: { command: 'bun test' }, content: 'exit 1' }),
+      makeEvent({ type: 'error', tool: 'Bash', args: { command: 'bun build' }, content: 'exit 1' }),
+    ];
+    const out = renderSummary(events);
+    expect(out).toContain('2 failure');
+    expect(out).toContain('Bash');
+  });
+
+  it('shows reasoning interleaved with tool clusters', () => {
+    const events: SessionEvent[] = [
+      makeEvent({ type: 'thinking', content: 'I need to read the file first. Then edit it.' }),
+      makeEvent({ type: 'tool_use', tool: 'Read', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
+      makeEvent({ type: 'tool_use', tool: 'Edit', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
+    ];
+    const out = renderSummary(events, '/project');
+    expect(out).toContain('Reasoning');
+    expect(out).toContain('I need to read the file first');
+    expect(out).toContain('ran:');
+    expect(out).toContain('Read src/a.ts');
+  });
+
+  it('uses cwd-relative paths in Modified section', () => {
+    const events: SessionEvent[] = [
+      makeEvent({ type: 'tool_use', tool: 'Edit', args: { file_path: '/project/src/lib/render.ts' }, path: '/project/src/lib/render.ts' }),
+    ];
+    const out = renderSummary(events, '/project');
+    expect(out).toContain('src/lib/render.ts');
+    expect(out).not.toContain('/project/src/lib/render.ts');
+  });
+});

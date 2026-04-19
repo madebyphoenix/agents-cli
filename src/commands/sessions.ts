@@ -9,7 +9,7 @@ import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types
 import { SESSION_AGENTS } from '../lib/session/types.js';
 import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter, type ScanProgress } from '../lib/session/discover.js';
 import { parseSession } from '../lib/session/parse.js';
-import { renderTranscript, renderSummary, renderTrace, renderJson } from '../lib/session/render.js';
+import { renderTranscript, renderSummary, renderSummaryHeader, computeSummaryStats, renderTrace, renderJson } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
 import { colorAgent } from '../lib/agents.js';
 import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
@@ -364,31 +364,51 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
     return;
   }
 
-  // Session header
-  const agentColor = colorAgent(session.agent);
-  console.log('');
-  console.log(
-    agentColor(session.agent) +
-    (session.version ? chalk.yellow(` ${session.version}`) : '') +
-    (session.project ? chalk.cyan(` ${session.project}`) : '') +
-    chalk.gray(` ${formatRelativeTime(session.timestamp)}`) +
-    (session.account ? chalk.gray(` (${session.account})`) : '')
-  );
-  console.log(chalk.gray('─'.repeat(60)));
-
   const spinner = ora(`Parsing ${session.agent} session...`).start();
   const events = parseSession(session.filePath, session.agent);
   spinner.stop();
 
-  let output: string;
-  switch (mode) {
-    case 'transcript': output = renderTranscript(events); break;
-    case 'summary': output = renderMarkdown(renderSummary(events)); break;
-    case 'trace': output = renderMarkdown(renderTrace(events)); break;
-    case 'json': output = renderJson(events); break;
-  }
+  const agentColor = colorAgent(session.agent);
+  console.log('');
 
-  process.stdout.write(output);
+  if (mode === 'summary') {
+    const stats = computeSummaryStats(events);
+    const modelStr = stats.models.length > 0 ? chalk.yellow(`  ${stats.models.join(', ')}`) : '';
+    const branchStr = session.gitBranch ? chalk.gray(` (${session.gitBranch})`) : '';
+    const absTime = formatAbsoluteTime(session.timestamp);
+
+    console.log(
+      agentColor(session.agent) +
+      (session.version ? chalk.yellow(` ${session.version}`) : '') +
+      modelStr +
+      (session.project ? chalk.cyan(`  ${session.project}`) + branchStr : branchStr) +
+      chalk.gray(`  ${absTime} (${formatRelativeTime(session.timestamp)})`) +
+      (session.account ? chalk.gray(` · ${session.account}`) : '')
+    );
+    const statsLine = renderSummaryHeader(stats);
+    if (statsLine) console.log(chalk.gray(statsLine));
+    console.log(chalk.gray('─'.repeat(60)));
+
+    process.stdout.write(renderSummary(events, session.cwd));
+  } else {
+    console.log(
+      agentColor(session.agent) +
+      (session.version ? chalk.yellow(` ${session.version}`) : '') +
+      (session.project ? chalk.cyan(` ${session.project}`) : '') +
+      chalk.gray(` ${formatRelativeTime(session.timestamp)}`) +
+      (session.account ? chalk.gray(` (${session.account})`) : '')
+    );
+    console.log(chalk.gray('─'.repeat(60)));
+
+    let output: string;
+    switch (mode) {
+      case 'transcript': output = renderTranscript(events); break;
+      case 'trace': output = renderMarkdown(renderTrace(events)); break;
+      case 'json': output = renderJson(events); break;
+      default: output = '';
+    }
+    process.stdout.write(output);
+  }
 }
 
 function highlightTerms(text: string, query: string): string {
@@ -964,6 +984,15 @@ function formatCompactMetric(value?: number): string {
   }
   const compact = value / 1_000_000;
   return compact >= 100 ? `${Math.round(compact)}m` : `${compact.toFixed(1).replace(/\.0$/, '')}m`;
+}
+
+function formatAbsoluteTime(isoTimestamp: string): string {
+  const d = new Date(isoTimestamp);
+  if (isNaN(d.getTime())) return isoTimestamp;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${months[d.getMonth()]} ${d.getDate()} ${hh}:${mm}`;
 }
 
 function formatRelativeTime(isoTimestamp: string): string {
