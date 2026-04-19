@@ -216,7 +216,8 @@ export async function handleSpawn(
     resolvedEffort,
     parentSessionId,
     workspaceDir,
-    version
+    version,
+    name
   );
 
   debug(`[spawn] Spawned ${agentType} agent ${agent.agentId} for task "${taskName}"`);
@@ -229,6 +230,7 @@ export async function handleSpawn(
     started_at: agent.startedAt.toISOString(),
     version: agent.version,
     remote_session_id: agent.remoteSessionId,
+    name: agent.name,
   };
 }
 
@@ -313,6 +315,7 @@ export async function handleStatus(
       duration: agent.duration(),
       version: agent.version,
       remote_session_id: agent.remoteSessionId,
+      name: agent.name,
       files_created: delta.new_files_created,
       files_modified: delta.new_files_modified,
       files_read: delta.new_files_read,

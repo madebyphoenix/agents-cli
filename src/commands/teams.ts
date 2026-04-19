@@ -95,11 +95,19 @@ function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
+// Pick the display handle for a teammate: their given name if they have one,
+// otherwise the 8-char UUID prefix.
+function handle(a: { name?: string | null; agent_id: string }): string {
+  return a.name || shortId(a.agent_id);
+}
+
 function printAgentDetail(a: AgentStatusDetail): void {
   const label = statusColor(a.status)(a.status.toUpperCase());
   const who = fullName(a.agent_type as AgentType, a.version);
+  const h = handle(a);
+  const secondary = a.name ? chalk.gray(`(${shortId(a.agent_id)})`) : '';
   console.log(
-    `  ${chalk.cyan(shortId(a.agent_id))} ${who.padEnd(18)} ${label}  ${chalk.gray(a.duration || '')}`
+    `  ${chalk.cyan(h.padEnd(10))} ${secondary.padEnd(11)} ${who.padEnd(18)} ${label}  ${chalk.gray(a.duration || '')}`
   );
   // If the agent's internal session id differs from ours (non-Claude), show
   // it as a hint for `agents sessions view <id>`.
@@ -156,11 +164,15 @@ export function registerTeamsCommands(program: Command): void {
       `
 Examples:
   agents teams create auth-feature
-  agents teams add    auth-feature claude "Add JWT auth to /login"
-  agents teams add    auth-feature codex@0.116.0 "Write tests for the new endpoint"
+  agents teams add    auth-feature claude "Add JWT auth" --name alice
+  agents teams add    auth-feature codex@0.116.0 "Write tests" --name bob
   agents teams status auth-feature
-  agents teams remove auth-feature a1b2c3d4
+  agents teams remove auth-feature alice
   agents teams disband auth-feature
+
+Short aliases:
+  teams c  = create    teams a  = add       teams s  = status
+  teams rm = remove    teams d  = disband   teams ls = list
 
 A team is a named group of agents collaborating on a shared task. Each teammate
 runs in the background; you can check in with 'status' (pass --since <cursor>
@@ -169,12 +181,15 @@ for efficient delta polling) and let them go with 'remove' or 'disband'.
 Teammates use the same syntax as the rest of agents-cli:
   'claude'              -> the default Claude version on this machine
   'claude@2.1.112'      -> a specific installed version (see 'agents view')
+
+Name them with --name alice  to refer to them as 'alice' instead of a UUID.
 `
     );
 
   // list
   teams
     .command('list')
+    .alias('ls')
     .description('List your teams, most recent activity first')
     .option('-n, --limit <n>', 'Max teams to show', '20')
     .option('--json', 'Output JSON')
@@ -213,6 +228,7 @@ Teammates use the same syntax as the rest of agents-cli:
   // create
   teams
     .command('create <team>')
+    .aliases(['c', 'new'])
     .description('Start a new team. No teammates yet — add them with `teams add`.')
     .option('-d, --description <text>', 'Short description of what this team is working on')
     .option('--json', 'Output JSON')
@@ -236,13 +252,15 @@ Teammates use the same syntax as the rest of agents-cli:
   // add
   teams
     .command('add <team> <teammate> <task>')
+    .alias('a')
     .description("Bring someone onto the team to work on a task. Returns immediately.")
+    .option('-n, --name <name>', 'Give this teammate a friendly name (e.g. alice). Unique within team.')
     .option('-m, --mode <mode>', `How much they can do: ${VALID_MODES.join('|')}`, 'edit')
     .option('-e, --effort <effort>', `Model tier: ${VALID_EFFORTS.join('|')}`, 'default')
     .option('--cwd <dir>', 'Where they should work (defaults to current directory)')
     .option('--json', 'Output JSON')
     .action(async (team: string, teammate: string, task: string, opts: {
-      mode: string; effort: string; cwd?: string; json?: boolean;
+      name?: string; mode: string; effort: string; cwd?: string; json?: boolean;
     }) => {
       if (!(VALID_MODES as readonly string[]).includes(opts.mode)) {
         die(`Invalid mode '${opts.mode}'. Use one of: ${VALID_MODES.join(', ')}`);
