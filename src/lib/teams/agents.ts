@@ -959,12 +959,8 @@ export class AgentProcess {
 
     let cmd = cmdTemplate.map(part => part.replace('{prompt}', fullPrompt));
 
-    // For Claude agents, load user's settings.json to inherit permissions
-    // and grant access to the working directory
     if (agentType === 'claude') {
-      const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-      cmd.push('--settings', settingsPath);
-
+      // Grant access to the working directory.
       if (cwd) {
         cmd.push('--add-dir', cwd);
       }
@@ -974,6 +970,12 @@ export class AgentProcess {
       if (sessionId) {
         cmd.push('--session-id', sessionId);
       }
+      // Note: we deliberately do NOT pass --settings here. The agents-cli
+      // shim exports CLAUDE_CONFIG_DIR scoped to the version being spawned,
+      // which makes Claude read settings.json, commands/, skills/, hooks/,
+      // and MCP config from that version's home. Passing a fixed
+      // ~/.claude/settings.json would override that and bind settings to the
+      // *default* version rather than the one this teammate is running.
     }
 
     // Add model flag for each agent type

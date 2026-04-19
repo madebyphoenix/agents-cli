@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import {
+  AgentManager,
   AgentProcess,
   AgentStatus,
   type AgentType,
@@ -145,6 +146,45 @@ describe('AgentProcess: remoteSessionId extraction', () => {
     await fs.writeFile(stdoutPath, '{"type":"turn.started"}\n');
     await agent.readNewEvents();
     expect(agent.remoteSessionId).toBeNull();
+  });
+
+  // Note: these tests reach into the buildCommand private method to assert the
+  // exact shape of the spawned command. This is load-bearing: a regression here
+  // means teammates stop inheriting agents-cli-synced config correctly.
+  describe('buildCommand', () => {
+    it('does NOT pass --settings for Claude (CLAUDE_CONFIG_DIR handles config)', () => {
+      const mgr = new AgentManager(50, 10, tmpBase);
+      // @ts-expect-error — exercising private method
+      const cmd: string[] = mgr.buildCommand('claude', 'hi', 'edit', 'some-model', null, 'session-uuid');
+      expect(cmd).not.toContain('--settings');
+    });
+
+    it('does pass --session-id for Claude when given (identity pinning)', () => {
+      const mgr = new AgentManager(50, 10, tmpBase);
+      // @ts-expect-error — private
+      const cmd: string[] = mgr.buildCommand('claude', 'hi', 'edit', 'some-model', null, 'the-uuid');
+      const idx = cmd.indexOf('--session-id');
+      expect(idx).toBeGreaterThan(-1);
+      expect(cmd[idx + 1]).toBe('the-uuid');
+    });
+
+    it('does pass --add-dir for Claude when cwd is given (directory access)', () => {
+      const mgr = new AgentManager(50, 10, tmpBase);
+      // @ts-expect-error — private
+      const cmd: string[] = mgr.buildCommand('claude', 'hi', 'edit', 'some-model', '/tmp/work', null);
+      const idx = cmd.indexOf('--add-dir');
+      expect(idx).toBeGreaterThan(-1);
+      expect(cmd[idx + 1]).toBe('/tmp/work');
+    });
+
+    it('non-Claude agents (Codex) get no --settings / --add-dir / --session-id', () => {
+      const mgr = new AgentManager(50, 10, tmpBase);
+      // @ts-expect-error — private
+      const cmd: string[] = mgr.buildCommand('codex', 'hi', 'edit', 'some-model', '/tmp', 'uuid');
+      expect(cmd).not.toContain('--settings');
+      expect(cmd).not.toContain('--add-dir');
+      expect(cmd).not.toContain('--session-id');
+    });
   });
 
   it('persists remote_session_id through saveMeta / loadFromDisk', async () => {

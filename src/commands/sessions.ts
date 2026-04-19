@@ -310,13 +310,12 @@ function printSessionTable(sessions: SessionMeta[]): void {
     const agentColor = colorAgent(session.agent);
     const when = formatRelativeTime(session.timestamp);
     const project = session.project || '-';
-    const topic = (session as any).label ?? session.topic ?? '';
 
     console.log(
       chalk.white(padRight(session.shortId, 10)) +
       agentColor(padRight(truncate(session.agent, 9), 10)) +
       chalk.cyan(padRight(truncate(project, 14), 16)) +
-      chalk.white(padRight(truncate(topic, 50), 52)) +
+      renderTopicCell((session as any).label, session.topic, '', 50, 52) +
       chalk.gray(when)
     );
   }
@@ -371,32 +370,57 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
   process.stdout.write(output);
 }
 
-function highlightTerms(text: string, query: string): string {
-  if (!query.trim()) return chalk.white(text);
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  for (const term of terms) {
-    const idx = text.toLowerCase().indexOf(term);
-    if (idx !== -1) {
-      const before = text.slice(0, idx);
-      const match = text.slice(idx, idx + term.length);
-      const after = text.slice(idx + term.length);
-      return chalk.white(before) + chalk.bold.white(match) + chalk.white(after);
+function renderTopicCell(
+  label: string | undefined | null,
+  topic: string | undefined | null,
+  query: string,
+  visibleWidth: number,
+  paddedWidth: number,
+): string {
+  const lbl = (label ?? '').trim();
+  const tpc = (topic ?? '').trim();
+  const sep = ' · ';
+  const raw = lbl && tpc ? `${lbl}${sep}${tpc}` : (lbl || tpc);
+  const visible = truncate(raw, visibleWidth);
+  const padding = ' '.repeat(Math.max(0, paddedWidth - visible.length));
+  const labelEnd = lbl ? Math.min(lbl.length, visible.length) : 0;
+
+  let matchStart = -1, matchEnd = -1;
+  const q = query.trim().toLowerCase();
+  if (q) {
+    const lower = visible.toLowerCase();
+    for (const term of q.split(/\s+/).filter(Boolean)) {
+      const idx = lower.indexOf(term);
+      if (idx !== -1) { matchStart = idx; matchEnd = idx + term.length; break; }
     }
   }
-  return chalk.white(text);
+
+  const cuts = new Set<number>([0, labelEnd, visible.length]);
+  if (matchStart >= 0) { cuts.add(matchStart); cuts.add(matchEnd); }
+  const boundaries = [...cuts].sort((a, b) => a - b);
+
+  let out = '';
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const s = boundaries[i], e = boundaries[i + 1];
+    if (s >= e) continue;
+    const text = visible.slice(s, e);
+    const isLabel = s < labelEnd;
+    const isMatch = matchStart >= 0 && s >= matchStart && e <= matchEnd;
+    out += (isMatch || isLabel) ? chalk.bold.white(text) : chalk.white(text);
+  }
+  return out + padding;
 }
 
 function formatPickerLabel(s: SessionMeta, query: string): string {
   const agentColor = colorAgent(s.agent);
   const when = formatRelativeTime(s.timestamp);
   const project = s.project || '-';
-  const displayText = padRight(truncate((s as any).label ?? s.topic ?? '', 50), 52);
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
     agentColor(padRight(truncate(s.agent, 9), 10)) +
     chalk.cyan(padRight(truncate(project, 14), 16)) +
-    highlightTerms(displayText, query) +
+    renderTopicCell((s as any).label, s.topic, query, 50, 52) +
     chalk.gray(when)
   );
 }

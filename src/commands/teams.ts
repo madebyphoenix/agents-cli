@@ -188,17 +188,15 @@ function printAgentDetail(a: AgentStatusDetail): void {
 }
 
 // Classify a team into a single bucket for --status filtering.
-//  - empty:   no teammates
+//  - empty:   no teammates (created but nobody added yet)
 //  - working: at least one teammate still running
-//  - mixed:   has at least one done AND at least one failed/stopped
-//  - failed:  at least one failed or stopped, none done
-//  - done:    all non-running teammates are completed
-function classifyTeamStatus(t: TaskInfo): 'empty' | 'working' | 'done' | 'failed' | 'mixed' {
+//  - failed:  at least one teammate failed or was stopped (any failure wins —
+//             even if others finished, you want to know about the failure)
+//  - done:    everyone finished successfully, no failures
+function classifyTeamStatus(t: TaskInfo): 'empty' | 'working' | 'done' | 'failed' {
   if (t.agent_count === 0) return 'empty';
   if (t.running > 0) return 'working';
-  const bad = t.failed + t.stopped;
-  if (t.completed > 0 && bad > 0) return 'mixed';
-  if (bad > 0) return 'failed';
+  if (t.failed + t.stopped > 0) return 'failed';
   return 'done';
 }
 
@@ -267,7 +265,7 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
     .alias('ls')
     .description('List your teams, most recent activity first')
     .option('-a, --agent <agent>', 'Only teams with a teammate of this agent, e.g. claude or claude@2.1.112')
-    .option('--status <status>', 'Only teams with this status: working|done|failed|mixed|empty')
+    .option('--status <status>', 'Only teams with this status: working|done|failed|empty')
     .option('--since <time>', 'Teams active newer than this (e.g. "2h", "7d", ISO date)')
     .option('--until <time>', 'Teams active older than this (e.g. "30d", ISO date)')
     .option('-n, --limit <n>', 'Max teams to show', '20')
@@ -314,7 +312,7 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
       // --- --status: classify each team, filter ---
       if (opts.status) {
         const want = opts.status.toLowerCase();
-        const validStatuses = ['working', 'done', 'failed', 'mixed', 'empty'];
+        const validStatuses = ['working', 'done', 'failed', 'empty'];
         if (!validStatuses.includes(want)) {
           die(`Invalid --status '${opts.status}'. Use one of: ${validStatuses.join(', ')}`);
         }
