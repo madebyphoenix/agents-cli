@@ -101,6 +101,65 @@ function handle(a: { name?: string | null; agent_id: string }): string {
   return a.name || shortId(a.agent_id);
 }
 
+type TeammateLookup =
+  | { kind: 'ok'; agentId: string }
+  | { kind: 'none' }
+  | { kind: 'ambiguous'; candidates: { team: string; agentId: string; display: string }[] };
+
+// Resolve a teammate reference (name / UUID / UUID prefix) by scanning every
+// meta.json under the agents dir. Team hint narrows the search.
+async function resolveTeammateAcrossTeams(
+  base: string,
+  ref: string,
+  teamHint?: string
+): Promise<TeammateLookup> {
+  let entries: string[] = [];
+  try {
+    entries = await fs.readdir(base);
+  } catch {
+    return { kind: 'none' };
+  }
+
+  // Cheap path: exact UUID or unique UUID prefix match by directory name.
+  const byDir = entries.filter((e) => e === ref || e.startsWith(ref));
+  if (byDir.length === 1 && byDir[0] === ref) {
+    return { kind: 'ok', agentId: ref };
+  }
+
+  // Otherwise scan meta.json files to match on name as well, and respect the
+  // team hint if given.
+  const candidates: { team: string; agentId: string; display: string; name: string | null }[] = [];
+  for (const dir of entries) {
+    try {
+      const meta = JSON.parse(
+        await fs.readFile(path.join(base, dir, 'meta.json'), 'utf-8')
+      );
+      if (teamHint && meta.task_name !== teamHint) continue;
+      const matchesName = meta.name && meta.name === ref;
+      const matchesPrefix = dir.startsWith(ref);
+      if (matchesName || matchesPrefix) {
+        candidates.push({
+          team: meta.task_name || '(none)',
+          agentId: dir,
+          display: meta.name || shortId(dir),
+          name: meta.name || null,
+        });
+      }
+    } catch {
+      /* skip entries without readable meta.json */
+    }
+  }
+
+  if (candidates.length === 0) return { kind: 'none' };
+  if (candidates.length === 1) return { kind: 'ok', agentId: candidates[0].agentId };
+
+  // If multiple match but one is an exact name hit, prefer it.
+  const exactName = candidates.filter((c) => c.name === ref);
+  if (exactName.length === 1) return { kind: 'ok', agentId: exactName[0].agentId };
+
+  return { kind: 'ambiguous', candidates };
+}
+
 function printAgentDetail(a: AgentStatusDetail): void {
   const label = statusColor(a.status)(a.status.toUpperCase());
   const who = fullName(a.agent_type as AgentType, a.version);
@@ -278,6 +337,12 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
         );
       }
 
+      if (opts.name !== undefined) {
+        if (!opts.name || !/^[A-Za-z0-9_-]+$/.test(opts.name)) {
+          die(`Invalid teammate name '${opts.name}'. Use letters, numbers, '-', or '_'.`);
+        }
+      }
+
       // Auto-create the team if it doesn't exist yet (friendlier UX than erroring).
       await ensureTeam(team);
 
@@ -294,7 +359,8 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
           opts.effort as Effort,
           null,
           cwd,
-          version
+          version,
+          opts.name ?? null
         );
 
         if (isJsonMode(opts)) {
@@ -302,7 +368,13 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
           return;
         }
         const who = fullName(agent, version);
-        console.log(chalk.green(`Welcomed ${who} to team ${chalk.cyan(team)}`));
+        const greeting = result.name
+          ? `Welcomed ${chalk.cyan(result.name)} (${who}) to team ${chalk.cyan(team)}`
+          : `Welcomed ${who} to team ${chalk.cyan(team)}`;
+        console.log(chalk.green(greeting));
+        if (result.name) {
+          console.log(`  ${chalk.gray('name    ')}  ${chalk.cyan(result.name)}`);
+        }
         console.log(`  ${chalk.gray('agent_id')}  ${chalk.cyan(shortId(result.agent_id))} ${chalk.gray(`(${result.agent_id})`)}`);
         console.log(`  ${chalk.gray('status  ')}  ${statusColor(result.status)(result.status)}`);
         console.log(`  ${chalk.gray('mode    ')}  ${opts.mode}`);
@@ -317,6 +389,7 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
   // status
   teams
     .command('status <team>')
+    .aliases(['s', 'st', 'check'])
     .description("See what a team has been up to. Pass --since <cursor> for efficient polling.")
     .option('-f, --filter <state>', 'working|completed|failed|stopped|all', 'all')
     .option('-s, --since <iso>', 'Cursor from a previous status call')
@@ -370,21 +443,26 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
 
   // remove
   teams
-    .command('remove <team> <agent-id>')
-    .description('Let a teammate go. Stops them cleanly if they are still working.')
+    .command('remove <team> <teammate>')
+    .alias('rm')
+    .description("Let a teammate go. Accepts a name ('alice') or UUID prefix. Stops them cleanly if they're still working.")
     .option('--keep-logs', 'Keep the log files on disk (default: delete)')
     .option('--json', 'Output JSON')
-    .action(async (team: string, idOrPrefix: string, opts: { keepLogs?: boolean; json?: boolean }) => {
+    .action(async (team: string, ref: string, opts: { keepLogs?: boolean; json?: boolean }) => {
       const mgr = new AgentManager();
-      const lookup = await mgr.resolveAgentIdInTask(team, idOrPrefix);
+      const lookup = await mgr.resolveAgentIdInTask(team, ref);
       if (lookup.kind === 'none') {
-        die(`No teammate matching '${idOrPrefix}' in team ${team}`, 2);
+        die(`No teammate matching '${ref}' in team ${team}`, 2);
       }
       if (lookup.kind === 'ambiguous') {
         const shorts = lookup.matches.map(shortId).join(', ');
-        die(`'${idOrPrefix}' matches multiple teammates: ${shorts}. Use more characters.`, 2);
+        die(`'${ref}' matches multiple teammates: ${shorts}. Use more characters or a name.`, 2);
       }
       const agentId = lookup.agentId;
+
+      // Look up the display handle (name if they had one) before we tear down.
+      const agent = await mgr.get(agentId);
+      const display = agent?.name || shortId(agentId);
 
       const stopRes = await handleStop(mgr, team, agentId);
       if ('error' in stopRes) die(stopRes.error);
@@ -399,21 +477,21 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
       }
 
       if (isJsonMode(opts)) {
-        console.log(JSON.stringify({ team, agent_id: agentId, result: stopRes }, null, 2));
+        console.log(JSON.stringify({ team, agent_id: agentId, name: agent?.name ?? null, result: stopRes }, null, 2));
         return;
       }
 
-      const short = shortId(agentId);
       if (stopRes.stopped.length) {
-        console.log(chalk.green(`${short} has left team ${chalk.cyan(team)} (was working, now stopped).`));
+        console.log(chalk.green(`${display} has left team ${chalk.cyan(team)} (was working, now stopped).`));
       } else {
-        console.log(chalk.green(`${short} has left team ${chalk.cyan(team)}.`));
+        console.log(chalk.green(`${display} has left team ${chalk.cyan(team)}.`));
       }
     });
 
   // disband
   teams
     .command('disband <team>')
+    .alias('d')
     .description('Wind down the team. Stops everyone and removes the team.')
     .option('--keep-logs', 'Keep teammate logs on disk (default: delete)')
     .option('--json', 'Output JSON')
@@ -450,25 +528,26 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
 
   // logs
   teams
-    .command('logs <agent-id>')
-    .description("Read a teammate's raw log (their notes from the work session)")
+    .command('logs <teammate>')
+    .alias('log')
+    .description("Read a teammate's raw log. Accepts a name ('alice'), UUID, or UUID prefix.")
     .option('-n, --tail <n>', 'Show only the last N lines')
-    .action(async (idOrPrefix: string, opts: { tail?: string }) => {
+    .option('--team <team>', 'Disambiguate when a name is used in multiple teams')
+    .action(async (ref: string, opts: { tail?: string; team?: string }) => {
       const base = await getAgentsDir();
-      // Prefix-match against directory names so short IDs work.
-      let resolved: string | null = null;
-      try {
-        const entries = await fs.readdir(base);
-        const matches = entries.filter((e) => e.startsWith(idOrPrefix));
-        if (matches.length === 1) resolved = matches[0];
-        else if (matches.length > 1) {
-          die(`'${idOrPrefix}' matches multiple teammates: ${matches.map(shortId).join(', ')}. Use more characters.`, 2);
-        }
-      } catch { /* fall through to 'not found' */ }
-
-      if (!resolved) die(`No notes on record for teammate ${idOrPrefix}`, 2);
-
-      const logPath = path.join(base, resolved, 'stdout.log');
+      const resolved = await resolveTeammateAcrossTeams(base, ref, opts.team);
+      if (resolved.kind === 'none') {
+        die(`No notes on record for teammate '${ref}'`, 2);
+      }
+      if (resolved.kind === 'ambiguous') {
+        const hints = resolved.candidates.map((c) => `${c.team}/${c.display}`).join(', ');
+        die(
+          `'${ref}' matches multiple teammates: ${hints}.\n` +
+            `  Narrow it with --team <team>, or pass a UUID prefix.`,
+          2
+        );
+      }
+      const logPath = path.join(base, resolved.agentId, 'stdout.log');
       try {
         const content = await fs.readFile(logPath, 'utf-8');
         if (!opts.tail) {
@@ -479,13 +558,14 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
         const lines = content.split('\n');
         process.stdout.write(lines.slice(-n).join('\n'));
       } catch {
-        die(`No notes on record for teammate ${idOrPrefix} (looked in ${logPath})`, 2);
+        die(`No notes on record for teammate '${ref}' (looked in ${logPath})`, 2);
       }
     });
 
   // doctor
   teams
     .command('doctor')
+    .alias('dr')
     .description('Check which agents are available to join a team')
     .option('--json', 'Output JSON')
     .action(async (opts: { json?: boolean }) => {

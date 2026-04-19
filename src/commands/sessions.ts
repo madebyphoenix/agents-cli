@@ -111,8 +111,43 @@ function createScanProgressTracker(
 const PICKER_RECENT_COUNT = 15;
 const PICKER_POOL_LIMIT = 200;
 
+/**
+ * Detect whether a positional argument looks like a filesystem path.
+ * Naked paths (., ./, ../, /, ~) filter sessions by project directory.
+ * Everything else is treated as a search query string.
+ */
+function isPathLike(query: string): boolean {
+  return query === '.' || query.startsWith('./') || query.startsWith('../')
+    || query.startsWith('/') || query.startsWith('~');
+}
+
+/**
+ * Resolve a path-like query to an absolute directory path.
+ */
+function resolvePathFilter(query: string): string {
+  const expanded = query.startsWith('~')
+    ? path.join(os.homedir(), query.slice(1))
+    : query;
+  return path.resolve(expanded);
+}
+
 async function sessionsAction(query: string | undefined, options: SessionsOptions): Promise<void> {
   const { agent, version } = parseAgentFilter(options.agent);
+
+  // Path-like queries filter by project directory instead of text search.
+  let pathFilter: string | undefined;
+  let searchQuery: string | undefined;
+  if (query && isPathLike(query)) {
+    const resolved = resolvePathFilter(query);
+    if (!fs.existsSync(resolved)) {
+      console.log(chalk.yellow(`Path not found: ${resolved}`));
+      console.log(chalk.gray('Did you mean to search? Use quotes: agents sessions "' + query + '"'));
+      return;
+    }
+    pathFilter = fs.realpathSync(resolved);
+  } else {
+    searchQuery = query;
+  }
 
   // Interactive picker loads a deep pool but shows only recent sessions
   // until the user starts typing. Non-interactive/JSON uses the explicit limit.
@@ -125,7 +160,7 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
   try {
     let sessions = await discoverSessions({
       agent,
-      all: options.all,
+      all: pathFilter ? true : options.all,
       cwd: process.cwd(),
       project: options.project,
       limit,
@@ -133,6 +168,12 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
       until: options.until,
       onProgress: tracker.onProgress,
     });
+
+    if (pathFilter) {
+      sessions = sessions.filter(s =>
+        typeof s.cwd === 'string' && isWithinProject(s.cwd, pathFilter!)
+      );
+    }
 
     tracker.stop();
     spinner?.stop();
@@ -142,8 +183,8 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     }
 
     // Smart routing: if query looks like a session ID, render directly
-    if (query) {
-      const idMatches = resolveSessionById(sessions, query);
+    if (searchQuery) {
+      const idMatches = resolveSessionById(sessions, searchQuery);
       if (idMatches.length === 1) {
         const mode = resolveViewMode(options);
         await renderSession(idMatches[0], mode);
@@ -152,7 +193,7 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     }
 
     if (options.json) {
-      const filtered = query ? filterSessionsByQuery(sessions, query) : sessions;
+      const filtered = searchQuery ? filterSessionsByQuery(sessions, searchQuery) : sessions;
       const serializable = filtered.map(s => {
         const { _matchedTerms, _bm25Score, ...rest } = s;
         return rest;
@@ -162,12 +203,19 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     }
 
     if (sessions.length === 0) {
-      console.log(chalk.gray(formatNoSessionsMessage(options.all, options.project)));
+      if (pathFilter) {
+        console.log(chalk.gray(`No sessions found for ${pathFilter}.`));
+      } else {
+        console.log(chalk.gray(formatNoSessionsMessage(options.all, options.project)));
+      }
       return;
     }
 
     if (isInteractiveTerminal()) {
-      const picked = await pickSessionInteractive(sessions, formatSearchMessage(options), query);
+      const message = pathFilter
+        ? `Search sessions (${path.basename(pathFilter)}):`
+        : formatSearchMessage(options);
+      const picked = await pickSessionInteractive(sessions, message, searchQuery);
       if (picked) {
         await handlePickedSession(picked);
         return;
@@ -176,7 +224,7 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     }
 
     // Non-interactive fallback (piped output)
-    const filtered = query ? filterSessionsByQuery(sessions, query) : sessions;
+    const filtered = searchQuery ? filterSessionsByQuery(sessions, searchQuery) : sessions;
     printSessionTable(filtered);
   } catch (err: any) {
     tracker.stop();
@@ -189,6 +237,20 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
 async function listAction(query: string | undefined, options: ListOptions): Promise<void> {
   const { agent, version } = parseAgentFilter(options.agent);
 
+  let pathFilter: string | undefined;
+  let searchQuery: string | undefined;
+  if (query && isPathLike(query)) {
+    const resolved = resolvePathFilter(query);
+    if (!fs.existsSync(resolved)) {
+      console.log(chalk.yellow(`Path not found: ${resolved}`));
+      console.log(chalk.gray('Did you mean to search? Use quotes: agents sessions list "' + query + '"'));
+      return;
+    }
+    pathFilter = fs.realpathSync(resolved);
+  } else {
+    searchQuery = query;
+  }
+
   const limit = parseInt(options.limit || '20', 10);
   const spinner = options.json ? null : ora().start();
   const tracker = createScanProgressTracker(LOAD_VERBS, 'sessions', spinner);
@@ -196,7 +258,7 @@ async function listAction(query: string | undefined, options: ListOptions): Prom
   try {
     let sessions = await discoverSessions({
       agent,
-      all: options.all,
+      all: pathFilter ? true : options.all,
       cwd: process.cwd(),
       project: options.project,
       limit,
@@ -208,11 +270,17 @@ async function listAction(query: string | undefined, options: ListOptions): Prom
     tracker.stop();
     spinner?.stop();
 
+    if (pathFilter) {
+      sessions = sessions.filter(s =>
+        typeof s.cwd === 'string' && isWithinProject(s.cwd, pathFilter!)
+      );
+    }
+
     if (version) {
       sessions = sessions.filter(s => s.version === version);
     }
 
-    const filtered = query ? filterSessionsByQuery(sessions, query) : sessions;
+    const filtered = searchQuery ? filterSessionsByQuery(sessions, searchQuery) : sessions;
 
     if (options.json) {
       const serializable = filtered.map(s => {
@@ -623,7 +691,7 @@ async function viewAction(idQuery: string, options: ViewOptions): Promise<void> 
 export function registerSessionsCommands(program: Command): void {
   const sessionsCmd = program
     .command('sessions')
-    .argument('[query]', 'Session ID (renders directly) or search query (opens picker)')
+    .argument('[query]', 'Session ID, search query, or path (., ../, /path) to filter by project')
     .description('Browse, search, and resume agent sessions')
     .option('-a, --agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
@@ -640,7 +708,7 @@ export function registerSessionsCommands(program: Command): void {
 
   sessionsCmd
     .command('list')
-    .argument('[query]', 'Search query to filter sessions')
+    .argument('[query]', 'Search query or path (., ../, /path) to filter by project')
     .description('List sessions (non-interactive, for scripts and AI agents)')
     .option('-a, --agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
