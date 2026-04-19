@@ -285,7 +285,7 @@ Teammates use the same syntax as the rest of agents-cli:
         }
         const who = fullName(agent, version);
         console.log(chalk.green(`Welcomed ${who} to team ${chalk.cyan(team)}`));
-        console.log(`  ${chalk.gray('agent_id')}  ${chalk.cyan(result.agent_id)}`);
+        console.log(`  ${chalk.gray('agent_id')}  ${chalk.cyan(shortId(result.agent_id))} ${chalk.gray(`(${result.agent_id})`)}`);
         console.log(`  ${chalk.gray('status  ')}  ${statusColor(result.status)(result.status)}`);
         console.log(`  ${chalk.gray('mode    ')}  ${opts.mode}`);
         console.log(`  ${chalk.gray('working ')}  ${cwd}`);
@@ -313,7 +313,7 @@ Teammates use the same syntax as the rest of agents-cli:
       try {
         const result = await handleStatus(mgr, team, filter, opts.since);
         const agents = opts.agentId
-          ? result.agents.filter((a) => a.agent_id === opts.agentId)
+          ? result.agents.filter((a) => a.agent_id.startsWith(opts.agentId!))
           : result.agents;
 
         if (isJsonMode(opts)) {
@@ -356,8 +356,18 @@ Teammates use the same syntax as the rest of agents-cli:
     .description('Let a teammate go. Stops them cleanly if they are still working.')
     .option('--keep-logs', 'Keep the log files on disk (default: delete)')
     .option('--json', 'Output JSON')
-    .action(async (team: string, agentId: string, opts: { keepLogs?: boolean; json?: boolean }) => {
+    .action(async (team: string, idOrPrefix: string, opts: { keepLogs?: boolean; json?: boolean }) => {
       const mgr = new AgentManager();
+      const lookup = await mgr.resolveAgentIdInTask(team, idOrPrefix);
+      if (lookup.kind === 'none') {
+        die(`No teammate matching '${idOrPrefix}' in team ${team}`, 2);
+      }
+      if (lookup.kind === 'ambiguous') {
+        const shorts = lookup.matches.map(shortId).join(', ');
+        die(`'${idOrPrefix}' matches multiple teammates: ${shorts}. Use more characters.`, 2);
+      }
+      const agentId = lookup.agentId;
+
       const stopRes = await handleStop(mgr, team, agentId);
       if ('error' in stopRes) die(stopRes.error);
 
@@ -375,13 +385,11 @@ Teammates use the same syntax as the rest of agents-cli:
         return;
       }
 
-      if (stopRes.not_found.length) {
-        die(`No teammate ${agentId} in team ${team}`, 2);
-      }
+      const short = shortId(agentId);
       if (stopRes.stopped.length) {
-        console.log(chalk.green(`${agentId} has left team ${chalk.cyan(team)} (was working, now stopped).`));
+        console.log(chalk.green(`${short} has left team ${chalk.cyan(team)} (was working, now stopped).`));
       } else {
-        console.log(chalk.green(`${agentId} has left team ${chalk.cyan(team)}.`));
+        console.log(chalk.green(`${short} has left team ${chalk.cyan(team)}.`));
       }
     });
 
@@ -427,9 +435,22 @@ Teammates use the same syntax as the rest of agents-cli:
     .command('logs <agent-id>')
     .description("Read a teammate's raw log (their notes from the work session)")
     .option('-n, --tail <n>', 'Show only the last N lines')
-    .action(async (agentId: string, opts: { tail?: string }) => {
+    .action(async (idOrPrefix: string, opts: { tail?: string }) => {
       const base = await getAgentsDir();
-      const logPath = path.join(base, agentId, 'stdout.log');
+      // Prefix-match against directory names so short IDs work.
+      let resolved: string | null = null;
+      try {
+        const entries = await fs.readdir(base);
+        const matches = entries.filter((e) => e.startsWith(idOrPrefix));
+        if (matches.length === 1) resolved = matches[0];
+        else if (matches.length > 1) {
+          die(`'${idOrPrefix}' matches multiple teammates: ${matches.map(shortId).join(', ')}. Use more characters.`, 2);
+        }
+      } catch { /* fall through to 'not found' */ }
+
+      if (!resolved) die(`No notes on record for teammate ${idOrPrefix}`, 2);
+
+      const logPath = path.join(base, resolved, 'stdout.log');
       try {
         const content = await fs.readFile(logPath, 'utf-8');
         if (!opts.tail) {
@@ -440,7 +461,7 @@ Teammates use the same syntax as the rest of agents-cli:
         const lines = content.split('\n');
         process.stdout.write(lines.slice(-n).join('\n'));
       } catch {
-        die(`No notes on record for teammate ${agentId} (looked in ${logPath})`, 2);
+        die(`No notes on record for teammate ${idOrPrefix} (looked in ${logPath})`, 2);
       }
     });
 
