@@ -8,7 +8,7 @@ import * as TOML from 'smol-toml';
 import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
 import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir, getProjectAgentsDir } from './state.js';
-import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig, resolveAgentName, formatAgentError } from './agents.js';
+import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig, resolveAgentName, formatAgentError, CODEX_HOOKS_MIN_VERSION } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME } from './permissions.js';
 import { installMcpServers } from './mcp.js';
 import { markdownToToml } from './convert.js';
@@ -1409,34 +1409,39 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
 
   // Sync hooks (if agent supports them)
   if (agentConfig.supportsHooks) {
-    const hooksToSync = selection
-      ? resolveSelection(selection.hooks, available.hooks)
-      : available.hooks;
+    // Version gate: Codex hooks require >= CODEX_HOOKS_MIN_VERSION
+    if (agent === 'codex' && compareVersions(version, CODEX_HOOKS_MIN_VERSION) < 0) {
+      console.warn(`hooks skipped: codex@${version} < ${CODEX_HOOKS_MIN_VERSION}`);
+    } else {
+      const hooksToSync = selection
+        ? resolveSelection(selection.hooks, available.hooks)
+        : available.hooks;
 
-    if (hooksToSync.length > 0) {
-      const centralHooks = getHooksDir();
-      const projectHooksDir = projectAgentsDir ? path.join(projectAgentsDir, 'hooks') : null;
-      const hooksTarget = path.join(agentDir, 'hooks');
-      fs.mkdirSync(hooksTarget, { recursive: true });
+      if (hooksToSync.length > 0) {
+        const centralHooks = getHooksDir();
+        const projectHooksDir = projectAgentsDir ? path.join(projectAgentsDir, 'hooks') : null;
+        const hooksTarget = path.join(agentDir, 'hooks');
+        fs.mkdirSync(hooksTarget, { recursive: true });
 
-      const syncedHooks: string[] = [];
-      for (const hook of hooksToSync) {
-        const projectSource = projectHooksDir ? path.join(projectHooksDir, hook) : null;
-        const srcFile = projectSource && fs.existsSync(projectSource) ? projectSource : path.join(centralHooks, hook);
-        if (!fs.existsSync(srcFile)) continue;
+        const syncedHooks: string[] = [];
+        for (const hook of hooksToSync) {
+          const projectSource = projectHooksDir ? path.join(projectHooksDir, hook) : null;
+          const srcFile = projectSource && fs.existsSync(projectSource) ? projectSource : path.join(centralHooks, hook);
+          if (!fs.existsSync(srcFile)) continue;
 
-        const destFile = path.join(hooksTarget, hook);
-        fs.copyFileSync(srcFile, destFile);
-        fs.chmodSync(destFile, 0o755);
-        syncedHooks.push(hook);
-      }
-      result.hooks = syncedHooks.length > 0;
-      if (syncedHooks.length > 0) {
-        recordVersionResources(agent, version, 'hooks', syncedHooks);
-      }
+          const destFile = path.join(hooksTarget, hook);
+          fs.copyFileSync(srcFile, destFile);
+          fs.chmodSync(destFile, 0o755);
+          syncedHooks.push(hook);
+        }
+        result.hooks = syncedHooks.length > 0;
+        if (syncedHooks.length > 0) {
+          recordVersionResources(agent, version, 'hooks', syncedHooks);
+        }
 
-      if (agent === 'claude') {
-        registerHooksToSettings(agent, versionHome);
+        if (agent === 'claude' || agent === 'codex') {
+          registerHooksToSettings(agent, versionHome);
+        }
       }
     }
   }
