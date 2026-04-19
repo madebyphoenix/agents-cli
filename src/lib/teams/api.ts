@@ -37,6 +37,7 @@ export interface SpawnResult {
   version?: string | null;
   remote_session_id?: string | null;
   name?: string | null;
+  after?: string[];
 }
 
 export interface AgentStatusDetail {
@@ -60,12 +61,13 @@ export interface AgentStatusDetail {
   version?: string | null;
   remote_session_id?: string | null;
   name?: string | null;
+  after?: string[];
 }
 
 export interface TaskStatusResult {
   task_name: string;
   agents: AgentStatusDetail[];
-  summary: { running: number; completed: number; failed: number; stopped: number };
+  summary: { pending: number; running: number; completed: number; failed: number; stopped: number };
   cursor: string;  // ISO timestamp - max across all agents
 }
 
@@ -79,6 +81,7 @@ export interface StopResult {
 export interface TaskInfo {
   task_name: string;
   agent_count: number;
+  pending: number;
   running: number;
   completed: number;
   failed: number;
@@ -103,7 +106,8 @@ export async function handleSpawn(
   parentSessionId: string | null = null,
   workspaceDir: string | null = null,
   version: string | null = null,
-  name: string | null = null
+  name: string | null = null,
+  after: string[] = []
 ): Promise<SpawnResult> {
   const defaultMode = manager.getDefaultMode();
   const resolvedMode = resolveMode(mode, defaultMode);
@@ -153,7 +157,8 @@ export async function handleSpawn(
       parentSessionId,
       workspaceDir,
       version,
-      name
+      name,
+      after
     );
 
     debug(`[ralph] Spawned ${agentType} agent ${agent.agentId} for autonomous execution`);
@@ -167,6 +172,7 @@ export async function handleSpawn(
       version: agent.version,
       remote_session_id: agent.remoteSessionId,
       name: agent.name,
+      after: agent.after,
     };
   }
 
@@ -217,7 +223,8 @@ export async function handleSpawn(
     parentSessionId,
     workspaceDir,
     version,
-    name
+    name,
+    after
   );
 
   debug(`[spawn] Spawned ${agentType} agent ${agent.agentId} for task "${taskName}"`);
@@ -231,6 +238,7 @@ export async function handleSpawn(
     version: agent.version,
     remote_session_id: agent.remoteSessionId,
     name: agent.name,
+    after: agent.after,
   };
 }
 
@@ -266,11 +274,12 @@ export async function handleStatus(
     : allAgents.filter((a) => a.status === effectiveFilter);
 
   const agentStatuses: AgentStatusDetail[] = [];
-  const counts = { running: 0, completed: 0, failed: 0, stopped: 0 };
+  const counts = { pending: 0, running: 0, completed: 0, failed: 0, stopped: 0 };
 
   // Count ALL agents for summary (not just filtered)
   for (const agent of allAgents) {
-    if (agent.status === AgentStatus.RUNNING) counts.running++;
+    if (agent.status === AgentStatus.PENDING) counts.pending++;
+    else if (agent.status === AgentStatus.RUNNING) counts.running++;
     else if (agent.status === AgentStatus.COMPLETED) counts.completed++;
     else if (agent.status === AgentStatus.FAILED) counts.failed++;
     else if (agent.status === AgentStatus.STOPPED) counts.stopped++;
@@ -316,6 +325,7 @@ export async function handleStatus(
       version: agent.version,
       remote_session_id: agent.remoteSessionId,
       name: agent.name,
+      after: agent.after,
       files_created: delta.new_files_created,
       files_modified: delta.new_files_modified,
       files_read: delta.new_files_read,
@@ -366,14 +376,15 @@ export async function handleTasks(
   const tasks: TaskInfo[] = [];
 
   for (const [taskName, agents] of taskMap) {
-    let running = 0, completed = 0, failed = 0, stopped = 0;
+    let pending = 0, running = 0, completed = 0, failed = 0, stopped = 0;
     let earliestStart: Date | null = null;
     let latestActivity: Date | null = null;
     let workspaceDir: string | null = null;
 
     for (const agent of agents) {
       // Count by status
-      if (agent.status === AgentStatus.RUNNING) running++;
+      if (agent.status === AgentStatus.PENDING) pending++;
+      else if (agent.status === AgentStatus.RUNNING) running++;
       else if (agent.status === AgentStatus.COMPLETED) completed++;
       else if (agent.status === AgentStatus.FAILED) failed++;
       else if (agent.status === AgentStatus.STOPPED) stopped++;
@@ -401,6 +412,7 @@ export async function handleTasks(
     tasks.push({
       task_name: taskName,
       agent_count: agents.length,
+      pending,
       running,
       completed,
       failed,

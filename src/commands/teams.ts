@@ -54,6 +54,7 @@ function die(msg: string, code = 1): never {
 
 function statusColor(status: string): (s: string) => string {
   switch (status) {
+    case 'pending': return chalk.blue;
     case 'running': return chalk.yellow;
     case 'completed': return chalk.green;
     case 'failed': return chalk.red;
@@ -169,6 +170,9 @@ function printAgentDetail(a: AgentStatusDetail): void {
   console.log(
     `  ${chalk.cyan(h.padEnd(10))} ${secondary.padEnd(11)} ${who.padEnd(18)} ${label}  ${chalk.gray(a.duration || '')}`
   );
+  if (a.after && a.after.length) {
+    console.log(`    ${chalk.gray('after   ')} ${a.after.join(', ')}`);
+  }
   // If the agent's internal session id differs from ours (non-Claude), show
   // it as a hint for `agents sessions view <id>`.
   if (a.remote_session_id && a.remote_session_id !== a.agent_id) {
@@ -189,14 +193,19 @@ function printAgentDetail(a: AgentStatusDetail): void {
 
 // Classify a team into a single bucket for --status filtering.
 //  - empty:   no teammates (created but nobody added yet)
+//  - waiting: only staged teammates — call `teams start` to kick them off
 //  - working: at least one teammate still running
 //  - failed:  at least one teammate failed or was stopped (any failure wins —
 //             even if others finished, you want to know about the failure)
 //  - done:    everyone finished successfully, no failures
-function classifyTeamStatus(t: TaskInfo): 'empty' | 'working' | 'done' | 'failed' {
+function classifyTeamStatus(t: TaskInfo): 'empty' | 'waiting' | 'working' | 'done' | 'failed' {
   if (t.agent_count === 0) return 'empty';
   if (t.running > 0) return 'working';
   if (t.failed + t.stopped > 0) return 'failed';
+  // At this point nobody is running/failed/stopped. If there's any pending
+  // teammate (agent_count > running+completed+failed+stopped), it's "waiting".
+  const accounted = t.running + t.completed + t.failed + t.stopped;
+  if (accounted < t.agent_count) return 'waiting';
   return 'done';
 }
 
@@ -213,6 +222,7 @@ function mergeTeams(
       byName.set(name, {
         task_name: name,
         agent_count: 0,
+        pending: 0,
         running: 0,
         completed: 0,
         failed: 0,
@@ -352,6 +362,7 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
       console.log(chalk.bold(`${'TEAM'.padEnd(nameWidth)}  MEMBERS  STATUS                         UPDATED`));
       for (const t of merged) {
         const parts: string[] = [];
+        if (t.pending) parts.push(chalk.blue(`${t.pending} pending`));
         if (t.running) parts.push(chalk.yellow(`${t.running} working`));
         if (t.completed) parts.push(chalk.green(`${t.completed} done`));
         if (t.failed) parts.push(chalk.red(`${t.failed} failed`));
@@ -396,9 +407,10 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
     .option('-m, --mode <mode>', `How much they can do: ${VALID_MODES.join('|')}`, 'edit')
     .option('-e, --effort <effort>', `Model tier: ${VALID_EFFORTS.join('|')}`, 'default')
     .option('--cwd <dir>', 'Where they should work (defaults to current directory)')
+    .option('--after <names>', "Wait for these teammates to finish first (comma-separated names). Stages as PENDING; kick off with 'teams start'.")
     .option('--json', 'Output JSON')
     .action(async (team: string, teammate: string, task: string, opts: {
-      name?: string; mode: string; effort: string; cwd?: string; json?: boolean;
+      name?: string; mode: string; effort: string; cwd?: string; after?: string; json?: boolean;
     }) => {
       if (!(VALID_MODES as readonly string[]).includes(opts.mode)) {
         die(`Invalid mode '${opts.mode}'. Use one of: ${VALID_MODES.join(', ')}`);
@@ -422,6 +434,13 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
         }
       }
 
+      const after = opts.after
+        ? opts.after.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+      if (after.length > 0 && !opts.name) {
+        die("--after requires --name (dependencies reference teammates by name).");
+      }
+
       // Auto-create the team if it doesn't exist yet (friendlier UX than erroring).
       await ensureTeam(team);
 
@@ -439,7 +458,8 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
           null,
           cwd,
           version,
-          opts.name ?? null
+          opts.name ?? null,
+          after
         );
 
         if (isJsonMode(opts)) {
@@ -447,9 +467,11 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
           return;
         }
         const who = fullName(agent, version);
+        const staged = result.status === 'pending';
+        const verb = staged ? 'Staged' : 'Welcomed';
         const greeting = result.name
-          ? `Welcomed ${chalk.cyan(result.name)} (${who}) to team ${chalk.cyan(team)}`
-          : `Welcomed ${who} to team ${chalk.cyan(team)}`;
+          ? `${verb} ${chalk.cyan(result.name)} (${who}) ${staged ? 'in' : 'to'} team ${chalk.cyan(team)}`
+          : `${verb} ${who} ${staged ? 'in' : 'to'} team ${chalk.cyan(team)}`;
         console.log(chalk.green(greeting));
         if (result.name) {
           console.log(`  ${chalk.gray('name    ')}  ${chalk.cyan(result.name)}`);
@@ -458,8 +480,15 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
         console.log(`  ${chalk.gray('status  ')}  ${statusColor(result.status)(result.status)}`);
         console.log(`  ${chalk.gray('mode    ')}  ${opts.mode}`);
         console.log(`  ${chalk.gray('working ')}  ${cwd}`);
+        if (result.after && result.after.length) {
+          console.log(`  ${chalk.gray('after   ')}  ${result.after.join(', ')}`);
+        }
         console.log();
-        console.log(chalk.gray(`Check in later:  agents teams status ${team}`));
+        if (staged) {
+          console.log(chalk.gray(`Start the ready teammates:  agents teams start ${team}`));
+        } else {
+          console.log(chalk.gray(`Check in later:  agents teams status ${team}`));
+        }
       } catch (err) {
         die(`Could not add ${fullName(agent, version)} to ${team}: ${(err as Error).message}`);
       }
@@ -501,7 +530,9 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
         console.log(
           chalk.bold(`Team ${chalk.cyan(team)}  `) +
             chalk.gray(
-              `(${summary.running} working, ${summary.completed} done, ${summary.failed} failed, ${summary.stopped} stopped)`
+              (summary.pending > 0
+                ? `(${summary.pending} pending, ${summary.running} working, ${summary.completed} done, ${summary.failed} failed, ${summary.stopped} stopped)`
+                : `(${summary.running} working, ${summary.completed} done, ${summary.failed} failed, ${summary.stopped} stopped)`)
             )
         );
 
@@ -517,6 +548,65 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
         console.log(chalk.gray(`cursor: ${result.cursor}`));
       } catch (err) {
         die(`Could not check on team ${team}: ${(err as Error).message}`);
+      }
+    });
+
+  // start — fire any staged teammates whose --after deps have all completed
+  teams
+    .command('start <team>')
+    .description('Launch any pending teammates whose --after dependencies are now satisfied. Re-run to advance the DAG.')
+    .option('--json', 'Output JSON')
+    .action(async (team: string, opts: { json?: boolean }) => {
+      const mgr = new AgentManager();
+      const launched = await mgr.startReady(team);
+      // Also compute which teammates are still pending + why, so the user
+      // knows what's being waited on.
+      const all = await mgr.listByTask(team);
+      const stillPending = all.filter((a) => a.status === 'pending');
+
+      if (isJsonMode(opts)) {
+        console.log(
+          JSON.stringify(
+            {
+              team,
+              launched: launched.map((a) => ({
+                agent_id: a.agentId,
+                name: a.name,
+                after: a.after,
+              })),
+              still_pending: stillPending.map((a) => ({
+                agent_id: a.agentId,
+                name: a.name,
+                after: a.after,
+              })),
+            },
+            null,
+            2
+          )
+        );
+        return;
+      }
+
+      if (launched.length === 0 && stillPending.length === 0) {
+        console.log(chalk.gray(`No pending teammates in team ${team}.`));
+        return;
+      }
+
+      if (launched.length > 0) {
+        console.log(chalk.green(`Launched ${launched.length} teammate(s) in team ${chalk.cyan(team)}:`));
+        for (const a of launched) {
+          const who = fullName(a.agentType as AgentType, a.version);
+          const h = a.name || shortId(a.agentId);
+          console.log(`  ${chalk.cyan(h)}  ${who}`);
+        }
+      }
+      if (stillPending.length > 0) {
+        console.log();
+        console.log(chalk.gray(`Still pending (${stillPending.length}):`));
+        for (const a of stillPending) {
+          const h = a.name || shortId(a.agentId);
+          console.log(`  ${chalk.blue(h)}  ${chalk.gray('after')} ${a.after.join(', ')}`);
+        }
       }
     });
 

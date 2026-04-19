@@ -54,6 +54,28 @@ export enum AgentStatus {
   STOPPED = 'stopped',
 }
 
+/**
+ * Walk the `after` chain from `startName` within the given map; returns true
+ * if `targetName` appears anywhere in the transitive dependency closure.
+ * Used to detect cycles before adding a new --after edge.
+ */
+function hasTransitiveDep(
+  byName: Map<string, { after: string[] }>,
+  startName: string,
+  targetName: string,
+  seen: Set<string> = new Set()
+): boolean {
+  if (seen.has(startName)) return false;
+  seen.add(startName);
+  const node = byName.get(startName);
+  if (!node) return false;
+  for (const dep of node.after) {
+    if (dep === targetName) return true;
+    if (hasTransitiveDep(byName, dep, targetName, seen)) return true;
+  }
+  return false;
+}
+
 export type { AgentType } from './parsers.js';
 
 // Base commands for plan mode (read-only, may prompt for confirmation)
@@ -835,33 +857,47 @@ export class AgentProcess {
     parentSessionId: string | null = null,
     workspaceDir: string | null = null,
     version: string | null = null,
-    name: string | null = null
+    name: string | null = null,
+    after: string[] = []
   ): Promise<AgentProcess> {
-    // Enforce: teammate names are unique within a team.
-    if (name) {
-      const siblings = await this.listByTask(taskName);
-      if (siblings.some((a) => a.name === name)) {
-        throw new Error(
-          `Team '${taskName}' already has a teammate named '${name}'. Pick another name or leave --name off.`
-        );
-      }
-    }
     await this.initialize();
     const resolvedMode = resolveMode(mode, this.defaultMode);
 
-    // Resolve model from effort level
-    const resolvedModel: string = this.effortModelMap[effort][agentType];
-
-    const running = await this.listRunning();
-    if (running.length >= this.maxConcurrent) {
+    // Enforce: teammate names are unique within a team.
+    const siblings = await this.listByTask(taskName);
+    if (name && siblings.some((a) => a.name === name)) {
       throw new Error(
-        `Maximum concurrent agents (${this.maxConcurrent}) reached. Wait for an agent to complete or stop one first.`
+        `Team '${taskName}' already has a teammate named '${name}'. Pick another name or leave --name off.`
       );
     }
 
-    const [available, pathOrError] = checkCliAvailable(agentType);
-    if (!available) {
-      throw new Error(pathOrError || 'CLI tool not available');
+    // --- dependency validation ---
+    const cleanAfter = after.filter((s) => s && s.trim());
+    if (cleanAfter.length > 0) {
+      if (!name) {
+        throw new Error(
+          "Can't use --after without --name. Dependencies reference teammates by name."
+        );
+      }
+      // Every --after entry must resolve to an existing teammate name.
+      const siblingNames = new Set(siblings.map((a) => a.name).filter(Boolean) as string[]);
+      const missing = cleanAfter.filter((dep) => !siblingNames.has(dep));
+      if (missing.length > 0) {
+        throw new Error(
+          `Team '${taskName}' has no teammate named ${missing.map((m) => `'${m}'`).join(', ')} yet.\n` +
+            `  Add them first, then add this one.`
+        );
+      }
+      // Cycle check: walk the transitive deps of each --after entry; if the
+      // new teammate's own name shows up, we'd create a cycle.
+      const byName = new Map(siblings.filter((a) => a.name).map((a) => [a.name as string, a]));
+      for (const dep of cleanAfter) {
+        if (hasTransitiveDep(byName, dep, name)) {
+          throw new Error(
+            `Adding '${name}' after '${dep}' would create a cycle (${dep} already depends on ${name}).`
+          );
+        }
+      }
     }
 
     // Resolve and validate cwd
@@ -877,17 +913,15 @@ export class AgentProcess {
       }
     }
 
-    // Use a full UUIDv4 as the canonical agent_id so that for agents that
-    // accept a pre-set session id (Claude), our id IS their session id — the
-    // session file lands at ~/.claude/projects/.../<uuid>.jsonl and
-    // `agents sessions view <uuid>` works. For other agents, we still use our
-    // uuid as the teams-side id; their internal session id is captured
-    // separately as `remote_session_id` once their first event arrives.
-    const agentId = randomUUID();
-    const cmd = this.buildCommand(agentType, prompt, resolvedMode, resolvedModel, resolvedCwd, agentId);
-    if (version && cmd.length > 0) {
-      cmd[0] = `${cmd[0]}@${version}`;
+    const [available, pathOrError] = checkCliAvailable(agentType);
+    if (!available) {
+      throw new Error(pathOrError || 'CLI tool not available');
     }
+
+    // Use a full UUIDv4 as the canonical agent_id. For Claude, we pass it via
+    // --session-id so it's also Claude's session id (unified identity).
+    const agentId = randomUUID();
+    const isStaged = cleanAfter.length > 0;
 
     const agent = new AgentProcess(
       agentId,
@@ -897,7 +931,7 @@ export class AgentProcess {
       resolvedCwd,
       resolvedMode,
       null,
-      AgentStatus.RUNNING,
+      isStaged ? AgentStatus.PENDING : AgentStatus.RUNNING,
       new Date(),
       null,
       this.agentsDir,
@@ -908,18 +942,57 @@ export class AgentProcess {
       null,
       version,
       null,
-      name
+      name,
+      cleanAfter,
+      effort
     );
 
     const agentDir = await agent.getAgentDir();
     try {
       await fs.mkdir(agentDir, { recursive: true });
     } catch (err: any) {
-      this.agents.delete(agent.agentId);
       throw new Error(`Failed to create agent directory: ${err.message}`);
     }
+    await agent.saveMeta();
+    this.agents.set(agentId, agent);
 
-    debug(`Spawning ${agentType} agent ${agentId} [${resolvedMode}]: ${cmd.slice(0, 3).join(' ')}...`);
+    if (!isStaged) {
+      await this.launchProcess(agent);
+    } else {
+      debug(`Staged ${agentType} teammate '${name}' in team '${taskName}' (after: ${cleanAfter.join(', ')})`);
+    }
+
+    await this.cleanupOldAgents();
+    return agent;
+  }
+
+  /**
+   * Actually spawn the OS process for a teammate. Extracted from spawn() so
+   * staged teammates can be launched later by startReady().
+   */
+  private async launchProcess(agent: AgentProcess): Promise<void> {
+    const running = await this.listRunning();
+    if (running.length >= this.maxConcurrent) {
+      throw new Error(
+        `Maximum concurrent agents (${this.maxConcurrent}) reached. Wait for an agent to complete or stop one first.`
+      );
+    }
+
+    const effort = agent.effort ?? 'default';
+    const resolvedModel: string = this.effortModelMap[effort][agent.agentType];
+    const cmd = this.buildCommand(
+      agent.agentType,
+      agent.prompt,
+      agent.mode,
+      resolvedModel,
+      agent.cwd,
+      agent.agentId
+    );
+    if (agent.version && cmd.length > 0) {
+      cmd[0] = `${cmd[0]}@${agent.version}`;
+    }
+
+    debug(`Launching ${agent.agentType} agent ${agent.agentId} [${agent.mode}]: ${cmd.slice(0, 3).join(' ')}...`);
 
     try {
       const stdoutPath = await agent.getStdoutPath();
@@ -928,7 +1001,7 @@ export class AgentProcess {
 
       const childProcess = spawn(cmd[0], cmd.slice(1), {
         stdio: ['ignore', stdoutFd, stdoutFd],
-        cwd: resolvedCwd || undefined,
+        cwd: agent.cwd || undefined,
         detached: true,
       });
 
@@ -936,19 +1009,47 @@ export class AgentProcess {
       stdoutFile.close().catch(() => {});
 
       agent.pid = childProcess.pid || null;
-
+      agent.status = AgentStatus.RUNNING;
+      agent.startedAt = new Date();
       await agent.saveMeta();
     } catch (err: any) {
       await this.cleanupPartialAgent(agent);
-      console.error(`Failed to spawn agent ${agentId}:`, err);
+      console.error(`Failed to spawn agent ${agent.agentId}:`, err);
       throw new Error(`Failed to spawn agent: ${err.message}`);
     }
 
-    this.agents.set(agentId, agent);
-    await this.cleanupOldAgents();
+    debug(`Launched agent ${agent.agentId} with PID ${agent.pid}`);
+  }
 
-    debug(`Spawned agent ${agentId} with PID ${agent.pid}`);
-    return agent;
+  /**
+   * Fire any pending teammates in the given team whose `after` deps have all
+   * completed. Returns the list of teammates just launched. Repeatable:
+   * call it once per DAG wave. Safe to call on teams with no pending work
+   * (returns empty list).
+   */
+  async startReady(taskName: string): Promise<AgentProcess[]> {
+    await this.initialize();
+    const teammates = await this.listByTask(taskName);
+    const byName = new Map(
+      teammates.filter((a) => a.name).map((a) => [a.name as string, a])
+    );
+
+    const launched: AgentProcess[] = [];
+    for (const agent of teammates) {
+      if (agent.status !== AgentStatus.PENDING) continue;
+      const depsReady = agent.after.every((depName) => {
+        const dep = byName.get(depName);
+        return dep && dep.status === AgentStatus.COMPLETED;
+      });
+      if (!depsReady) continue;
+      try {
+        await this.launchProcess(agent);
+        launched.push(agent);
+      } catch (err) {
+        console.error(`Could not launch ${agent.agentId}:`, err);
+      }
+    }
+    return launched;
   }
 
   private buildCommand(
