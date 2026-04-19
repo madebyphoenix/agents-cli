@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.12.0
+
+**JSON output for sessions list**
+
+- Added `--json` flag to `agents sessions list` and `agents sessions` for programmatic use
+- Output is a JSON array of session metadata (id, shortId, agent, version, account, project, cwd, filePath, topic, messageCount, tokenCount, timestamp)
+- Enables the Swarmify VS Code extension's "Agents: Session Resume" and "Agents: Session Trace" pickers
+
+**OpenClaw workspace-aware sessions**
+
+- Fixed `agents sessions --agent openclaw` so synthetic OpenClaw rows now use the configured agent workspace from `~/.openclaw/openclaw.json`
+- When no per-agent workspace is available, OpenClaw session discovery now falls back to `~/.openclaw` instead of leaving `cwd` empty or filling it with status text
+- Added a regression test covering managed OpenClaw homes symlinked through `~/.agents/versions/openclaw/...`
+
 ## 1.11.1
 
 **Session search and version labeling**

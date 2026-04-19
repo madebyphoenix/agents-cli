@@ -192,10 +192,69 @@ function writeGeminiSession(
   );
 }
 
+function writeOpenClawSetup(tempHome: string, version = '2026.3.8'): string {
+  const managedHome = path.join(tempHome, '.agents', 'versions', 'openclaw', version, 'home', '.openclaw');
+  fs.mkdirSync(managedHome, { recursive: true });
+
+  const activeHome = path.join(tempHome, '.openclaw');
+  fs.mkdirSync(path.dirname(activeHome), { recursive: true });
+  if (!fs.existsSync(activeHome)) {
+    fs.symlinkSync(managedHome, activeHome);
+  }
+
+  const managedWorkspace = path.join(managedHome, 'sergey');
+  fs.mkdirSync(managedWorkspace, { recursive: true });
+  fs.writeFileSync(
+    path.join(managedHome, 'openclaw.json'),
+    JSON.stringify({
+      agents: {
+        list: [
+          { id: 'sergey', workspace: path.join(activeHome, 'sergey') },
+        ],
+      },
+    }, null, 2),
+    'utf-8'
+  );
+
+  const binDir = path.join(tempHome, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  const openclawBin = path.join(binDir, 'openclaw');
+  fs.writeFileSync(
+    openclawBin,
+    `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "openclaw/${version}"
+  exit 0
+fi
+
+if [ "$1" = "channels" ] && [ "$2" = "status" ]; then
+  echo "- Telegram sergey (Sergey): enabled, configured, running, out:2h ago, mode:polling, token:config"
+  exit 0
+fi
+
+if [ "$1" = "cron" ] && [ "$2" = "list" ]; then
+  echo "ID NAME SCHEDULE NEXT LAST STATUS TARGET AGENT MODEL"
+  echo "12345678-1234-1234-1234-123456789abc sergey-hourly  cron */30 * * * * in 7h  48m ago  ok  isolated  sergey  -"
+  exit 0
+fi
+
+exit 1
+`,
+    'utf-8'
+  );
+  fs.chmodSync(openclawBin, 0o755);
+
+  return path.join(activeHome, 'sergey');
+}
+
 function runAgents(args: string[], cwd: string, home: string) {
   return spawnSync(tsxBin, [cliEntry, ...args], {
     cwd,
-    env: { ...process.env, HOME: home },
+    env: {
+      ...process.env,
+      HOME: home,
+      PATH: `${path.join(home, 'bin')}${path.delimiter}${process.env.PATH || ''}`,
+    },
     encoding: 'utf-8',
   });
 }
@@ -474,6 +533,26 @@ describe('agents sessions', () => {
 
       const output = outputOf(result);
       expect(output).toContain('gemini@0.29.5');
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('shows OpenClaw synthetic sessions from the configured workspace without --all', () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-openclaw-cwd-'));
+
+    try {
+      writeUpdateCache(tempHome);
+      const openClawWorkspace = writeOpenClawSetup(tempHome);
+
+      const result = runAgents(['sessions', '--agent', 'openclaw'], openClawWorkspace, tempHome);
+      expect(result.status).toBe(0);
+
+      const output = outputOf(result);
+      expect(output).toContain('openclaw@2026.3.');
+      expect(output).toContain('Sergey');
+      expect(output).toContain('12345678');
+      expect(output).not.toContain('No sessions found');
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }

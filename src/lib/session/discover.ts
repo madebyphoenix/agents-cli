@@ -6,7 +6,7 @@ import * as readline from 'readline';
 import { execSync } from 'child_process';
 import type { SessionAgentId, SessionMeta } from './types.js';
 import type { AgentId } from '../types.js';
-import { getCliVersion } from '../agents.js';
+import { AGENTS, getCliVersion } from '../agents.js';
 import { getConfigSymlinkVersion } from '../shims.js';
 import { SESSION_AGENTS } from './types.js';
 import { extractSessionTopic } from './prompt.js';
@@ -16,6 +16,7 @@ const AGENTS_DIR = path.join(HOME, '.agents');
 const SESSIONS_DIR = path.join(AGENTS_DIR, 'sessions');
 const INDEX_PATH = path.join(SESSIONS_DIR, 'index.jsonl');
 const CONTENT_INDEX_PATH = path.join(SESSIONS_DIR, 'content_index.jsonl');
+let cachedOpenClawWorkspaces: Map<string, string> | null = null;
 
 export interface DiscoverOptions {
   agent?: SessionAgentId;
@@ -944,6 +945,7 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
         agent: 'openclaw',
         timestamp: new Date().toISOString(),
         project: name,
+        cwd: getOpenClawSessionCwd(agentId),
         version: currentVersion,
         filePath: '',
       });
@@ -979,7 +981,6 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
       //   [schedule+next, last, status, target, agentId, model]
       const rest = line.slice(headMatch[0].length).trim();
       const cols = rest.split(/\s{2,}/);
-      const status = cols[2] || '';
       const agentId = cols[4] || '';
 
       sessions.push({
@@ -988,7 +989,7 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
         agent: 'openclaw',
         timestamp: new Date().toISOString(),
         project: `${jobName} (${agentId || 'unknown'})`,
-        cwd: status,
+        cwd: getOpenClawSessionCwd(agentId),
         version: currentVersion,
         filePath: '',
       });
@@ -1149,6 +1150,41 @@ async function scanCodexSession(filePath: string): Promise<CodexSessionScan> {
     tokenCount,
     userTerms: userTexts.length > 0 ? userTexts : undefined,
   };
+}
+
+function getOpenClawSessionCwd(agentId?: string): string {
+  const workspace = agentId ? getOpenClawWorkspaceMap().get(agentId) : undefined;
+  if (workspace) return workspace;
+
+  const configDir = AGENTS.openclaw.configDir;
+  return safeRealpathSync(configDir) || configDir;
+}
+
+function getOpenClawWorkspaceMap(): Map<string, string> {
+  if (cachedOpenClawWorkspaces) return cachedOpenClawWorkspaces;
+
+  const workspaces = new Map<string, string>();
+  const configPath = path.join(AGENTS.openclaw.configDir, 'openclaw.json');
+  if (!fs.existsSync(configPath)) {
+    cachedOpenClawWorkspaces = workspaces;
+    return workspaces;
+  }
+
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      agents?: { list?: Array<{ id?: string; workspace?: string }> };
+    };
+
+    for (const agent of config.agents?.list || []) {
+      if (!agent.id || !agent.workspace) continue;
+      workspaces.set(agent.id, safeRealpathSync(agent.workspace) || agent.workspace);
+    }
+  } catch {
+    // Ignore invalid OpenClaw config and fall back to ~/.openclaw.
+  }
+
+  cachedOpenClawWorkspaces = workspaces;
+  return workspaces;
 }
 
 // ---------------------------------------------------------------------------

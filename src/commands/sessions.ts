@@ -26,6 +26,7 @@ interface SessionFilterOptions {
 
 interface ListOptions extends SessionFilterOptions {
   limit?: string;
+  json?: boolean;
 }
 
 interface ViewOptions extends SessionFilterOptions {
@@ -54,7 +55,7 @@ async function listAction(options: ListOptions): Promise<void> {
   const agent = parseAgentFilter(options.agent);
 
   const limit = parseInt(options.limit || '20', 10);
-  const spinner = ora('Scanning sessions...').start();
+  const spinner = options.json ? null : ora('Scanning sessions...').start();
 
   try {
     const sessions = await discoverSessions({
@@ -67,7 +68,16 @@ async function listAction(options: ListOptions): Promise<void> {
       until: options.until,
     });
 
-    spinner.stop();
+    spinner?.stop();
+
+    if (options.json) {
+      const serializable = sessions.map(s => {
+        const { _contentIndex, _userTerms, _matchedTerms, _bm25Score, ...rest } = s;
+        return rest;
+      });
+      process.stdout.write(JSON.stringify(serializable, null, 2) + '\n');
+      return;
+    }
 
     if (sessions.length === 0) {
       console.log(chalk.gray(formatNoSessionsMessage(options.all, false, options.project)));
@@ -120,7 +130,7 @@ async function listAction(options: ListOptions): Promise<void> {
 
     console.log(chalk.gray(`\n${sessions.length} session${sessions.length === 1 ? '' : 's'}. Use 'agents sessions view <id>' to read.`));
   } catch (err: any) {
-    spinner.stop();
+    spinner?.stop();
     console.error(chalk.red(`Failed to discover sessions: ${err.message}`));
     process.exit(1);
   }
@@ -454,6 +464,7 @@ export function registerSessionsCommands(program: Command): void {
     .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
+    .option('--json', 'Output sessions as JSON array')
     .action(async (options: ListOptions) => {
       await listAction(options);
     });
@@ -467,8 +478,12 @@ export function registerSessionsCommands(program: Command): void {
     .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('-n, --limit <n>', 'Max sessions to show', '20')
-    .action(async (options: ListOptions) => {
-      await listAction(options);
+    .option('--json', 'Output sessions as JSON array')
+    .action(async (options: ListOptions, command) => {
+      const parentOptions = typeof command?.parent?.opts === 'function'
+        ? command.parent.opts()
+        : {};
+      await listAction({ ...parentOptions, ...options });
     });
 
   sessionsCmd
