@@ -5,7 +5,6 @@ import { spawn } from 'child_process';
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { search } from '@inquirer/prompts';
 import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types.js';
 import { SESSION_AGENTS } from '../lib/session/types.js';
 import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter, type ScanProgress } from '../lib/session/discover.js';
@@ -16,7 +15,7 @@ import { colorAgent } from '../lib/agents.js';
 import { isInteractiveTerminal, isPromptCancelled, requireInteractiveSelection } from './utils.js';
 import { sessionPicker, type PickedSession } from './sessions-picker.js';
 
-const SESSION_AGENT_FILTER_HELP = `Filter by agent (${SESSION_AGENTS.join(', ')})`;
+const SESSION_AGENT_FILTER_HELP = `Filter by agent, e.g. claude, codex, claude@2.0.65`;
 
 interface SessionFilterOptions {
   agent?: string;
@@ -26,12 +25,19 @@ interface SessionFilterOptions {
   until?: string;
 }
 
+interface SessionsOptions extends SessionFilterOptions {
+  limit?: string;
+  json?: boolean;
+  transcript?: boolean;
+  trace?: boolean;
+}
+
 interface ListOptions extends SessionFilterOptions {
   limit?: string;
   json?: boolean;
 }
 
-interface ViewOptions extends SessionFilterOptions {
+interface ViewOptions {
   transcript?: boolean;
   trace?: boolean;
   json?: boolean;
@@ -232,38 +238,51 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
   process.stdout.write(output);
 }
 
-function formatPickerLabel(s: SessionMeta): string {
+function highlightTerms(text: string, query: string): string {
+  if (!query.trim()) return chalk.white(text);
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  let result = text;
+  for (const term of terms) {
+    const idx = result.toLowerCase().indexOf(term);
+    if (idx !== -1) {
+      const before = result.slice(0, idx);
+      const match = result.slice(idx, idx + term.length);
+      const after = result.slice(idx + term.length);
+      result = before + chalk.bold.white(match) + after;
+      break; // one highlight per term to avoid index drift from chalk codes
+    }
+  }
+  return chalk.white(result);
+}
+
+function formatPickerLabel(s: SessionMeta, query: string): string {
   const agentColor = colorAgent(s.agent);
   const when = formatRelativeTime(s.timestamp);
   const project = s.project || '-';
-  const topic = s.topic || '';
-  const matchTerms = s._matchedTerms;
-
-  const matchBadge = matchTerms && matchTerms.length > 0
-    ? chalk.yellow(` [${matchTerms.join(', ')}]`)
-    : '';
+  const displayText = truncate((s as any).label ?? s.topic ?? '', 50);
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
     agentColor(padRight(truncate(s.agent, 9), 10)) +
     chalk.cyan(padRight(truncate(project, 14), 16)) +
-    chalk.white(padRight(truncate(topic, 50), 52)) +
-    chalk.gray(when) +
-    matchBadge
+    padRight(highlightTerms(displayText, query), 52) +
+    chalk.gray(when)
   );
 }
 
 async function pickSessionInteractive(
   sessions: SessionMeta[],
   message = 'Search sessions:',
+  initialSearch?: string,
 ): Promise<PickedSession | null> {
   try {
     return await sessionPicker({
       message,
       sessions,
       filter: (query: string) => filterSessionsByQuery(sessions, query),
-      labelFor: (s: SessionMeta) => formatPickerLabel(s),
+      labelFor: (s: SessionMeta, query: string) => formatPickerLabel(s, query),
       pageSize: 12,
+      initialSearch,
     });
   } catch (err) {
     if (isPromptCancelled(err)) return null;
@@ -358,17 +377,20 @@ async function pickSession(
   }
 }
 
-function parseAgentFilter(agentName?: string): SessionAgentId | undefined {
-  const agent = agentName as SessionAgentId | undefined;
-  if (agent && !SESSION_AGENTS.includes(agent)) {
-    console.error(chalk.red(`Unknown agent: ${agent}. Use: ${SESSION_AGENTS.join(', ')}`));
-    process.exit(1);
-  }
-  return agent;
+interface AgentFilter {
+  agent?: SessionAgentId;
+  version?: string;
 }
 
-function shouldUseFilteredSessionSearch(options: SessionFilterOptions): boolean {
-  return isInteractiveTerminal() && Boolean(options.agent || options.project);
+function parseAgentFilter(agentName?: string): AgentFilter {
+  if (!agentName) return {};
+  const [name, version] = agentName.split('@', 2);
+  const agent = name as SessionAgentId;
+  if (!SESSION_AGENTS.includes(agent)) {
+    console.error(chalk.red(`Unknown agent: ${name}. Use: ${SESSION_AGENTS.join(', ')}`));
+    process.exit(1);
+  }
+  return { agent, version };
 }
 
 function formatSearchMessage(options: SessionFilterOptions): string {

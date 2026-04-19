@@ -32,8 +32,9 @@ interface PickerConfig {
   message: string;
   sessions: SessionMeta[];
   filter: (query: string) => SessionMeta[];
-  labelFor: (s: SessionMeta) => string;
+  labelFor: (s: SessionMeta, query: string) => string;
   pageSize?: number;
+  initialSearch?: string;
 }
 
 const previewCache = new Map<string, string>();
@@ -153,13 +154,13 @@ function truncate(s: string, max: number): string {
 export const sessionPicker = createPrompt<PickedSession | null, PickerConfig>((config, done) => {
   const theme = makeTheme({});
   const [status, setStatus] = useState<'idle' | 'done'>('idle');
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(config.initialSearch ?? '');
   const [previewOpen, setPreviewOpen] = useState(false);
   const prefix = usePrefix({ status, theme });
 
   const results = useMemo(() => {
     const filtered = config.filter(searchTerm).slice(0, 50);
-    return filtered.map<Choice>(s => ({ value: s, label: config.labelFor(s) }));
+    return filtered.map<Choice>(s => ({ value: s, label: config.labelFor(s, searchTerm) }));
   }, [searchTerm]);
 
   const [active, setActive] = useState(0);
