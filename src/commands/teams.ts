@@ -36,7 +36,7 @@ const AGENT_NAMES: Record<AgentType, string> = {
 };
 
 const VALID_AGENTS = Object.keys(AGENT_NAMES) as AgentType[];
-const VALID_MODES = ['plan', 'edit', 'ralph', 'cloud'] as const;
+const VALID_MODES = ['plan', 'edit', 'full'] as const;
 const VALID_EFFORTS = ['fast', 'default', 'detailed'] as const;
 
 type Mode = (typeof VALID_MODES)[number];
@@ -405,7 +405,7 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
     .alias('a')
     .description("Bring someone onto the team to work on a task. Returns immediately.")
     .option('-n, --name <name>', 'Give this teammate a friendly name (e.g. alice). Unique within team.')
-    .option('-m, --mode <mode>', `How much they can do: ${VALID_MODES.join('|')}`, 'edit')
+    .option('-m, --mode <mode>', `How much they can do: plan (read-only) | edit (write) | full (write + permission gates off)`, 'edit')
     .option('-e, --effort <effort>', `Model tier: ${VALID_EFFORTS.join('|')}`, 'default')
     .option('--model <model>', 'Override the effort→model mapping (e.g. claude-opus-4-6)')
     .option(

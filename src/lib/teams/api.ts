@@ -8,8 +8,6 @@ import * as fs from 'fs/promises';
 import { AgentManager, AgentStatus, resolveMode } from './agents.js';
 import { AgentType } from './parsers.js';
 import { getDelta } from './summarizer.js';
-import { readConfig } from './persistence.js';
-import { spawnCloudAgent, isCloudSupported, extractPrUrl } from './cloud.js';
 import { debug } from './debug.js';
 
 /**
@@ -119,104 +117,6 @@ export async function handleSpawn(
     `[spawn] Spawning ${agentType} agent for task "${taskName}" [${resolvedMode}] effort=${resolvedEffort}...`
   );
 
-  // Ralph mode special handling
-  if (resolvedMode === 'ralph') {
-    if (!cwd) {
-      throw new Error('Ralph mode requires a cwd parameter');
-    }
-
-    // Import ralph utilities
-    const { isDangerousPath, getRalphConfig, buildRalphPrompt } = await import('./ralph.js');
-
-    const resolvedCwd = path.resolve(cwd);
-
-    // Safety check
-    if (isDangerousPath(resolvedCwd)) {
-      throw new Error('⚠️ Ralph mode in home or system directory is risky. Use a project directory.');
-    }
-
-    // Check RALPH.md exists
-    const ralphConfig = getRalphConfig();
-    const ralphFilePath = path.join(resolvedCwd, ralphConfig.ralphFile);
-
-    try {
-      await fs.access(ralphFilePath);
-    } catch {
-      throw new Error(`${ralphConfig.ralphFile} not found in ${resolvedCwd}. Create it first.`);
-    }
-
-    // Build the ralph instruction prompt
-    const ralphPrompt = buildRalphPrompt(prompt, ralphFilePath);
-
-    // Spawn agent with ralph prompt and ralph mode (full permissions)
-    const agent = await manager.spawn(
-      taskName,
-      agentType,
-      ralphPrompt,
-      cwd,
-      resolvedMode,
-      resolvedEffort,
-      parentSessionId,
-      workspaceDir,
-      version,
-      name,
-      after,
-      model,
-      envOverrides
-    );
-
-    debug(`[ralph] Spawned ${agentType} agent ${agent.agentId} for autonomous execution`);
-
-    return {
-      task_name: taskName,
-      agent_id: agent.agentId,
-      agent_type: agent.agentType,
-      status: agent.status,
-      started_at: agent.startedAt.toISOString(),
-      version: agent.version,
-      remote_session_id: agent.remoteSessionId,
-      name: agent.name,
-      after: agent.after,
-    };
-  }
-
-  // Cloud mode special handling
-  if (resolvedMode === 'cloud') {
-    if (!isCloudSupported(agentType)) {
-      throw new Error(
-        `Cloud mode is not supported for ${agentType}. Supported agents: claude, codex.`
-      );
-    }
-
-    const config = await readConfig();
-    const agentConfig = config.agentConfigs[agentType];
-    const resolvedModel = agentConfig.models[resolvedEffort];
-
-    const agent = await spawnCloudAgent(
-      taskName,
-      agentType,
-      prompt,
-      cwd,
-      resolvedModel,
-      parentSessionId,
-      workspaceDir
-    );
-
-    manager.registerAgent(agent);
-
-    debug(`[cloud] Spawned ${agentType} cloud agent ${agent.agentId} for task "${taskName}"`);
-
-    return {
-      task_name: taskName,
-      agent_id: agent.agentId,
-      agent_type: agent.agentType,
-      status: agent.status,
-      started_at: agent.startedAt.toISOString(),
-    };
-  }
-
-  // Regular spawn logic (plan/edit modes)
-
   const agent = await manager.spawn(
     taskName,
     agentType,
@@ -314,15 +214,6 @@ export async function handleStatus(
       maxTimestamp = agentTimestamp;
     }
 
-    let prUrl = agent.prUrl;
-    if (agent.mode === 'cloud' && !prUrl) {
-      prUrl = extractPrUrl(events);
-      if (prUrl) {
-        agent.prUrl = prUrl;
-        await agent.saveMeta();
-      }
-    }
-
     const detail: AgentStatusDetail = {
       agent_id: agent.agentId,
       agent_type: agent.agentType,
@@ -342,13 +233,6 @@ export async function handleStatus(
       has_errors: delta.new_errors.length > 0,
       cursor: agentTimestamp,
     };
-
-    if (agent.mode === 'cloud') {
-      detail.mode = 'cloud';
-      detail.cloud_session_id = agent.cloudSessionId;
-      detail.cloud_provider = agent.cloudProvider;
-      detail.pr_url = prUrl;
-    }
 
     agentStatuses.push(detail);
   }

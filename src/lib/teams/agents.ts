@@ -216,7 +216,7 @@ const CLAUDE_PLAN_MODE_PREFIX = `You are running in HEADLESS PLAN MODE. This mod
 
 `;
 
-const VALID_MODES = ['plan', 'edit', 'ralph', 'cloud'] as const;
+const VALID_MODES = ['plan', 'edit', 'full'] as const;
 type Mode = typeof VALID_MODES[number];
 
 function normalizeModeValue(modeValue: string | null | undefined): Mode | null {
@@ -451,7 +451,7 @@ export class AgentProcess {
   }
 
   get isEditMode(): boolean {
-    return this.mode === 'edit' || this.mode === 'cloud';
+    return this.mode === 'edit' || this.mode === 'full';
   }
 
   async getAgentDir(): Promise<string> {
@@ -641,7 +641,14 @@ export class AgentProcess {
       const metaContent = await fs.readFile(metaPath, 'utf-8');
       const meta = JSON.parse(metaContent);
 
-      const modeMap: Record<string, Mode> = { edit: 'edit', ralph: 'ralph', cloud: 'cloud' };
+      // Legacy teammates may have mode='ralph' or 'cloud' from before modes
+      // were narrowed. Coerce to the closest current mode so they still load.
+      const modeMap: Record<string, Mode> = {
+        edit: 'edit',
+        full: 'full',
+        ralph: 'full',  // ralph used the same "no-permission" flags as full
+        cloud: 'edit',  // cloud teammates had edit-level write access
+      };
       const resolvedMode: Mode = modeMap[meta.mode] || 'plan';
 
       // AgentStatus is a string enum. Validate meta.status against its VALUES
@@ -694,11 +701,6 @@ export class AgentProcess {
   }
 
   async updateStatusFromProcess(): Promise<void> {
-    if (this.mode === 'cloud') {
-      await this.readNewEvents();
-      return;
-    }
-
     if (!this.pid) return;
 
     if (this.isProcessAlive()) {
@@ -1138,7 +1140,7 @@ export class AgentProcess {
     } else if (agentType === 'gemini' || agentType === 'claude') {
       cmd.push('--model', model);
     } else if (agentType === 'opencode') {
-      const opencodeAgent = mode === 'edit' || mode === 'ralph' ? 'build' : 'plan';
+      const opencodeAgent = mode === 'edit' || mode === 'full' ? 'build' : 'plan';
       // Insert --agent flag after the prompt
       const promptIndex = cmd.indexOf(fullPrompt);
       if (promptIndex !== -1) {
@@ -1147,8 +1149,8 @@ export class AgentProcess {
       cmd.push('--model', model);
     }
 
-    if (mode === 'ralph') {
-      cmd = this.applyRalphMode(agentType, cmd);
+    if (mode === 'full') {
+      cmd = this.applyFullMode(agentType, cmd);
     } else if (isEditMode) {
       cmd = this.applyEditMode(agentType, cmd);
     }
@@ -1188,38 +1190,41 @@ export class AgentProcess {
     return editCmd;
   }
 
-  private applyRalphMode(agentType: AgentType, cmd: string[]): string[] {
-    const ralphCmd: string[] = [...cmd];
+  // "full" mode: edit-level write access with permission gates bypassed.
+  // For Claude that's --dangerously-skip-permissions; other agents already
+  // lack gates in edit mode so their commands match applyEditMode.
+  private applyFullMode(agentType: AgentType, cmd: string[]): string[] {
+    const fullCmd: string[] = [...cmd];
 
     switch (agentType) {
       case 'codex':
-        ralphCmd.push('--full-auto');
+        fullCmd.push('--full-auto');
         break;
 
       case 'cursor':
-        ralphCmd.push('-f');
+        fullCmd.push('-f');
         break;
 
       case 'gemini': {
-        const approvalIndex = ralphCmd.indexOf('--approval-mode');
+        const approvalIndex = fullCmd.indexOf('--approval-mode');
         if (approvalIndex !== -1) {
-          ralphCmd.splice(approvalIndex, 2);
+          fullCmd.splice(approvalIndex, 2);
         }
-        ralphCmd.push('--yolo');
+        fullCmd.push('--yolo');
         break;
       }
 
       case 'claude':
         // Replace --permission-mode plan with --dangerously-skip-permissions
-        const permModeIndex = ralphCmd.indexOf('--permission-mode');
+        const permModeIndex = fullCmd.indexOf('--permission-mode');
         if (permModeIndex !== -1) {
-          ralphCmd.splice(permModeIndex, 2); // Remove --permission-mode and its value
+          fullCmd.splice(permModeIndex, 2); // Remove --permission-mode and its value
         }
-        ralphCmd.push('--dangerously-skip-permissions');
+        fullCmd.push('--dangerously-skip-permissions');
         break;
     }
 
-    return ralphCmd;
+    return fullCmd;
   }
 
   async get(agentId: string): Promise<AgentProcess | null> {
