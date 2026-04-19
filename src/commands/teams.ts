@@ -91,12 +91,21 @@ function parseTeammate(spec: string): { agent: AgentType; version: string | null
   return { agent: name as AgentType, version: version || null };
 }
 
+function shortId(id: string): string {
+  return id.slice(0, 8);
+}
+
 function printAgentDetail(a: AgentStatusDetail): void {
   const label = statusColor(a.status)(a.status.toUpperCase());
   const who = fullName(a.agent_type as AgentType, a.version);
   console.log(
-    `  ${chalk.cyan(a.agent_id)} ${who.padEnd(18)} ${label}  ${chalk.gray(a.duration || '')}`
+    `  ${chalk.cyan(shortId(a.agent_id))} ${who.padEnd(18)} ${label}  ${chalk.gray(a.duration || '')}`
   );
+  // If the agent's internal session id differs from ours (non-Claude), show
+  // it as a hint for `agents sessions view <id>`.
+  if (a.remote_session_id && a.remote_session_id !== a.agent_id) {
+    console.log(`    ${chalk.gray('session ')} ${chalk.gray(a.remote_session_id)}`);
+  }
   if (a.files_modified.length) console.log(`    ${chalk.gray('touched ')} ${a.files_modified.join(', ')}`);
   if (a.files_created.length)  console.log(`    ${chalk.gray('created ')} ${a.files_created.join(', ')}`);
   if (a.files_read.length)     console.log(`    ${chalk.gray('read    ')} ${a.files_read.join(', ')}`);

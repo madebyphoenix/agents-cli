@@ -617,7 +617,7 @@ export function registerSessionsCommands(program: Command): void {
     .option('-a, --agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
-    .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
+    .option('--since <time>', 'Filter sessions newer than time (e.g., "2h", "7d", "4w", ISO date)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('-n, --limit <n>', 'Max sessions to show', '50')
     .option('--transcript', 'Show full conversation transcript (with ID)')
@@ -634,9 +634,9 @@ export function registerSessionsCommands(program: Command): void {
     .option('-a, --agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
-    .option('--since <time>', 'Filter sessions newer than time (e.g., "7d", "30d", ISO timestamp)')
+    .option('--since <time>', 'Filter sessions newer than time (e.g., "2h", "7d", "4w", ISO date)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
-    .option('-n, --limit <n>', 'Max sessions to show', '20')
+    .option('-n, --limit <n>', 'Max sessions to show', '50')
     .option('--json', 'Output sessions as JSON array')
     .action(async (query: string | undefined, options: ListOptions, command) => {
       const parentOptions = typeof command?.parent?.opts === 'function'

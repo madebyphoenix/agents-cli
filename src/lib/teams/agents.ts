@@ -361,6 +361,7 @@ export class AgentProcess {
   cloudProvider: string | null = null;
   prUrl: string | null = null;
   version: string | null = null;
+  remoteSessionId: string | null = null;
   private eventsCache: any[] = [];
   private lastReadPos: number = 0;
   private baseDir: string | null = null;
@@ -382,9 +383,11 @@ export class AgentProcess {
     cloudSessionId: string | null = null,
     cloudProvider: string | null = null,
     prUrl: string | null = null,
-    version: string | null = null
+    version: string | null = null,
+    remoteSessionId: string | null = null
   ) {
     this.agentId = agentId;
+    this.remoteSessionId = remoteSessionId;
     this.taskName = taskName;
     this.agentType = agentType;
     this.prompt = prompt;
@@ -437,6 +440,7 @@ export class AgentProcess {
       cloud_provider: this.cloudProvider,
       pr_url: this.prUrl,
       version: this.version,
+      remote_session_id: this.remoteSessionId,
     };
   }
 
@@ -510,6 +514,15 @@ export class AgentProcess {
             event.timestamp = resolvedTimestamp;
             this.eventsCache.push(event);
 
+            // Capture the agent's own session/thread id the first time we see
+            // it. For Claude it's the same uuid we passed via --session-id;
+            // for others (Codex thread_id, Gemini/Cursor/OpenCode sessionID)
+            // it's their internal id, which lets us cross-reference with
+            // `agents sessions view <id>`.
+            if (!this.remoteSessionId && event.session_id) {
+              this.remoteSessionId = event.session_id;
+            }
+
             if (event.type === 'result' || event.type === 'turn.completed' || event.type === 'thread.completed') {
               if (event.status === 'success' || event.type === 'turn.completed') {
                 this.status = AgentStatus.COMPLETED;
@@ -553,6 +566,7 @@ export class AgentProcess {
       cloud_provider: this.cloudProvider,
       pr_url: this.prUrl,
       version: this.version,
+      remote_session_id: this.remoteSessionId,
     };
     const metaPath = await this.getMetaPath();
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
@@ -593,7 +607,8 @@ export class AgentProcess {
         meta.cloud_session_id || null,
         meta.cloud_provider || null,
         meta.pr_url || null,
-        meta.version || null
+        meta.version || null,
+        meta.remote_session_id || null
       );
       return agent;
     } catch {
@@ -829,8 +844,14 @@ export class AgentProcess {
       }
     }
 
-    const agentId = randomUUID().substring(0, 8);
-    const cmd = this.buildCommand(agentType, prompt, resolvedMode, resolvedModel, resolvedCwd);
+    // Use a full UUIDv4 as the canonical agent_id so that for agents that
+    // accept a pre-set session id (Claude), our id IS their session id — the
+    // session file lands at ~/.claude/projects/.../<uuid>.jsonl and
+    // `agents sessions view <uuid>` works. For other agents, we still use our
+    // uuid as the teams-side id; their internal session id is captured
+    // separately as `remote_session_id` once their first event arrives.
+    const agentId = randomUUID();
+    const cmd = this.buildCommand(agentType, prompt, resolvedMode, resolvedModel, resolvedCwd, agentId);
     if (version && cmd.length > 0) {
       cmd[0] = `${cmd[0]}@${version}`;
     }
@@ -900,7 +921,8 @@ export class AgentProcess {
     prompt: string,
     mode: Mode,
     model: string,
-    cwd: string | null = null
+    cwd: string | null = null,
+    sessionId: string | null = null
   ): string[] {
     const cmdTemplate = AGENT_COMMANDS[agentType];
     if (!cmdTemplate) {
@@ -927,6 +949,12 @@ export class AgentProcess {
 
       if (cwd) {
         cmd.push('--add-dir', cwd);
+      }
+
+      // Pin Claude's session UUID to our agent_id so the session file lands
+      // at ~/.claude/projects/.../<agent_id>.jsonl — unified identity.
+      if (sessionId) {
+        cmd.push('--session-id', sessionId);
       }
     }
 
@@ -1043,6 +1071,30 @@ export class AgentProcess {
     }
 
     return null;
+  }
+
+  /**
+   * Resolve a short id (prefix like "a1b2c3d4") or full UUID to a single
+   * agent_id from the agents in a given team. Returns:
+   *  - { kind: 'ok', agentId }       when exactly one agent matches
+   *  - { kind: 'none' }              when no agent matches
+   *  - { kind: 'ambiguous', matches } when multiple agents share the prefix
+   */
+  async resolveAgentIdInTask(
+    taskName: string,
+    idOrPrefix: string
+  ): Promise<
+    | { kind: 'ok'; agentId: string }
+    | { kind: 'none' }
+    | { kind: 'ambiguous'; matches: string[] }
+  > {
+    const agents = await this.listByTask(taskName);
+    const exact = agents.find((a) => a.agentId === idOrPrefix);
+    if (exact) return { kind: 'ok', agentId: exact.agentId };
+    const prefix = agents.filter((a) => a.agentId.startsWith(idOrPrefix));
+    if (prefix.length === 1) return { kind: 'ok', agentId: prefix[0].agentId };
+    if (prefix.length === 0) return { kind: 'none' };
+    return { kind: 'ambiguous', matches: prefix.map((a) => a.agentId) };
   }
 
   async listAll(): Promise<AgentProcess[]> {

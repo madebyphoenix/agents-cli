@@ -35,6 +35,7 @@ export interface SpawnResult {
   status: string;
   started_at: string;
   version?: string | null;
+  remote_session_id?: string | null;
 }
 
 export interface AgentStatusDetail {
@@ -56,6 +57,7 @@ export interface AgentStatusDetail {
   cloud_provider?: string | null;
   pr_url?: string | null;
   version?: string | null;
+  remote_session_id?: string | null;
 }
 
 export interface TaskStatusResult {
@@ -159,6 +161,7 @@ export async function handleSpawn(
       status: agent.status,
       started_at: agent.startedAt.toISOString(),
       version: agent.version,
+      remote_session_id: agent.remoteSessionId,
     };
   }
 
@@ -220,6 +223,7 @@ export async function handleSpawn(
     status: agent.status,
     started_at: agent.startedAt.toISOString(),
     version: agent.version,
+    remote_session_id: agent.remoteSessionId,
   };
 }
 
@@ -303,6 +307,7 @@ export async function handleStatus(
       status: agent.status,
       duration: agent.duration(),
       version: agent.version,
+      remote_session_id: agent.remoteSessionId,
       files_created: delta.new_files_created,
       files_modified: delta.new_files_modified,
       files_read: delta.new_files_read,

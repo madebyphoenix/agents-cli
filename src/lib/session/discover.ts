@@ -1418,10 +1418,12 @@ function sumKnownNumbers(values: unknown[]): number | null {
 // ---------------------------------------------------------------------------
 
 export function parseTimeFilter(input: string): number {
-  const relativeMatch = input.match(/^(\d+)([dw])$/i);
+  const relativeMatch = input.match(/^(\d+)([mhdw])$/i);
   if (relativeMatch) {
     const value = parseInt(relativeMatch[1], 10);
     const unit = relativeMatch[2].toLowerCase();
+    if (unit === 'm') return Date.now() - value * 60_000;
+    if (unit === 'h') return Date.now() - value * 3_600_000;
     if (unit === 'd') return Date.now() - value * 86_400_000;
     if (unit === 'w') return Date.now() - value * 7 * 86_400_000;
   }
