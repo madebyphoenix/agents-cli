@@ -190,6 +190,8 @@ export function createDefaultMeta(): Meta {
   return {};
 }
 
+let metaCache: { mtime: number; meta: Meta } | null = null;
+
 export function readMeta(): Meta {
   ensureAgentsDir();
 
@@ -227,10 +229,23 @@ export function readMeta(): Meta {
   }
 
   if (fs.existsSync(META_FILE)) {
+    let mtime = 0;
+    try {
+      mtime = fs.statSync(META_FILE).mtimeMs;
+    } catch {
+      /* file vanished between existsSync and statSync */
+    }
+
+    if (metaCache && metaCache.mtime === mtime) {
+      return metaCache.meta;
+    }
+
     try {
       const content = fs.readFileSync(META_FILE, 'utf-8');
       const parsed = yaml.parse(content) as Meta;
-      return parsed || createDefaultMeta();
+      const meta = parsed || createDefaultMeta();
+      metaCache = { mtime, meta };
+      return meta;
     } catch {
       /* agents.yaml corrupt or unreadable, use defaults */
       return createDefaultMeta();
@@ -244,6 +259,7 @@ export function writeMeta(meta: Meta): void {
   ensureAgentsDir();
   const content = META_HEADER + yaml.stringify(meta);
   fs.writeFileSync(META_FILE, content, 'utf-8');
+  metaCache = null;
 }
 
 export function updateMeta(updates: Partial<Meta>): Meta {

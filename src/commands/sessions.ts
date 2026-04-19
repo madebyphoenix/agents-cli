@@ -1,18 +1,20 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { spawn } from 'child_process';
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import { search } from '@inquirer/prompts';
 import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types.js';
 import { SESSION_AGENTS } from '../lib/session/types.js';
-import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter } from '../lib/session/discover.js';
+import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter, type ScanProgress } from '../lib/session/discover.js';
 import { parseSession } from '../lib/session/parse.js';
 import { renderTranscript, renderSummary, renderTrace, renderJson } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
 import { colorAgent } from '../lib/agents.js';
 import { isInteractiveTerminal, isPromptCancelled, requireInteractiveSelection } from './utils.js';
+import { sessionPicker, type PickedSession } from './sessions-picker.js';
 
 const SESSION_AGENT_FILTER_HELP = `Filter by agent (${SESSION_AGENTS.join(', ')})`;
 
@@ -51,11 +53,28 @@ interface ClaudeResumeMatch {
 
 const CLAUDE_RESUME_MATCH_WINDOW_MS = 10 * 60_000;
 
+function createScanProgressTracker(base: string, spinner: ReturnType<typeof ora> | null) {
+  const counts = new Map<SessionAgentId, { parsed: number; total: number }>();
+  return (progress: ScanProgress) => {
+    if (!spinner) return;
+    counts.set(progress.agent, { parsed: progress.parsed, total: progress.total });
+    const parts: string[] = [];
+    for (const agent of SESSION_AGENTS) {
+      const c = counts.get(agent);
+      if (!c || c.total === 0) continue;
+      parts.push(`${agent} ${c.parsed}/${c.total}`);
+    }
+    spinner.text = parts.length > 0 ? `${base} (${parts.join(' · ')})` : base;
+  };
+}
+
 async function listAction(options: ListOptions): Promise<void> {
   const agent = parseAgentFilter(options.agent);
 
   const limit = parseInt(options.limit || '20', 10);
-  const spinner = options.json ? null : ora('Scanning sessions...').start();
+  const baseText = 'Loading sessions...';
+  const spinner = options.json ? null : ora(baseText).start();
+  const onProgress = createScanProgressTracker(baseText, spinner);
 
   try {
     const sessions = await discoverSessions({
@@ -66,13 +85,14 @@ async function listAction(options: ListOptions): Promise<void> {
       limit,
       since: options.since,
       until: options.until,
+      onProgress,
     });
 
     spinner?.stop();
 
     if (options.json) {
       const serializable = sessions.map(s => {
-        const { _contentIndex, _userTerms, _matchedTerms, _bm25Score, ...rest } = s;
+        const { _matchedTerms, _bm25Score, ...rest } = s;
         return rest;
       });
       process.stdout.write(JSON.stringify(serializable, null, 2) + '\n');
@@ -84,12 +104,13 @@ async function listAction(options: ListOptions): Promise<void> {
       return;
     }
 
-    if (shouldUseFilteredSessionSearch(options)) {
-      const picked = await pickSession(sessions, formatSearchMessage(options));
+    if (isInteractiveTerminal()) {
+      const picked = await pickSessionInteractive(sessions, formatSearchMessage(options));
       if (picked) {
-        await renderSession(picked, 'summary');
+        await handlePickedSession(picked);
         return;
       }
+      return;
     }
 
     // Print header
@@ -180,27 +201,91 @@ function formatPickerLabel(s: SessionMeta): string {
   const agentColor = colorAgent(s.agent);
   const when = formatRelativeTime(s.timestamp);
   const project = s.project || '-';
-  const account = s.account || '';
-  const agentLabel = s.version ? `${s.agent}@${s.version}` : s.agent;
   const topic = s.topic || '';
   const matchTerms = s._matchedTerms;
 
-  // Append matched terms badge
   const matchBadge = matchTerms && matchTerms.length > 0
     ? chalk.yellow(` [${matchTerms.join(', ')}]`)
     : '';
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
-    chalk.gray(padRight(truncate(account, 18), 20)) +
-    agentColor(padRight(truncate(agentLabel, 16), 18)) +
+    agentColor(padRight(truncate(s.agent, 9), 10)) +
     chalk.cyan(padRight(truncate(project, 14), 16)) +
-    chalk.gray(padRight(when, 14)) +
-    chalk.gray(padRight(formatCompactMetric(s.messageCount), 8)) +
-    chalk.gray(padRight(formatCompactMetric(s.tokenCount), 10)) +
-    chalk.white(truncate(topic, 30)) +
+    chalk.white(padRight(truncate(topic, 50), 52)) +
+    chalk.gray(when) +
     matchBadge
   );
+}
+
+async function pickSessionInteractive(
+  sessions: SessionMeta[],
+  message = 'Search sessions:',
+): Promise<PickedSession | null> {
+  try {
+    return await sessionPicker({
+      message,
+      sessions,
+      filter: (query: string) => filterSessionsByQuery(sessions, query),
+      labelFor: (s: SessionMeta) => formatPickerLabel(s),
+      pageSize: 12,
+    });
+  } catch (err) {
+    if (isPromptCancelled(err)) return null;
+    throw err;
+  }
+}
+
+async function handlePickedSession(picked: PickedSession): Promise<void> {
+  if (picked.action === 'view') {
+    await renderSession(picked.session, 'summary');
+    return;
+  }
+
+  const resume = buildResumeCommand(picked.session);
+  if (!resume) {
+    console.log(chalk.yellow(
+      `Resume is not supported for ${picked.session.agent} sessions yet. Showing summary instead.`
+    ));
+    await renderSession(picked.session, 'summary');
+    return;
+  }
+
+  const cwd = picked.session.cwd && fs.existsSync(picked.session.cwd)
+    ? picked.session.cwd
+    : process.cwd();
+
+  console.log(chalk.gray(`Resuming: ${resume.join(' ')} (cwd: ${cwd})`));
+
+  await new Promise<void>((resolve) => {
+    const child = spawn(resume[0], resume.slice(1), {
+      cwd,
+      stdio: 'inherit',
+      shell: false,
+    });
+    child.on('error', (err: any) => {
+      console.error(chalk.red(`Failed to launch ${resume[0]}: ${err.message}`));
+      if (err.code === 'ENOENT') {
+        console.error(chalk.gray(`Make sure '${resume[0]}' is on your PATH.`));
+      }
+      resolve();
+    });
+    child.on('close', () => resolve());
+  });
+}
+
+function buildResumeCommand(session: SessionMeta): string[] | null {
+  switch (session.agent) {
+    case 'claude':
+      return ['claude', '--resume', session.id];
+    case 'codex':
+      return ['codex', 'resume', session.id];
+    case 'opencode':
+      return ['opencode', '--session', session.id];
+    case 'gemini':
+    case 'openclaw':
+      return null;
+  }
 }
 
 async function pickSession(
@@ -263,7 +348,7 @@ function formatSearchDescription(session: SessionMeta): string {
   return [session.id, session.cwd].filter(Boolean).join('  ');
 }
 
-function filterSessionsByQuery(
+export function filterSessionsByQuery(
   sessions: SessionMeta[],
   query: string | undefined,
 ): SessionMeta[] {
@@ -344,7 +429,9 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
   else if (options.json) mode = 'json';
   const agent = parseAgentFilter(options.agent);
 
-  const spinner = ora('Finding session...').start();
+  const baseText = idQuery ? 'Finding session...' : 'Loading sessions...';
+  const spinner = ora(baseText).start();
+  const onProgress = createScanProgressTracker(baseText, spinner);
 
   try {
     const allSessions = await discoverSessions({
@@ -355,6 +442,7 @@ async function viewAction(idQuery: string | undefined, options: ViewOptions): Pr
       limit: 5000,
       since: options.since,
       until: options.until,
+      onProgress,
     });
     let session: SessionMeta | undefined;
 
@@ -617,7 +705,10 @@ function findClaudeProjectSessions(
   historyEntry: ClaudeHistoryEntry,
 ): SessionMeta[] {
   if (!historyEntry.project) return [];
-  const projectRoot = historyEntry.project;
+  // Resolve symlinks (e.g. macOS /var -> /private/var) so we match sessions
+  // whose cwd was canonicalized at scan time.
+  let projectRoot = historyEntry.project;
+  try { projectRoot = fs.realpathSync(projectRoot); } catch { /* dir gone */ }
 
   return sessions.filter(session =>
     session.agent === 'claude' &&

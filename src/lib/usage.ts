@@ -211,13 +211,28 @@ export async function getUsageInfoByIdentity(inputs: UsageIdentityInput[]): Prom
   };
 }
 
+const USAGE_CACHE_FRESH_MS = 2 * 60 * 1000; // 2 minutes
+
 export async function getUsageInfoForIdentity(input: UsageIdentityInput): Promise<UsageInfo> {
+  const usageKey = getUsageLookupKey(input.info);
+
+  // Fast path: serve from cache if fresh. Skips the network call entirely.
+  if (input.agentId === 'claude' && usageKey) {
+    const cached = readClaudeUsageCache(usageKey);
+    if (cached?.capturedAt) {
+      const ageMs = Date.now() - cached.capturedAt.getTime();
+      if (ageMs < USAGE_CACHE_FRESH_MS) {
+        return { snapshot: cached, error: null };
+      }
+    }
+  }
+
+  // Cache miss or stale — make the network call.
   const usage = await getUsageInfo(input.agentId, {
     home: input.home,
     cliVersion: input.cliVersion,
     organizationId: input.info.organizationId,
   });
-  const usageKey = getUsageLookupKey(input.info);
   if (input.agentId !== 'claude' || !usageKey) {
     return usage;
   }

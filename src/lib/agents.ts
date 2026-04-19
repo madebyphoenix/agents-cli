@@ -20,6 +20,57 @@ const execAsync = promisify(exec);
 
 const HOME = os.homedir();
 
+const CLI_VERSION_CACHE_PATH = path.join(HOME, '.agents', '.cli-version-cache.json');
+
+interface CliVersionCacheEntry {
+  binaryPath: string;
+  mtime: number;
+  version: string | null;
+}
+
+let cliVersionCache: Record<string, CliVersionCacheEntry> | null = null;
+
+function loadCliVersionCache(): Record<string, CliVersionCacheEntry> {
+  if (cliVersionCache) return cliVersionCache;
+  try {
+    cliVersionCache = JSON.parse(fs.readFileSync(CLI_VERSION_CACHE_PATH, 'utf-8'));
+  } catch {
+    /* missing or corrupt cache, rebuild */
+    cliVersionCache = {};
+  }
+  return cliVersionCache!;
+}
+
+function saveCliVersionCache(): void {
+  if (!cliVersionCache) return;
+  try {
+    const dir = path.dirname(CLI_VERSION_CACHE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CLI_VERSION_CACHE_PATH, JSON.stringify(cliVersionCache));
+  } catch {
+    /* best-effort cache persist */
+  }
+}
+
+/** Synchronous PATH search — no subprocess. Returns first matching binary path. */
+function findInPath(command: string): string | null {
+  const pathEnv = process.env.PATH || '';
+  const pathExt = process.platform === 'win32' ? (process.env.PATHEXT || '').split(';') : [''];
+  for (const dir of pathEnv.split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of pathExt) {
+      const full = path.join(dir, command + ext);
+      try {
+        const stat = fs.statSync(full);
+        if (stat.isFile()) return full;
+      } catch {
+        /* not in this dir */
+      }
+    }
+  }
+  return null;
+}
+
 export const AGENTS: Record<AgentId, AgentConfig> = {
   claude: {
     id: 'claude',
@@ -247,41 +298,55 @@ export function agentLabel(agentId: string): string {
 
 export async function isCliInstalled(agentId: AgentId): Promise<boolean> {
   const agent = AGENTS[agentId];
-  try {
-    await execAsync(`which ${agent.cliCommand}`);
-    return true;
-  } catch {
-    /* CLI not found in PATH */
-    return false;
-  }
+  return findInPath(agent.cliCommand) !== null;
 }
 
 export async function getCliVersion(agentId: AgentId): Promise<string | null> {
   const agent = AGENTS[agentId];
-  try {
-    const { stdout } = await execAsync(`${agent.cliCommand} --version`);
-    // OpenClaw uses format: openclaw/2026.1.29
-    if (agentId === 'openclaw') {
-      const match = stdout.match(/openclaw\/(\d+\.\d+\.\d+)/);
-      return match ? match[1] : stdout.trim();
-    }
-    const match = stdout.match(/(\d+\.\d+\.\d+)/);
-    return match ? match[1] : stdout.trim();
-  } catch {
-    /* version command failed or CLI not installed */
-    return null;
-  }
+  const binaryPath = findInPath(agent.cliCommand);
+  if (!binaryPath) return null;
+  return getCachedVersionForBinary(agentId, binaryPath);
 }
 
 export async function getCliPath(agentId: AgentId): Promise<string | null> {
-  const agent = AGENTS[agentId];
+  return findInPath(AGENTS[agentId].cliCommand);
+}
+
+/** Look up version from cache by (binary, mtime). On miss or stale, spawn `--version` and cache. */
+async function getCachedVersionForBinary(agentId: AgentId, binaryPath: string): Promise<string | null> {
+  let mtime = 0;
   try {
-    const { stdout } = await execAsync(`which ${agent.cliCommand}`);
-    return stdout.trim();
+    mtime = fs.statSync(binaryPath).mtimeMs;
   } catch {
-    /* CLI not found in PATH */
+    /* binary vanished between findInPath and statSync */
     return null;
   }
+
+  const cache = loadCliVersionCache();
+  const cached = cache[agentId];
+  if (cached && cached.binaryPath === binaryPath && cached.mtime === mtime) {
+    return cached.version;
+  }
+
+  const agent = AGENTS[agentId];
+  let version: string | null = null;
+  try {
+    const { stdout } = await execAsync(`${agent.cliCommand} --version`, { timeout: 3000 });
+    if (agentId === 'openclaw') {
+      const match = stdout.match(/openclaw\/(\d+\.\d+\.\d+)/);
+      version = match ? match[1] : stdout.trim();
+    } else {
+      const match = stdout.match(/(\d+\.\d+\.\d+)/);
+      version = match ? match[1] : stdout.trim();
+    }
+  } catch {
+    /* version command failed */
+    version = null;
+  }
+
+  cache[agentId] = { binaryPath, mtime, version };
+  saveCliVersionCache();
+  return version;
 }
 
 export async function getCliState(agentId: AgentId): Promise<CliState> {
@@ -320,12 +385,15 @@ export async function getCliState(agentId: AgentId): Promise<CliState> {
     }
   }
 
-  // Slow path: fall back to subprocess detection for non-version-managed installs
-  const installed = await isCliInstalled(agentId);
+  // Non-version-managed: single PATH lookup + cached version read
+  const binaryPath = findInPath(agent.cliCommand);
+  if (!binaryPath) {
+    return { installed: false, version: null, path: null };
+  }
   return {
-    installed,
-    version: installed ? await getCliVersion(agentId) : null,
-    path: installed ? await getCliPath(agentId) : null,
+    installed: true,
+    version: await getCachedVersionForBinary(agentId, binaryPath),
+    path: binaryPath,
   };
 }
 

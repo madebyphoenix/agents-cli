@@ -245,36 +245,39 @@ async function promptUpgrade(latestVersion: string): Promise<void> {
   }
 }
 
-async function checkForUpdates(): Promise<void> {
-  try {
-    const cache = readUpdateCache();
-
-    // If cache is fresh, use cached version — still prompt if update available
-    if (!shouldFetchLatest(cache) && cache?.latestVersion) {
-      if (cache.latestVersion !== VERSION && compareVersions(cache.latestVersion, VERSION) > 0) {
-        await promptUpgrade(cache.latestVersion);
+/** Fire-and-forget: refresh the registry cache in background. Never blocks the command. */
+function refreshUpdateCacheInBackground(): void {
+  fetch('https://registry.npmjs.org/@swarmify/agents-cli/latest', {
+    signal: AbortSignal.timeout(2000),
+  })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((data) => {
+      if (data && typeof (data as any).version === 'string') {
+        saveUpdateCheck((data as any).version);
       }
-      return;
-    }
-
-    // Cache stale or missing — fetch from registry
-    const response = await fetch('https://registry.npmjs.org/@swarmify/agents-cli/latest', {
-      signal: AbortSignal.timeout(2000),
+    })
+    .catch(() => {
+      /* network error, try again next invocation */
     });
-    if (!response.ok) return;
+}
 
-    const data = (await response.json()) as { version: string };
-    const latestVersion = data.version;
-    saveUpdateCheck(latestVersion);
+/** Synchronous cache read — prompt if cached latestVersion is newer. Triggers background refresh if cache is stale. */
+async function checkForUpdates(): Promise<void> {
+  const cache = readUpdateCache();
 
-    if (latestVersion !== VERSION && compareVersions(latestVersion, VERSION) > 0) {
-      await promptUpgrade(latestVersion);
+  // Kick off network refresh in background if stale. Does not block.
+  if (shouldFetchLatest(cache)) {
+    refreshUpdateCacheInBackground();
+  }
+
+  // Prompt based on current cache (may be from a previous run's background refresh)
+  if (cache?.latestVersion && cache.latestVersion !== VERSION && compareVersions(cache.latestVersion, VERSION) > 0) {
+    try {
+      await promptUpgrade(cache.latestVersion);
+    } catch (err) {
+      if (isPromptCancelled(err)) return;
+      /* prompt error, ignore */
     }
-  } catch (err) {
-    if (isPromptCancelled(err)) {
-      return;
-    }
-    // Silently ignore network errors
   }
 }
 

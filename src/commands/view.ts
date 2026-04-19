@@ -62,6 +62,10 @@ function formatLastActive(date: Date | null): string {
   return chalk.gray(`${days}d ago`);
 }
 
+function visibleWidth(s: string): number {
+  return s.replace(/\u001b\[[0-9;]*m/g, '').length;
+}
+
 function compareVersions(a: string, b: string): number {
   const partsA = a.split('.').map(Number);
   const partsB = b.split('.').map(Number);
@@ -205,6 +209,7 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
     let maxVerLabel = 0;
     let maxEmail = 0;
     let maxPlanWidth = 3;
+    let maxUsageWidth = 0;
     for (const agentId of versionManaged) {
       const versions = listInstalledVersions(agentId);
       const globalDefault = getGlobalDefault(agentId);
@@ -215,6 +220,18 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
         const info = rawInfo ? mergeCanonical(rawInfo) : undefined;
         if (info?.email) maxEmail = Math.max(maxEmail, info.email.length);
         if (info?.plan) maxPlanWidth = Math.max(maxPlanWidth, info.plan.length);
+      }
+    }
+    // Second pass: compute max visible usage width (now that maxPlanWidth is settled)
+    for (const agentId of versionManaged) {
+      const versions = listInstalledVersions(agentId);
+      for (const v of versions) {
+        const rawInfo = infoMap.get(`${agentId}:${v}`);
+        const info = rawInfo ? mergeCanonical(rawInfo) : undefined;
+        const usageKey = getUsageLookupKey(info);
+        const usageInfo = usageKey ? usageByKey.get(usageKey) : undefined;
+        const usageStr = formatUsageSummary(info?.plan || null, usageInfo?.snapshot || null, maxPlanWidth);
+        maxUsageWidth = Math.max(maxUsageWidth, visibleWidth(usageStr));
       }
     }
 
@@ -247,15 +264,20 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
         const parts = [`    ${label}`];
         const hasEmail = !!vInfo?.email;
         const usageStr = formatUsageSummary(vInfo?.plan || null, usageInfo?.snapshot || null, maxPlanWidth);
-        const activeStr = vInfo ? formatLastActive(vInfo.lastActive) : '';
         const hasUsage = usageStr.length > 0;
+        // Only show lastActive for versions with an actual logged-in account.
+        // Otherwise it reflects install time (misleading "just now" for fresh installs).
+        const activeStr = vInfo && hasEmail ? formatLastActive(vInfo.lastActive) : '';
         const hasActive = activeStr.length > 0;
 
         if (hasEmail || hasUsage || hasActive) {
           const emailCol = (vInfo?.email || '').padEnd(maxEmail);
           parts.push(hasEmail ? chalk.cyan(emailCol) : ' '.repeat(maxEmail));
         }
-        if (hasUsage || hasActive) parts.push(usageStr || ' '.repeat(10));
+        if (hasUsage || hasActive) {
+          const usagePad = ' '.repeat(Math.max(0, maxUsageWidth - visibleWidth(usageStr)));
+          parts.push(usageStr + usagePad);
+        }
         if (hasActive) parts.push(activeStr);
 
         console.log(parts.join('  '));
@@ -308,6 +330,9 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
       console.log(parts.join('  '));
       if (showPaths && cliState?.path) {
         console.log(chalk.gray(`      ${cliState.path}`));
+      }
+      if (agent.npmPackage && cliState?.version) {
+        console.log(chalk.gray(`    Manage: agents add ${agentId}@${cliState.version} -y`));
       }
       console.log();
     }

@@ -1,0 +1,46 @@
+{
+  "node": "v22.21.1",
+  "timestamp": "2026-04-19T12:08:18.088Z",
+  "sessionsCount": 4375,
+  "pre": {
+    "indexJsonlBytes": 25693740,
+    "contentIndexJsonlBytes": 23613543,
+    "sessionsDbBytes": 0
+  },
+  "post": {
+    "indexJsonlBytes": 25693740,
+    "contentIndexJsonlBytes": 23613543,
+    "sessionsDbBytes": 42045440
+  },
+  "A_coldDiscoverMs": 25899.492542,
+  "B_warmDiscoverMs": 49.55945800000336,
+  "B_warmDiscoverAllRunsMs": [
+    69.85504199999923,
+    53.56066699999792,
+    49.55945800000336
+  ],
+  "C_singleKeystrokeMs": 10.966374999999971,
+  "C_singleKeystrokeMatches": 200,
+  "D_typingTotalMs": 71.03829200000473,
+  "D_typingAvgMsPerKey": 7.103829200000473,
+  "D_typingPerKeyMs": [
+    5.237167000002955,
+    8.858875000001717,
+    6.049832999997307,
+    6.44575000000259,
+    6.14287499999773,
+    5.653375000001688,
+    9.986375000000407,
+    9.51837499999965,
+    6.548125000001164,
+    6.597541999999521
+  ],
+  "E_searchContentBestMs": 4.886375000001863,
+  "E_searchContentAllRunsMs": [
+    5.857665999999881,
+    5.37029099999927,
+    4.9305830000012065,
+    4.886375000001863,
+    5.101666999998997
+  ]
+}

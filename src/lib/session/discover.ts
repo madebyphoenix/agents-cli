@@ -10,12 +10,27 @@ import { AGENTS, getCliVersion } from '../agents.js';
 import { getConfigSymlinkVersion } from '../shims.js';
 import { SESSION_AGENTS } from './types.js';
 import { extractSessionTopic } from './prompt.js';
+import {
+  getDB,
+  getScanStampByPath,
+  getScanStampsForPaths,
+  recordScans,
+  upsertSessionsBatch,
+  querySessions,
+  ftsSearch,
+  type ScanStamp,
+} from './db.js';
 
 const HOME = os.homedir();
 const AGENTS_DIR = path.join(HOME, '.agents');
-const SESSIONS_DIR = path.join(AGENTS_DIR, 'sessions');
-const INDEX_PATH = path.join(SESSIONS_DIR, 'index.jsonl');
-const CONTENT_INDEX_PATH = path.join(SESSIONS_DIR, 'content_index.jsonl');
+
+const LEGACY_SESSIONS_DIR = path.join(AGENTS_DIR, 'sessions');
+const LEGACY_INDEX_PATH = path.join(LEGACY_SESSIONS_DIR, 'index.jsonl');
+const LEGACY_CONTENT_INDEX_PATH = path.join(LEGACY_SESSIONS_DIR, 'content_index.jsonl');
+
+/** How long OpenClaw channel/cron snapshots stay valid before we re-shell-out. */
+const OPENCLAW_TTL_MS = 60_000;
+
 let cachedOpenClawWorkspaces: Map<string, string> | null = null;
 
 export interface DiscoverOptions {
@@ -28,6 +43,14 @@ export interface DiscoverOptions {
   since?: string;
   /** Filter sessions older than this (ISO timestamp) */
   until?: string;
+  /** Called as each agent makes parsing progress. Totals count only files that need re-parsing (cache misses). */
+  onProgress?: (progress: ScanProgress) => void;
+}
+
+export interface ScanProgress {
+  agent: SessionAgentId;
+  parsed: number;
+  total: number;
 }
 
 interface ClaudeSessionScan {
@@ -38,8 +61,8 @@ interface ClaudeSessionScan {
   topic?: string;
   messageCount: number;
   tokenCount?: number;
-  /** Tokenized user message terms (for content search index) */
-  userTerms?: string[];
+  /** Concatenated user message text, ready to hand to FTS5. */
+  contentText?: string;
 }
 
 interface CodexSessionScan {
@@ -51,91 +74,62 @@ interface CodexSessionScan {
   topic?: string;
   messageCount: number;
   tokenCount?: number;
-  /** Tokenized user message terms (for content search index) */
-  userTerms?: string[];
+  contentText?: string;
 }
 
 const cachedAgentVersions = new Map<SessionAgentId, Promise<string | undefined>>();
 
+interface ScanEntry {
+  meta: SessionMeta;
+  content: string;
+  scan: ScanStamp;
+}
+
 /**
- * Discover sessions across all installed agents, versions, and backups.
- * Merges with a persistent index so sessions survive version removal.
- * Returns SessionMeta[] sorted by timestamp descending (most recent first).
+ * Discover sessions. Scans only files whose (mtime, size) have changed since
+ * the last run; everything else is served from the SQLite cache.
  */
 export async function discoverSessions(options?: DiscoverOptions): Promise<SessionMeta[]> {
-  const agents = options?.agent ? [options.agent] : SESSION_AGENTS;
-  const limit = options?.limit ?? 50;
+  // Touch the DB so the schema is ready and connection is cached for this run.
+  getDB();
 
-  const results = await Promise.all(
+  const agents = options?.agent ? [options.agent] : SESSION_AGENTS;
+  const onProgress = options?.onProgress;
+
+  // Incrementally re-scan changed files across all selected agents in parallel.
+  await Promise.all(
     agents.map(agent => {
       switch (agent) {
-        case 'claude': return discoverClaudeSessions();
-        case 'codex': return discoverCodexSessions();
-        case 'gemini': return discoverGeminiSessions();
-        case 'opencode': return discoverOpenCodeSessions();
-        case 'openclaw': return discoverOpenClawSessions();
+        case 'claude': return scanClaudeIncremental(onProgress);
+        case 'codex': return scanCodexIncremental(onProgress);
+        case 'gemini': return scanGeminiIncremental(onProgress);
+        case 'opencode': return scanOpenCodeIncremental();
+        case 'openclaw': return scanOpenClawIncremental();
       }
-    })
+    }),
   );
 
-  let sessions = results.flat();
-
-  // Merge with persistent index (preserves sessions whose files were removed)
-  const index = loadIndex();
-  const liveIds = new Set(sessions.map(s => s.id));
-  const agentFilter = new Set(agents);
-
-  // Add matching index entries to display results
-  index.forEach((entry, id) => {
-    if (!liveIds.has(id) && agentFilter.has(entry.agent)) {
-      sessions.push(entry);
-    }
-  });
-
-  // Persist: merge live sessions into full index (don't drop unqueried agents)
-  const toSave = new Map(index);
-  for (const s of sessions) {
-    toSave.set(s.id, s);
-  }
-  saveIndex([...toSave.values()]);
-
-  // Build BM25 content index for all discovered sessions
-  const bm25 = buildBM25Index(sessions);
-  saveBM25Index(bm25);
-
   const projectQuery = options?.project?.trim();
+  const sinceMs = options?.since ? parseTimeFilter(options.since) : undefined;
+  const untilMs = options?.until ? new Date(options.until).getTime() : undefined;
 
-  // Filter by project (case-insensitive substring match)
-  if (projectQuery) {
-    const query = projectQuery.toLowerCase();
-    sessions = sessions.filter(s => s.project?.toLowerCase().includes(query));
-  }
-
-  // Apply time range filters
-  if (options?.since || options?.until) {
-    const sinceMs = options.since ? parseTimeFilter(options.since) : 0;
-    const untilMs = options.until ? new Date(options.until).getTime() : Infinity;
-    sessions = sessions.filter(s => {
-      const ts = new Date(s.timestamp).getTime();
-      return ts >= sinceMs && ts <= untilMs;
-    });
-  }
-
-  // An explicit project search should scan across directories instead of
-  // intersecting with the default cwd-only scope.
+  // If no explicit --all or --project, we limit to the current cwd.
+  let cwdFilter: string | undefined;
   if (!options?.all && !projectQuery) {
-    const currentDir = normalizeCwd(options?.cwd || process.cwd());
-    sessions = sessions.filter(s => normalizeCwd(s.cwd) === currentDir);
+    cwdFilter = normalizeCwd(options?.cwd || process.cwd());
   }
 
-  // Sort by timestamp descending
-  sessions.sort((a, b) => {
-    const ta = new Date(a.timestamp).getTime() || 0;
-    const tb = new Date(b.timestamp).getTime() || 0;
-    return tb - ta;
+  const sessions = querySessions({
+    agent: options?.agent,
+    agents: options?.agent ? undefined : agents,
+    cwd: cwdFilter,
+    project: projectQuery,
+    sinceMs,
+    untilMs: Number.isFinite(untilMs as number) ? untilMs : undefined,
+    limit: options?.limit ?? 50,
   });
 
-  return sessions.slice(0, limit);
+  return sessions;
 }
 
 function normalizeCwd(cwd?: string): string {
@@ -145,188 +139,78 @@ function normalizeCwd(cwd?: string): string {
 }
 
 /**
- * Resolve a session by full or short ID from the full index.
+ * Resolve a session by full or short ID. Accepts a pre-loaded session list
+ * (fast path from discoverSessions) and falls back to a DB lookup for the
+ * "I only know the id" case.
  */
 export function resolveSessionById(sessions: SessionMeta[], idQuery: string): SessionMeta[] {
   const query = idQuery.toLowerCase();
-  // Exact match first (full id or shortId)
   const exact = sessions.filter(s =>
-    s.id.toLowerCase() === query || s.shortId.toLowerCase() === query
+    s.id.toLowerCase() === query || s.shortId.toLowerCase() === query,
   );
   if (exact.length > 0) return exact;
-  // Prefix match (against both id and shortId)
   return sessions.filter(s =>
-    s.id.toLowerCase().startsWith(query) || s.shortId.toLowerCase().startsWith(query)
+    s.id.toLowerCase().startsWith(query) || s.shortId.toLowerCase().startsWith(query),
   );
 }
 
 // ---------------------------------------------------------------------------
-// Persistent session index
+// Content-index search (FTS5-backed)
 // ---------------------------------------------------------------------------
 
-function loadIndex(): Map<string, SessionMeta> {
-  const map = new Map<string, SessionMeta>();
-  if (!fs.existsSync(INDEX_PATH)) return map;
+/**
+ * Run an FTS5 search over the DB and intersect with the given session list,
+ * preserving the existing SessionMeta[] contract so sessions.ts is unchanged.
+ */
+export function searchContentIndex(
+  sessions: SessionMeta[],
+  query: string,
+): Map<string, SessionMeta> {
+  if (!query.trim()) return new Map();
+  const hits = ftsSearch(query);
+  if (hits.length === 0) return new Map();
 
-  try {
-    const content = fs.readFileSync(INDEX_PATH, 'utf-8');
-    for (const line of content.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        const entry = JSON.parse(line) as SessionMeta;
-        if (entry.id) map.set(entry.id, entry);
-      } catch { /* malformed index entry, skip */ }
-    }
-  } catch (err: any) {
-    console.error(`Warning: Could not load session cache (${err.message}). Rebuilding...`);
+  const byId = new Map(sessions.map(s => [s.id, s]));
+  const result = new Map<string, SessionMeta>();
+  for (const hit of hits) {
+    const session = byId.get(hit.sessionId);
+    if (!session) continue;
+    result.set(hit.sessionId, {
+      ...session,
+      _matchedTerms: hit.matchedTerms,
+      _bm25Score: hit.score,
+    });
   }
-
-  return map;
-}
-
-function saveIndex(sessions: SessionMeta[]): void {
-  try {
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    // Deduplicate by id, keeping the first occurrence (live sessions take priority)
-    const seen = new Set<string>();
-    const lines: string[] = [];
-    for (const s of sessions) {
-      if (seen.has(s.id)) continue;
-      seen.add(s.id);
-      lines.push(JSON.stringify(s));
-    }
-    fs.writeFileSync(INDEX_PATH, lines.join('\n') + '\n', 'utf-8');
-  } catch (err: any) {
-    console.error(`Warning: Could not save session cache: ${err.message}`);
-  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
-// BM25 content index
+// Incremental scan orchestration
 // ---------------------------------------------------------------------------
 
-const BM25_K1 = 1.2;
-const BM25_B = 0.75;
-const BM25_INDEX_VERSION = 2;
-
-export interface BM25Index {
-  N: number;
-  avgdl: number;
-  docLengths: Map<string, number>;
-  postings: Map<string, Map<string, number>>;
-}
-
-function tokenizeCounted(text: string): { length: number; counts: Map<string, number> } {
-  const counts = new Map<string, number>();
-  let length = 0;
-  const raw = text.toLowerCase().split(/[^a-z0-9]+/);
-  for (const token of raw) {
-    if (token.length < 2) continue;
-    length++;
-    counts.set(token, (counts.get(token) ?? 0) + 1);
-  }
-  return { length, counts };
-}
-
-function collectSessionText(s: SessionMeta): string {
-  const parts: string[] = [];
-  if (s.topic) parts.push(s.topic);
-  if (s.project) parts.push(s.project);
-  if (s.cwd) parts.push(s.cwd);
-  if (s.gitBranch) parts.push(s.gitBranch);
-  if (s.account) parts.push(s.account);
-  if (s._userTerms) parts.push(s._userTerms.join('\n'));
-  return parts.join('\n');
-}
-
-export function buildBM25Index(sessions: SessionMeta[]): BM25Index {
-  const docLengths = new Map<string, number>();
-  const postings = new Map<string, Map<string, number>>();
-  let totalLength = 0;
-
-  for (const session of sessions) {
-    const { length, counts } = tokenizeCounted(collectSessionText(session));
-    docLengths.set(session.id, length);
-    totalLength += length;
-    for (const [term, tf] of counts) {
-      let termPostings = postings.get(term);
-      if (!termPostings) {
-        termPostings = new Map();
-        postings.set(term, termPostings);
-      }
-      termPostings.set(session.id, tf);
-    }
-  }
-
-  const N = sessions.length;
-  const avgdl = N > 0 ? totalLength / N : 0;
-  return { N, avgdl, docLengths, postings };
-}
-
-function saveBM25Index(index: BM25Index): void {
-  try {
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    const lines: string[] = [];
-    lines.push(JSON.stringify({ v: BM25_INDEX_VERSION, N: index.N, avgdl: index.avgdl }));
-    for (const [sid, len] of index.docLengths) {
-      lines.push(JSON.stringify({ d: sid, l: len }));
-    }
-    for (const [term, termPostings] of index.postings) {
-      const p: Array<[string, number]> = [];
-      for (const [sid, tf] of termPostings) p.push([sid, tf]);
-      lines.push(JSON.stringify({ t: term, p }));
-    }
-    fs.writeFileSync(CONTENT_INDEX_PATH, lines.join('\n') + '\n', 'utf-8');
-  } catch { /* non-fatal */ }
-}
-
-function loadBM25Index(): BM25Index | null {
-  if (!fs.existsSync(CONTENT_INDEX_PATH)) return null;
-  let content: string;
-  try {
-    content = fs.readFileSync(CONTENT_INDEX_PATH, 'utf-8');
-  } catch {
-    return null;
-  }
-
-  const lines = content.split('\n').filter(l => l.trim());
-  if (lines.length === 0) return null;
-
-  let header: any;
-  try {
-    header = JSON.parse(lines[0]);
-  } catch {
-    return null;
-  }
-  if (header?.v !== BM25_INDEX_VERSION) return null;
-
-  const index: BM25Index = {
-    N: Number(header.N) || 0,
-    avgdl: Number(header.avgdl) || 0,
-    docLengths: new Map(),
-    postings: new Map(),
-  };
-
-  for (let i = 1; i < lines.length; i++) {
-    let entry: any;
-    try {
-      entry = JSON.parse(lines[i]);
-    } catch {
+/**
+ * For a list of files, stat each, compare to the DB ledger, and return only
+ * the ones that need rescanning. One bulk DB query for the whole list.
+ */
+function filterChangedFiles(
+  filePaths: string[],
+): Array<{ filePath: string; scan: ScanStamp }> {
+  const ledger = getScanStampsForPaths(filePaths);
+  const out: Array<{ filePath: string; scan: ScanStamp }> = [];
+  for (const filePath of filePaths) {
+    const stat = safeStatSync(filePath);
+    if (!stat) continue;
+    const scan: ScanStamp = {
+      fileMtimeMs: Math.floor(stat.mtimeMs),
+      fileSize: stat.size,
+    };
+    const prev = ledger.get(filePath);
+    if (prev && prev.fileMtimeMs === scan.fileMtimeMs && prev.fileSize === scan.fileSize) {
       continue;
     }
-    if (typeof entry.d === 'string' && typeof entry.l === 'number') {
-      index.docLengths.set(entry.d, entry.l);
-    } else if (typeof entry.t === 'string' && Array.isArray(entry.p)) {
-      const termPostings = new Map<string, number>();
-      for (const pair of entry.p) {
-        if (Array.isArray(pair) && pair.length >= 2) {
-          termPostings.set(String(pair[0]), Number(pair[1]));
-        }
-      }
-      index.postings.set(entry.t, termPostings);
-    }
+    out.push({ filePath, scan });
   }
-  return index;
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -334,13 +218,8 @@ function loadBM25Index(): BM25Index | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Collect all directories to scan for an agent's sessions.
- * Scans: active config dir, all installed version homes, and backups.
- * Deduplicates by realpath to avoid double-counting the active symlink.
- *
- * @param agent - Agent name (claude, codex, gemini)
- * @param subdir - Subdirectory within the agent's config dir where sessions live
- *                 (e.g., 'projects' for Claude, 'sessions' for Codex, 'tmp' for Gemini)
+ * Collect all directories to scan for an agent's sessions. Deduplicates by
+ * realpath to avoid double-counting symlinked version homes.
  */
 export function getAgentSessionDirs(agent: string, subdir: string): string[] {
   const resolved = new Set<string>();
@@ -355,27 +234,24 @@ export function getAgentSessionDirs(agent: string, subdir: string): string[] {
     dirs.push(dir);
   }
 
-  // 1. Active config (may be a symlink to the current version's home)
   addDir(path.join(HOME, `.${agent}`, subdir));
 
-  // 2. All installed version homes
   const versionsBase = path.join(AGENTS_DIR, 'versions', agent);
   if (fs.existsSync(versionsBase)) {
     try {
       for (const version of fs.readdirSync(versionsBase)) {
         addDir(path.join(versionsBase, version, 'home', `.${agent}`, subdir));
       }
-    } catch { /* dir unreadable or missing */ }
+    } catch { /* dir unreadable */ }
   }
 
-  // 3. Backups (from before version management was enabled)
   const backupsBase = path.join(AGENTS_DIR, 'backups', agent);
   if (fs.existsSync(backupsBase)) {
     try {
       for (const ts of fs.readdirSync(backupsBase)) {
         addDir(path.join(backupsBase, ts, subdir));
       }
-    } catch { /* dir unreadable or missing */ }
+    } catch { /* dir unreadable */ }
   }
 
   return dirs;
@@ -390,12 +266,8 @@ let cachedClaudeAccount: string | undefined;
 function getClaudeAccount(): string | undefined {
   if (cachedClaudeAccount !== undefined) return cachedClaudeAccount || undefined;
 
-  // Check all possible locations for .claude.json
-  const candidates = [
-    path.join(HOME, '.claude.json'),
-  ];
+  const candidates = [path.join(HOME, '.claude.json')];
 
-  // Also check version homes (auth files are symlinked there)
   const versionsBase = path.join(AGENTS_DIR, 'versions', 'claude');
   if (fs.existsSync(versionsBase)) {
     try {
@@ -425,11 +297,10 @@ function getClaudeAccount(): string | undefined {
 // Claude
 // ---------------------------------------------------------------------------
 
-async function discoverClaudeSessions(): Promise<SessionMeta[]> {
-  const sessions: SessionMeta[] = [];
-  const seen = new Set<string>();
+async function scanClaudeIncremental(onProgress?: (p: ScanProgress) => void): Promise<void> {
   const account = getClaudeAccount();
-  let skipped = 0;
+  const filePaths: string[] = [];
+  const seen = new Set<string>();
 
   for (const projectsDir of getAgentSessionDirs('claude', 'projects')) {
     let projectDirs: string[];
@@ -455,29 +326,50 @@ async function discoverClaudeSessions(): Promise<SessionMeta[]> {
         const sessionId = file.replace('.jsonl', '');
         if (seen.has(sessionId)) continue;
         seen.add(sessionId);
-
-        const filePath = path.join(dirPath, file);
-        try {
-          const meta = await readClaudeMeta(filePath, sessionId, account);
-          if (meta) sessions.push(meta);
-        } catch { skipped++; }
+        filePaths.push(path.join(dirPath, file));
       }
     }
   }
 
-  if (skipped > 0 && process.env.AGENTS_DEBUG) {
-    console.error(`[debug] Skipped ${skipped} unreadable Claude session(s)`);
+  const changed = filterChangedFiles(filePaths);
+  if (changed.length === 0) return;
+
+  onProgress?.({ agent: 'claude', parsed: 0, total: changed.length });
+
+  const entries: ScanEntry[] = [];
+  const touched: Array<{ filePath: string; scan: ScanStamp }> = [];
+  let parsed = 0;
+  for (const { filePath, scan } of changed) {
+    try {
+      const sessionId = path.basename(filePath).replace('.jsonl', '');
+      const result = await readClaudeMeta(filePath, sessionId, account);
+      if (result) {
+        entries.push({ meta: result.meta, content: result.content, scan });
+      } else {
+        touched.push({ filePath, scan });
+      }
+    } catch {
+      touched.push({ filePath, scan });
+    }
+    parsed++;
+    onProgress?.({ agent: 'claude', parsed, total: changed.length });
   }
 
-  return sessions;
+  upsertSessionsBatch(entries);
+  recordScans(touched);
 }
 
-async function readClaudeMeta(filePath: string, sessionId: string, account?: string): Promise<SessionMeta | null> {
+async function readClaudeMeta(
+  filePath: string,
+  sessionId: string,
+  account?: string,
+): Promise<{ meta: SessionMeta; content: string } | null> {
   const scan = await scanClaudeSession(filePath);
 
+  let meta: SessionMeta;
   if (scan.timestamp) {
-    const cwd = scan.cwd || '';
-    return {
+    const cwd = normalizeCwd(scan.cwd || '');
+    meta = {
       id: sessionId,
       shortId: sessionId.slice(0, 8),
       agent: 'claude',
@@ -491,24 +383,23 @@ async function readClaudeMeta(filePath: string, sessionId: string, account?: str
       topic: scan.topic,
       messageCount: scan.messageCount,
       tokenCount: scan.tokenCount,
-      _userTerms: scan.userTerms?.flatMap(splitLines),
+    };
+  } else {
+    const stat = safeStatSync(filePath);
+    meta = {
+      id: sessionId,
+      shortId: sessionId.slice(0, 8),
+      agent: 'claude',
+      timestamp: stat ? stat.mtime.toISOString() : new Date().toISOString(),
+      filePath,
+      account,
+      messageCount: scan.messageCount,
+      tokenCount: scan.tokenCount,
+      topic: scan.topic,
     };
   }
 
-  // Fallback: use file mtime
-  const stat = safeStatSync(filePath);
-  return {
-    id: sessionId,
-    shortId: sessionId.slice(0, 8),
-    agent: 'claude',
-    timestamp: stat ? stat.mtime.toISOString() : new Date().toISOString(),
-    filePath,
-    account,
-    messageCount: scan.messageCount,
-    tokenCount: scan.tokenCount,
-    topic: scan.topic,
-    _userTerms: scan.userTerms?.flatMap(splitLines),
-  };
+  return { meta, content: scan.contentText || '' };
 }
 
 // ---------------------------------------------------------------------------
@@ -520,11 +411,8 @@ let cachedCodexAccount: string | undefined;
 function getCodexAccount(): string | undefined {
   if (cachedCodexAccount !== undefined) return cachedCodexAccount || undefined;
 
-  const candidates = [
-    path.join(HOME, '.codex', 'auth.json'),
-  ];
+  const candidates = [path.join(HOME, '.codex', 'auth.json')];
 
-  // Also check version homes
   const versionsBase = path.join(AGENTS_DIR, 'versions', 'codex');
   if (fs.existsSync(versionsBase)) {
     try {
@@ -538,7 +426,6 @@ function getCodexAccount(): string | undefined {
     try {
       if (!fs.existsSync(candidate)) continue;
       const data = JSON.parse(fs.readFileSync(candidate, 'utf-8'));
-      // Extract email from JWT id_token payload
       const idToken = data.tokens?.id_token;
       if (idToken) {
         const parts = idToken.split('.');
@@ -561,45 +448,58 @@ function getCodexAccount(): string | undefined {
 // Codex
 // ---------------------------------------------------------------------------
 
-async function discoverCodexSessions(): Promise<SessionMeta[]> {
-  const sessions: SessionMeta[] = [];
-  const seen = new Set<string>();
+async function scanCodexIncremental(onProgress?: (p: ScanProgress) => void): Promise<void> {
   const account = getCodexAccount();
   const currentVersion = await getCurrentAgentVersion('codex');
-  let skipped = 0;
 
+  const filePaths: string[] = [];
   for (const sessionsDir of getAgentSessionDirs('codex', 'sessions')) {
-    const jsonlFiles = walkForFiles(sessionsDir, '.jsonl', 200);
-
-    for (const filePath of jsonlFiles) {
-      try {
-        const meta = await readCodexMeta(filePath, account, currentVersion);
-        if (meta && !seen.has(meta.id)) {
-          seen.add(meta.id);
-          sessions.push(meta);
-        }
-      } catch { skipped++; }
+    // High limit: we only stat files here, parsing is gated by ledger match.
+    for (const fp of walkForFiles(sessionsDir, '.jsonl', 100_000)) {
+      filePaths.push(fp);
     }
   }
 
-  if (skipped > 0 && process.env.AGENTS_DEBUG) {
-    console.error(`[debug] Skipped ${skipped} unreadable Codex session(s)`);
+  const changed = filterChangedFiles(filePaths);
+  if (changed.length === 0) return;
+
+  onProgress?.({ agent: 'codex', parsed: 0, total: changed.length });
+
+  const entries: ScanEntry[] = [];
+  const touched: Array<{ filePath: string; scan: ScanStamp }> = [];
+  const seen = new Set<string>();
+  let parsed = 0;
+  for (const { filePath, scan } of changed) {
+    try {
+      const result = await readCodexMeta(filePath, account, currentVersion);
+      if (result && !seen.has(result.meta.id)) {
+        seen.add(result.meta.id);
+        entries.push({ meta: result.meta, content: result.content, scan });
+      } else {
+        touched.push({ filePath, scan });
+      }
+    } catch {
+      touched.push({ filePath, scan });
+    }
+    parsed++;
+    onProgress?.({ agent: 'codex', parsed, total: changed.length });
   }
 
-  return sessions;
+  upsertSessionsBatch(entries);
+  recordScans(touched);
 }
 
 async function readCodexMeta(
   filePath: string,
   account?: string,
   currentVersion?: string,
-): Promise<SessionMeta | null> {
+): Promise<{ meta: SessionMeta; content: string } | null> {
   const scan = await scanCodexSession(filePath);
   const sessionId = scan.sessionId || '';
   if (!sessionId) return null;
 
-  const cwd = scan.cwd || '';
-  return {
+  const cwd = normalizeCwd(scan.cwd || '');
+  const meta: SessionMeta = {
     id: sessionId,
     shortId: sessionId.slice(0, 8),
     agent: 'codex',
@@ -613,21 +513,19 @@ async function readCodexMeta(
     messageCount: scan.messageCount,
     tokenCount: scan.tokenCount,
     account,
-    _userTerms: scan.userTerms?.flatMap(splitLines),
   };
+  return { meta, content: scan.contentText || '' };
 }
 
 // ---------------------------------------------------------------------------
 // Gemini
 // ---------------------------------------------------------------------------
 
-async function discoverGeminiSessions(): Promise<SessionMeta[]> {
-  const projectMap = buildGeminiProjectMap();
-  const sessions: SessionMeta[] = [];
-  const seen = new Set<string>();
+async function scanGeminiIncremental(onProgress?: (p: ScanProgress) => void): Promise<void> {
   const currentVersion = await getCurrentAgentVersion('gemini');
-  let skipped = 0;
+  const projectMap = buildGeminiProjectMap();
 
+  const filePaths: Array<{ filePath: string; hashDir: string }> = [];
   for (const tmpDir of getAgentSessionDirs('gemini', 'tmp')) {
     let hashDirs: string[];
     try {
@@ -648,23 +546,42 @@ async function discoverGeminiSessions(): Promise<SessionMeta[]> {
       }
 
       for (const file of chatFiles) {
-        const filePath = path.join(chatsDir, file);
-        try {
-          const meta = readGeminiMeta(filePath, hashDir, projectMap, currentVersion);
-          if (meta && !seen.has(meta.id)) {
-            seen.add(meta.id);
-            sessions.push(meta);
-          }
-        } catch { skipped++; }
+        filePaths.push({ filePath: path.join(chatsDir, file), hashDir });
       }
     }
   }
 
-  if (skipped > 0 && process.env.AGENTS_DEBUG) {
-    console.error(`[debug] Skipped ${skipped} unreadable Gemini session(s)`);
+  const changedPaths = filterChangedFiles(filePaths.map(f => f.filePath));
+  const changedByPath = new Map(changedPaths.map(c => [c.filePath, c.scan]));
+  if (changedByPath.size === 0) return;
+
+  onProgress?.({ agent: 'gemini', parsed: 0, total: changedByPath.size });
+
+  const entries: ScanEntry[] = [];
+  const touched: Array<{ filePath: string; scan: ScanStamp }> = [];
+  const seen = new Set<string>();
+  let parsed = 0;
+  for (const { filePath, hashDir } of filePaths) {
+    const scan = changedByPath.get(filePath);
+    if (!scan) continue;
+    try {
+      const result = readGeminiMeta(filePath, hashDir, projectMap, currentVersion);
+      if (result && !seen.has(result.meta.id)) {
+        seen.add(result.meta.id);
+        entries.push({ meta: result.meta, content: result.content, scan });
+      } else {
+        // Gemini file without a sessionId — record scan so we don't re-parse it next run.
+        touched.push({ filePath, scan });
+      }
+    } catch {
+      touched.push({ filePath, scan });
+    }
+    parsed++;
+    onProgress?.({ agent: 'gemini', parsed, total: changedByPath.size });
   }
 
-  return sessions;
+  upsertSessionsBatch(entries);
+  recordScans(touched);
 }
 
 function readGeminiMeta(
@@ -672,7 +589,7 @@ function readGeminiMeta(
   hashDir: string,
   projectMap: Map<string, { name: string; path: string }>,
   currentVersion?: string,
-): SessionMeta | null {
+): { meta: SessionMeta; content: string } | null {
   let session: any;
   try {
     session = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
@@ -690,10 +607,9 @@ function readGeminiMeta(
       : undefined;
   if (!sessionId) return null;
 
-  // Resolve project name from hash
   const projectInfo = projectMap.get(projectHash || hashDir);
   const project = projectInfo?.name || hashDir.slice(0, 12);
-  const cwd = projectInfo?.path;
+  const cwd = projectInfo?.path ? normalizeCwd(projectInfo.path) : undefined;
 
   const stat = safeStatSync(filePath);
 
@@ -702,14 +618,14 @@ function readGeminiMeta(
   let messageCount = 0;
   let tokenCount = 0;
   let sawTokenCount = false;
-  const userTerms: string[] = [];
+  const userTexts: string[] = [];
 
   for (const message of messages) {
     if (message.type === 'user') {
       const text = extractGeminiMessageText(message.content);
       if (text) {
         messageCount++;
-        userTerms.push(text);
+        userTexts.push(text);
         if (!topic) topic = extractSessionTopic(text);
       }
     } else if (message.type === 'gemini') {
@@ -725,7 +641,7 @@ function readGeminiMeta(
     }
   }
 
-  return {
+  const meta: SessionMeta = {
     id: sessionId,
     shortId: sessionId.slice(0, 8),
     agent: 'gemini',
@@ -737,42 +653,38 @@ function readGeminiMeta(
     topic,
     messageCount,
     tokenCount: sawTokenCount ? tokenCount : undefined,
-    _userTerms: userTerms.length > 0 ? userTerms : undefined,
   };
+  return { meta, content: userTexts.join('\n') };
 }
 
 function buildGeminiProjectMap(): Map<string, { name: string; path: string }> {
   const map = new Map<string, { name: string; path: string }>();
   const projectsJsonPath = path.join(HOME, '.gemini', 'projects.json');
 
-  if (!fs.existsSync(projectsJsonPath)) return map;
+  if (fs.existsSync(projectsJsonPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(projectsJsonPath, 'utf-8'));
+      const projects = data.projects;
 
-  try {
-    const data = JSON.parse(fs.readFileSync(projectsJsonPath, 'utf-8'));
-    const projects = data.projects;
-
-    if (typeof projects === 'object' && projects !== null) {
-      if (Array.isArray(projects)) {
-        // Array format: ["path1", "path2"]
-        for (const p of projects) {
-          if (typeof p === 'string') {
+      if (typeof projects === 'object' && projects !== null) {
+        if (Array.isArray(projects)) {
+          for (const p of projects) {
+            if (typeof p === 'string') {
+              const hash = sha256(p);
+              map.set(hash, { name: path.basename(p), path: p });
+              map.set(p, { name: path.basename(p), path: p });
+            }
+          }
+        } else {
+          for (const [p, name] of Object.entries(projects)) {
             const hash = sha256(p);
-            map.set(hash, { name: path.basename(p), path: p });
-            // Also try the raw directory name
-            map.set(p, { name: path.basename(p), path: p });
+            map.set(hash, { name: String(name), path: p });
           }
         }
-      } else {
-        // Object format: {path: name}
-        for (const [p, name] of Object.entries(projects)) {
-          const hash = sha256(p);
-          map.set(hash, { name: String(name), path: p });
-        }
       }
-    }
-  } catch { /* projects.json missing or malformed */ }
+    } catch { /* projects.json missing or malformed */ }
+  }
 
-  // Also check ~/.gemini/history/*/.project_root for additional mappings
   const historyDir = path.join(HOME, '.gemini', 'history');
   if (fs.existsSync(historyDir)) {
     try {
@@ -805,7 +717,6 @@ let cachedOpenCodeAccount: string | undefined;
 function getOpenCodeAccount(): string | undefined {
   if (cachedOpenCodeAccount !== undefined) return cachedOpenCodeAccount || undefined;
 
-  // Try control_account table in the DB
   try {
     if (fs.existsSync(OPENCODE_DB)) {
       const out = execSync(
@@ -823,15 +734,27 @@ function getOpenCodeAccount(): string | undefined {
   return undefined;
 }
 
-async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
-  if (!fs.existsSync(OPENCODE_DB)) return [];
+async function scanOpenCodeIncremental(): Promise<void> {
+  if (!fs.existsSync(OPENCODE_DB)) return;
+
+  const stat = safeStatSync(OPENCODE_DB);
+  if (!stat) return;
+
+  // OpenCode is one big DB; we use its mtime/size as the ledger for the
+  // entire fleet of OpenCode sessions.
+  const currentScan: ScanStamp = {
+    fileMtimeMs: Math.floor(stat.mtimeMs),
+    fileSize: stat.size,
+  };
+  const prev = getScanStampByPath(OPENCODE_DB);
+  if (prev && prev.fileMtimeMs === currentScan.fileMtimeMs && prev.fileSize === currentScan.fileSize) {
+    return;
+  }
 
   const account = getOpenCodeAccount();
   const currentVersion = await getCurrentAgentVersion('opencode');
 
   try {
-    // Query sessions. time_created is millisecond epoch. Limit to 200 most recent.
-    // Use session.title as topic (OpenCode auto-generates good titles).
     const query = `
       SELECT
         s.id,
@@ -860,7 +783,7 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
       ) stats ON stats.session_id = s.id
       WHERE s.parent_id IS NULL
       ORDER BY time_created DESC
-      LIMIT 200;
+      LIMIT 1000;
     `.replace(/\n/g, ' ');
 
     const out = execSync(
@@ -868,8 +791,7 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
       { encoding: 'utf-8', input: query, stdio: ['pipe', 'pipe', 'ignore'], timeout: 5000 },
     );
 
-    const sessions: SessionMeta[] = [];
-
+    const entries: ScanEntry[] = [];
     for (const line of out.split('\n')) {
       if (!line.trim()) continue;
       const [id, title, directory, version, timeCreatedStr, messageCountStr, tokenCountStr, hasTokenDataStr] = line.split('|||');
@@ -882,28 +804,31 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
       const timestamp = isNaN(timeCreated) ? new Date().toISOString() : new Date(timeCreated).toISOString();
       const topic = title || undefined;
 
-      sessions.push({
+      const meta: SessionMeta = {
         id,
         shortId: id.replace(/^ses_/, '').slice(0, 8),
         agent: 'opencode',
         timestamp,
         project: directory ? path.basename(directory) : undefined,
-        cwd: directory || undefined,
+        cwd: directory ? normalizeCwd(directory) : undefined,
         filePath: `${OPENCODE_DB}#${id}`,
         version: resolveSessionVersion('opencode', OPENCODE_DB, version || undefined, currentVersion),
         account,
         topic,
         messageCount: Number.isNaN(messageCount) ? undefined : messageCount,
         tokenCount: hasTokenData && !Number.isNaN(tokenCount) ? tokenCount : undefined,
-      });
+      };
+
+      entries.push({ meta, content: topic || '', scan: currentScan });
     }
 
-    return sessions;
+    upsertSessionsBatch(entries);
+    // Stamp the OpenCode DB itself so we can short-circuit on the next run.
+    recordScans([{ filePath: OPENCODE_DB, scan: currentScan }]);
   } catch (err: any) {
     if (process.stderr.isTTY) {
       console.error(`Warning: Could not query OpenCode sessions: ${err.message}`);
     }
-    return [];
   }
 }
 
@@ -911,20 +836,28 @@ async function discoverOpenCodeSessions(): Promise<SessionMeta[]> {
 // OpenClaw
 // ---------------------------------------------------------------------------
 
-async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
-  const sessions: SessionMeta[] = [];
-
-  // Check if openclaw is installed
+async function scanOpenClawIncremental(): Promise<void> {
+  // Check if openclaw is installed — silently skip if not.
   try {
     execSync('which openclaw', { stdio: 'ignore' });
   } catch {
-    return sessions;
+    return;
+  }
+
+  // TTL cache: skip subprocess calls if we scanned recently. Stored in the
+  // meta table so we skip even when no channels/cron exist to produce rows.
+  const db = getDB();
+  const row = db.prepare(`SELECT value FROM meta WHERE key = 'openclaw_last_scan_ms'`).get() as { value: string } | undefined;
+  const lastScanMs = row ? parseInt(row.value, 10) : 0;
+  if (lastScanMs && Date.now() - lastScanMs < OPENCLAW_TTL_MS) {
+    return;
   }
 
   const currentVersion = await getCurrentAgentVersion('openclaw');
+  const now = Date.now();
+  const scan: ScanStamp = { fileMtimeMs: now, fileSize: 0 };
+  const entries: ScanEntry[] = [];
 
-  // Discover active channels
-  // Format: "- Telegram default (Jeff): enabled, configured, running, out:2h ago, mode:polling, token:config"
   try {
     const output = execSync('openclaw channels status', {
       encoding: 'utf-8',
@@ -932,32 +865,30 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
     });
 
     for (const line of output.split('\n')) {
-      // Match: "- Telegram <agentId> (<Name>): ..., running, ..."
       const match = line.match(/^-\s+\w+\s+(\S+)\s+\((\w+)\):\s*(.+)/);
       if (!match) continue;
       const [, agentId, name, statusStr] = match;
-      const isRunning = statusStr.includes('running');
-      if (!isRunning) continue;
+      if (!statusStr.includes('running')) continue;
 
-      sessions.push({
-        id: `openclaw-${agentId}`,
-        shortId: agentId.slice(0, 8),
-        agent: 'openclaw',
-        timestamp: new Date().toISOString(),
-        project: name,
-        cwd: getOpenClawSessionCwd(agentId),
-        version: currentVersion,
-        filePath: '',
+      entries.push({
+        meta: {
+          id: `openclaw-${agentId}`,
+          shortId: agentId.slice(0, 8),
+          agent: 'openclaw',
+          timestamp: new Date().toISOString(),
+          project: name,
+          cwd: getOpenClawSessionCwd(agentId),
+          version: currentVersion,
+          filePath: '',
+        },
+        content: `${name} ${agentId}`,
+        scan,
       });
     }
   } catch {
-    // Command failed or not available
+    /* channels command failed */
   }
 
-  // Discover cron jobs
-  // Output format (fixed-width columns, 1 space between UUID and name):
-  //   6ec2cffe-39f8-480b-821f-0b20a2062550 paul-hourly  cron */30 ...  in 7h  48m ago  ok  isolated  paul  -
-  // UUID is always 36 chars. Extract it first, then parse the rest.
   try {
     const output = execSync('openclaw cron list', {
       encoding: 'utf-8',
@@ -965,40 +896,40 @@ async function discoverOpenClawSessions(): Promise<SessionMeta[]> {
     });
 
     const lines = output.split('\n');
-    // Skip header row
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
 
-      // Extract UUID (36 chars) and name from start of line
       const headMatch = line.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s+(\S+)/);
       if (!headMatch) continue;
       const jobId = headMatch[1];
       const jobName = headMatch[2];
 
-      // Parse remaining columns (2+ whitespace separated)
-      // Schedule+Next merge (cron expressions have internal spaces), so cols are:
-      //   [schedule+next, last, status, target, agentId, model]
       const rest = line.slice(headMatch[0].length).trim();
       const cols = rest.split(/\s{2,}/);
       const agentId = cols[4] || '';
 
-      sessions.push({
-        id: `openclaw-cron-${jobId}`,
-        shortId: jobId.slice(0, 8),
-        agent: 'openclaw',
-        timestamp: new Date().toISOString(),
-        project: `${jobName} (${agentId || 'unknown'})`,
-        cwd: getOpenClawSessionCwd(agentId),
-        version: currentVersion,
-        filePath: '',
+      entries.push({
+        meta: {
+          id: `openclaw-cron-${jobId}`,
+          shortId: jobId.slice(0, 8),
+          agent: 'openclaw',
+          timestamp: new Date().toISOString(),
+          project: `${jobName} (${agentId || 'unknown'})`,
+          cwd: getOpenClawSessionCwd(agentId),
+          version: currentVersion,
+          filePath: '',
+        },
+        content: `${jobName} ${agentId}`,
+        scan,
       });
     }
   } catch {
-    // Command failed or not available
+    /* cron command failed */
   }
 
-  return sessions;
+  upsertSessionsBatch(entries);
+  db.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('openclaw_last_scan_ms', ?)`).run(String(Date.now()));
 }
 
 async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
@@ -1076,7 +1007,7 @@ async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
     topic,
     messageCount,
     tokenCount: sawTokenCount ? tokenCount : undefined,
-    userTerms: userTexts.length > 0 ? userTexts : undefined,
+    contentText: userTexts.length > 0 ? userTexts.join('\n') : undefined,
   };
 }
 
@@ -1148,7 +1079,7 @@ async function scanCodexSession(filePath: string): Promise<CodexSessionScan> {
     topic,
     messageCount,
     tokenCount,
-    userTerms: userTexts.length > 0 ? userTexts : undefined,
+    contentText: userTexts.length > 0 ? userTexts.join('\n') : undefined,
   };
 }
 
@@ -1188,6 +1119,22 @@ function getOpenClawWorkspaceMap(): Map<string, string> {
 }
 
 // ---------------------------------------------------------------------------
+// Legacy index migration
+// ---------------------------------------------------------------------------
+
+/**
+ * One-time cleanup of the pre-SQLite JSONL indexes. Best-effort; safe to keep
+ * the old files around if deletion fails.
+ */
+export function removeLegacyIndexes(): void {
+  for (const p of [LEGACY_INDEX_PATH, LEGACY_CONTENT_INDEX_PATH, LEGACY_INDEX_PATH + '.bak']) {
+    try {
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    } catch { /* ignore */ }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 
@@ -1214,13 +1161,12 @@ export function readFirstLines(filePath: string, maxLines: number): Promise<stri
 
 /**
  * Walk a directory recursively for files with a given extension.
- * Returns at most `limit` files, sorted by mtime descending.
  */
 export function walkForFiles(dir: string, ext: string, limit: number): string[] {
   const results: { path: string; mtime: number }[] = [];
 
   function walk(d: string, depth: number) {
-    if (depth > 5) return; // Prevent deep recursion
+    if (depth > 5) return;
     let entries: string[];
     try {
       entries = fs.readdirSync(d);
@@ -1243,7 +1189,6 @@ export function walkForFiles(dir: string, ext: string, limit: number): string[] 
 
   walk(dir, 0);
 
-  // Sort by mtime descending and limit
   results.sort((a, b) => b.mtime - a.mtime);
   return results.slice(0, limit).map(r => r.path);
 }
@@ -1290,10 +1235,6 @@ function extractClaudeUserText(parsed: any): string | undefined {
 
 function isLocalCommandMessage(text: string): boolean {
   return /<local-command-caveat>|<bash-(input|stdout|stderr)>/i.test(text);
-}
-
-function splitLines(text: string): string[] {
-  return text.split('\n').map(l => l.trim()).filter(Boolean);
 }
 
 function getClaudeUsageTotal(usage: any): number | null {
@@ -1438,81 +1379,4 @@ export function parseTimeFilter(input: string): number {
   }
   const ts = new Date(input).getTime();
   return Number.isNaN(ts) ? 0 : ts;
-}
-
-// ---------------------------------------------------------------------------
-// BM25 content index search
-// ---------------------------------------------------------------------------
-
-/**
- * Pure BM25 scorer over an in-memory index. Returns sessionId -> score+matched terms,
- * sorted by score descending (Map preserves insertion order).
- */
-export function scoreBM25(
-  index: BM25Index,
-  query: string,
-): Map<string, { score: number; matchedTerms: string[] }> {
-  const result = new Map<string, { score: number; matchedTerms: string[] }>();
-  if (index.N === 0) return result;
-
-  const { counts: queryTerms } = tokenizeCounted(query);
-  if (queryTerms.size === 0) return result;
-
-  const avgdl = index.avgdl || 1;
-  const scored = new Map<string, { score: number; matchedTerms: string[] }>();
-
-  for (const [term] of queryTerms) {
-    const termPostings = index.postings.get(term);
-    if (!termPostings) continue;
-
-    const df = termPostings.size;
-    const idf = Math.log(1 + (index.N - df + 0.5) / (df + 0.5));
-
-    for (const [sessionId, tf] of termPostings) {
-      const dl = index.docLengths.get(sessionId) ?? avgdl;
-      const norm = 1 - BM25_B + BM25_B * (dl / avgdl);
-      const termScore = idf * (tf * (BM25_K1 + 1)) / (tf + BM25_K1 * norm);
-
-      const entry = scored.get(sessionId);
-      if (!entry) {
-        scored.set(sessionId, { score: termScore, matchedTerms: [term] });
-      } else {
-        entry.score += termScore;
-        if (!entry.matchedTerms.includes(term)) entry.matchedTerms.push(term);
-      }
-    }
-  }
-
-  const sorted = [...scored.entries()].sort((a, b) => b[1].score - a[1].score);
-  for (const [sid, info] of sorted) result.set(sid, info);
-  return result;
-}
-
-/**
- * Score sessions using Okapi BM25 against the persisted content index.
- * Returns a Map sorted by score descending, with matched terms attached.
- */
-export function searchContentIndex(
-  sessions: SessionMeta[],
-  query: string,
-): Map<string, SessionMeta> {
-  const index = loadBM25Index();
-  if (!index) return new Map();
-
-  const scored = scoreBM25(index, query);
-  if (scored.size === 0) return new Map();
-
-  const sessionsById = new Map(sessions.map(s => [s.id, s]));
-  const result = new Map<string, SessionMeta>();
-  for (const [sessionId, info] of scored) {
-    const session = sessionsById.get(sessionId);
-    if (session) {
-      result.set(sessionId, {
-        ...session,
-        _matchedTerms: info.matchedTerms,
-        _bm25Score: info.score,
-      });
-    }
-  }
-  return result;
 }

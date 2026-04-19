@@ -1,114 +1,74 @@
-import { describe, expect, it } from 'vitest';
-import type { SessionMeta } from '../types.js';
-import { buildBM25Index, scoreBM25 } from '../discover.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import Database from 'better-sqlite3';
+import { buildFtsQuery } from '../db.js';
 
-function session(id: string, topic: string, userText?: string): SessionMeta {
-  return {
-    id,
-    shortId: id.slice(0, 8),
-    agent: 'claude',
-    timestamp: '2026-04-17T19:00:00.000Z',
-    filePath: `/tmp/${id}.jsonl`,
-    topic,
-    _userTerms: userText ? [userText] : undefined,
-  };
-}
-
-describe('buildBM25Index', () => {
-  it('captures term frequencies and per-doc lengths', () => {
-    const docs = [
-      session('doc-a', 'auth middleware bug', 'fix the auth auth middleware'),
-      session('doc-b', 'payment refund', 'handle refund edge case'),
-    ];
-    const index = buildBM25Index(docs);
-
-    expect(index.N).toBe(2);
-    // doc-a: "auth middleware bug fix the auth auth middleware" -> 8 tokens
-    expect(index.docLengths.get('doc-a')).toBe(8);
-    // doc-b: "payment refund handle refund edge case" -> 6 tokens
-    expect(index.docLengths.get('doc-b')).toBe(6);
-    expect(index.avgdl).toBe(7);
-
-    // "auth" appears 3 times in doc-a, 0 in doc-b
-    expect(index.postings.get('auth')?.get('doc-a')).toBe(3);
-    expect(index.postings.get('auth')?.has('doc-b')).toBe(false);
-    // "refund" appears twice in doc-b
-    expect(index.postings.get('refund')?.get('doc-b')).toBe(2);
+describe('buildFtsQuery', () => {
+  it('returns empty expression for whitespace-only input', () => {
+    expect(buildFtsQuery('').expr).toBe('');
+    expect(buildFtsQuery('   ').expr).toBe('');
   });
 
-  it('skips tokens shorter than 2 characters', () => {
-    const docs = [session('short', 'a b ab')];
-    const index = buildBM25Index(docs);
-    expect(index.postings.has('a')).toBe(false);
-    expect(index.postings.has('b')).toBe(false);
-    expect(index.postings.get('ab')?.get('short')).toBe(1);
+  it('splits on non-alphanumerics, drops 1-char tokens, prefix-matches', () => {
+    const { expr, terms } = buildFtsQuery('rush deploy-a2a a b 42');
+    expect(terms).toEqual(['rush', 'deploy', 'a2a', '42']);
+    expect(expr).toBe('rush* OR deploy* OR a2a* OR 42*');
+  });
+
+  it('lowercases tokens', () => {
+    const { terms } = buildFtsQuery('RUSH Deploy');
+    expect(terms).toEqual(['rush', 'deploy']);
   });
 });
 
-describe('scoreBM25', () => {
-  it('ranks a rare term higher than a common one via IDF', () => {
-    // "bug" in 1 doc, "session" in all 4 — rare term should dominate
-    const docs = [
-      session('doc-0', 'session bug', 'the bug'),
-      session('doc-1', 'session notes', 'session notes'),
-      session('doc-2', 'session thoughts', 'session thoughts'),
-      session('doc-3', 'session plan', 'session plan'),
-    ];
-    const index = buildBM25Index(docs);
+describe('FTS5 session_text schema (smoke test)', () => {
+  let tmpDir: string;
+  let db: Database.Database;
 
-    const rareHit = scoreBM25(index, 'bug');
-    const commonHit = scoreBM25(index, 'session');
-
-    const bugScore = rareHit.get('doc-0')!.score;
-    const sessionScore = commonHit.get('doc-0')!.score;
-    expect(bugScore).toBeGreaterThan(sessionScore);
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-cli-fts-'));
+    db = new Database(path.join(tmpDir, 'sessions.db'));
+    db.exec(`
+      CREATE VIRTUAL TABLE session_text USING fts5(
+        session_id UNINDEXED,
+        content,
+        tokenize = 'unicode61 remove_diacritics 2'
+      );
+    `);
   });
 
-  it('ranks shorter docs above longer docs at equal term frequency', () => {
-    // Both docs mention "widget" once, but one is much longer.
-    const docs = [
-      session('short-doc', 'widget', 'widget'),
-      session('long-doc', 'widget', 'widget ' + 'padding '.repeat(50).trim()),
-    ];
-    const index = buildBM25Index(docs);
-    const results = scoreBM25(index, 'widget');
-    const ids = [...results.keys()];
-    expect(ids[0]).toBe('short-doc');
-    expect(ids[1]).toBe('long-doc');
+  afterEach(() => {
+    db.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('accumulates scores across multiple query terms', () => {
-    const docs = [
-      session('both', 'auth token', 'auth token handling'),
-      session('one', 'auth only', 'auth only'),
-      session('none', 'unrelated', 'unrelated notes'),
-    ];
-    const index = buildBM25Index(docs);
-    const results = scoreBM25(index, 'auth token');
+  it('ranks rare terms higher than common ones (IDF)', () => {
+    const insert = db.prepare('INSERT INTO session_text (session_id, content) VALUES (?, ?)');
+    insert.run('a', 'session bug bug');
+    insert.run('b', 'session notes');
+    insert.run('c', 'session thoughts');
+    insert.run('d', 'session plan');
 
-    expect(results.get('both')!.matchedTerms.sort()).toEqual(['auth', 'token']);
-    expect(results.get('one')!.matchedTerms).toEqual(['auth']);
-    expect(results.has('none')).toBe(false);
-    expect(results.get('both')!.score).toBeGreaterThan(results.get('one')!.score);
+    const rows = db.prepare(`
+      SELECT session_id, bm25(session_text) AS r
+      FROM session_text WHERE session_text MATCH ? ORDER BY r ASC
+    `).all('bug') as { session_id: string; r: number }[];
+
+    expect(rows[0].session_id).toBe('a');
   });
 
-  it('returns an empty map for queries with no indexed terms', () => {
-    const docs = [session('doc-0', 'hello world')];
-    const index = buildBM25Index(docs);
+  it('supports prefix queries for partial typing', () => {
+    const insert = db.prepare('INSERT INTO session_text (session_id, content) VALUES (?, ?)');
+    insert.run('x', 'rush deploy yaml agent');
+    insert.run('y', 'unrelated content');
 
-    expect(scoreBM25(index, '').size).toBe(0);
-    expect(scoreBM25(index, 'nonexistent').size).toBe(0);
-  });
+    const rows = db.prepare(`
+      SELECT session_id FROM session_text WHERE session_text MATCH ? ORDER BY bm25(session_text) ASC
+    `).all('rush* OR dep*') as { session_id: string }[];
 
-  it('orders results by score descending (Map insertion order)', () => {
-    const docs = [
-      session('low', 'apple', 'apple'),
-      session('mid', 'apple apple', 'apple apple'),
-      session('high', 'apple apple apple', 'apple apple apple'),
-    ];
-    const index = buildBM25Index(docs);
-    const results = scoreBM25(index, 'apple');
-    const ordered = [...results.keys()];
-    expect(ordered).toEqual(['high', 'mid', 'low']);
+    expect(rows.map(r => r.session_id)).toContain('x');
+    expect(rows.map(r => r.session_id)).not.toContain('y');
   });
 });
