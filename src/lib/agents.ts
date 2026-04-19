@@ -479,7 +479,14 @@ export async function getAccountInfo(
   try {
     switch (agentId) {
       case 'claude': {
-        const data = JSON.parse(await fs.promises.readFile(path.join(base, '.claude.json'), 'utf-8'));
+        // Claude reads/writes config at $CLAUDE_CONFIG_DIR/.claude.json when set,
+        // falling back to $HOME/.claude.json. Our shim sets CLAUDE_CONFIG_DIR to
+        // the per-version .claude dir, so prefer that file; fall back to home-level
+        // for versions ever launched without the shim (IDE extension, direct binary).
+        const configDirFile = path.join(base, '.claude', '.claude.json');
+        const homeLevelFile = path.join(base, '.claude.json');
+        const activeFile = fs.existsSync(configDirFile) ? configDirFile : homeLevelFile;
+        const data = JSON.parse(await fs.promises.readFile(activeFile, 'utf-8'));
         const oa = data.oauthAccount;
         const accountId = normalizeIdentityPart(oa?.accountUuid);
         const organizationId = normalizeIdentityPart(oa?.organizationUuid);

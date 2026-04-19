@@ -11,7 +11,7 @@ export type TeamRegistry = Record<string, TeamMeta>;
 
 async function registryPath(): Promise<string> {
   const base = await resolveBaseDir();
-  return path.join(base, 'teams.json');
+  return path.join(base, 'registry.json');
 }
 
 export async function loadTeams(): Promise<TeamRegistry> {

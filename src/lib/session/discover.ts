@@ -267,12 +267,19 @@ let cachedClaudeAccount: string | undefined;
 function getClaudeAccount(): string | undefined {
   if (cachedClaudeAccount !== undefined) return cachedClaudeAccount || undefined;
 
-  const candidates = [path.join(HOME, '.claude.json')];
+  // Claude's active config lives at $CLAUDE_CONFIG_DIR/.claude.json; for our shim
+  // that's <version>/home/.claude/.claude.json. The home-level .claude.json is a
+  // legacy path used when Claude runs without CLAUDE_CONFIG_DIR set.
+  const candidates = [
+    path.join(HOME, '.claude', '.claude.json'),
+    path.join(HOME, '.claude.json'),
+  ];
 
   const versionsBase = path.join(AGENTS_DIR, 'versions', 'claude');
   if (fs.existsSync(versionsBase)) {
     try {
       for (const version of fs.readdirSync(versionsBase)) {
+        candidates.push(path.join(versionsBase, version, 'home', '.claude', '.claude.json'));
         candidates.push(path.join(versionsBase, version, 'home', '.claude.json'));
       }
     } catch { /* versions dir unreadable */ }

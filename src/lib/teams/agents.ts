@@ -362,6 +362,7 @@ export class AgentProcess {
   prUrl: string | null = null;
   version: string | null = null;
   remoteSessionId: string | null = null;
+  name: string | null = null;
   private eventsCache: any[] = [];
   private lastReadPos: number = 0;
   private baseDir: string | null = null;
@@ -384,10 +385,12 @@ export class AgentProcess {
     cloudProvider: string | null = null,
     prUrl: string | null = null,
     version: string | null = null,
-    remoteSessionId: string | null = null
+    remoteSessionId: string | null = null,
+    name: string | null = null
   ) {
     this.agentId = agentId;
     this.remoteSessionId = remoteSessionId;
+    this.name = name;
     this.taskName = taskName;
     this.agentType = agentType;
     this.prompt = prompt;
@@ -441,6 +444,7 @@ export class AgentProcess {
       pr_url: this.prUrl,
       version: this.version,
       remote_session_id: this.remoteSessionId,
+      name: this.name,
     };
   }
 
@@ -567,6 +571,7 @@ export class AgentProcess {
       pr_url: this.prUrl,
       version: this.version,
       remote_session_id: this.remoteSessionId,
+      name: this.name,
     };
     const metaPath = await this.getMetaPath();
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
@@ -608,7 +613,8 @@ export class AgentProcess {
         meta.cloud_provider || null,
         meta.pr_url || null,
         meta.version || null,
-        meta.remote_session_id || null
+        meta.remote_session_id || null,
+        meta.name || null
       );
       return agent;
     } catch {
@@ -811,8 +817,18 @@ export class AgentProcess {
     effort: EffortLevel = 'default',
     parentSessionId: string | null = null,
     workspaceDir: string | null = null,
-    version: string | null = null
+    version: string | null = null,
+    name: string | null = null
   ): Promise<AgentProcess> {
+    // Enforce: teammate names are unique within a team.
+    if (name) {
+      const siblings = await this.listByTask(taskName);
+      if (siblings.some((a) => a.name === name)) {
+        throw new Error(
+          `Team '${taskName}' already has a teammate named '${name}'. Pick another name or leave --name off.`
+        );
+      }
+    }
     await this.initialize();
     const resolvedMode = resolveMode(mode, this.defaultMode);
 
@@ -873,7 +889,9 @@ export class AgentProcess {
       null,
       null,
       null,
-      version
+      version,
+      null,
+      name
     );
 
     const agentDir = await agent.getAgentDir();
@@ -1074,24 +1092,31 @@ export class AgentProcess {
   }
 
   /**
-   * Resolve a short id (prefix like "a1b2c3d4") or full UUID to a single
-   * agent_id from the agents in a given team. Returns:
-   *  - { kind: 'ok', agentId }       when exactly one agent matches
-   *  - { kind: 'none' }              when no agent matches
-   *  - { kind: 'ambiguous', matches } when multiple agents share the prefix
+   * Resolve a teammate reference to a single agent_id within a team.
+   * Accepts (in priority order):
+   *   1. exact teammate name                ("alice")
+   *   2. exact UUID                         ("b2438499-dc25-4a5e-9e02-9916012580b8")
+   *   3. UUID prefix, if unique             ("b2438499")
+   *
+   * Returns:
+   *  - { kind: 'ok', agentId }       when exactly one teammate matches
+   *  - { kind: 'none' }              when nothing matches
+   *  - { kind: 'ambiguous', matches } when the prefix matches multiple ids
    */
   async resolveAgentIdInTask(
     taskName: string,
-    idOrPrefix: string
+    ref: string
   ): Promise<
     | { kind: 'ok'; agentId: string }
     | { kind: 'none' }
     | { kind: 'ambiguous'; matches: string[] }
   > {
     const agents = await this.listByTask(taskName);
-    const exact = agents.find((a) => a.agentId === idOrPrefix);
+    const byName = agents.find((a) => a.name === ref);
+    if (byName) return { kind: 'ok', agentId: byName.agentId };
+    const exact = agents.find((a) => a.agentId === ref);
     if (exact) return { kind: 'ok', agentId: exact.agentId };
-    const prefix = agents.filter((a) => a.agentId.startsWith(idOrPrefix));
+    const prefix = agents.filter((a) => a.agentId.startsWith(ref));
     if (prefix.length === 1) return { kind: 'ok', agentId: prefix[0].agentId };
     if (prefix.length === 0) return { kind: 'none' };
     return { kind: 'ambiguous', matches: prefix.map((a) => a.agentId) };

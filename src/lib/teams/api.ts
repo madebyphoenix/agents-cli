@@ -1,5 +1,5 @@
 /**
- * Testable API handlers for the agent-swarm MCP server.
+ * Testable API handlers for `agents teams`.
  * These functions can be called directly in tests with a custom AgentManager.
  */
 import * as path from 'path';
@@ -36,6 +36,7 @@ export interface SpawnResult {
   started_at: string;
   version?: string | null;
   remote_session_id?: string | null;
+  name?: string | null;
 }
 
 export interface AgentStatusDetail {
@@ -58,6 +59,7 @@ export interface AgentStatusDetail {
   pr_url?: string | null;
   version?: string | null;
   remote_session_id?: string | null;
+  name?: string | null;
 }
 
 export interface TaskStatusResult {
@@ -100,7 +102,8 @@ export async function handleSpawn(
   effort: 'fast' | 'default' | 'detailed' | null = 'default',
   parentSessionId: string | null = null,
   workspaceDir: string | null = null,
-  version: string | null = null
+  version: string | null = null,
+  name: string | null = null
 ): Promise<SpawnResult> {
   const defaultMode = manager.getDefaultMode();
   const resolvedMode = resolveMode(mode, defaultMode);
@@ -149,7 +152,8 @@ export async function handleSpawn(
       resolvedEffort,
       parentSessionId,
       workspaceDir,
-      version
+      version,
+      name
     );
 
     debug(`[ralph] Spawned ${agentType} agent ${agent.agentId} for autonomous execution`);
@@ -162,6 +166,7 @@ export async function handleSpawn(
       started_at: agent.startedAt.toISOString(),
       version: agent.version,
       remote_session_id: agent.remoteSessionId,
+      name: agent.name,
     };
   }
 

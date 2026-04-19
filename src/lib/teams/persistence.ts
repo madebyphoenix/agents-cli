@@ -4,11 +4,11 @@ import { homedir, tmpdir } from 'os';
 import { constants as fsConstants } from 'fs';
 import { AgentType } from './parsers.js';
 
-// All supported swarm agent types
+// All supported teammate agent types
 const ALL_AGENTS: AgentType[] = ['claude', 'codex', 'gemini', 'cursor', 'opencode'];
 
-// Swarm data lives under ~/.agents/swarm/
-const SWARM_DIR = path.join(homedir(), '.agents', 'swarm');
+// Teams data lives under ~/.agents/teams/
+const TEAMS_DIR = path.join(homedir(), '.agents', 'teams');
 
 // Legacy paths (for migration)
 const LEGACY_CONFIG_DIR = path.join(homedir(), '.agents');
@@ -35,16 +35,16 @@ async function ensureWritableDir(p: string): Promise<boolean> {
 }
 
 export async function resolveBaseDir(): Promise<string> {
-  if (await ensureWritableDir(SWARM_DIR)) {
-    return SWARM_DIR;
+  if (await ensureWritableDir(TEAMS_DIR)) {
+    return TEAMS_DIR;
   }
 
   if (await ensureWritableDir(TMP_FALLBACK_DIR)) {
-    console.warn(`[agents-mcp] Falling back to temp data dir at ${TMP_FALLBACK_DIR}`);
+    console.warn(`[agents teams] Falling back to temp data dir at ${TMP_FALLBACK_DIR}`);
     return TMP_FALLBACK_DIR;
   }
 
-  throw new Error('Unable to determine writable data directory for swarm');
+  throw new Error('Unable to determine a writable data directory for teams');
 }
 
 async function resolveAgentsPath(): Promise<string> {
@@ -53,8 +53,8 @@ async function resolveAgentsPath(): Promise<string> {
 }
 
 async function resolveConfigPath(): Promise<string> {
-  await fs.mkdir(SWARM_DIR, { recursive: true });
-  return path.join(SWARM_DIR, 'config.json');
+  await fs.mkdir(TEAMS_DIR, { recursive: true });
+  return path.join(TEAMS_DIR, 'config.json');
 }
 
 async function resolveLegacyConfigPath(): Promise<string> {
@@ -260,7 +260,7 @@ async function migrateLegacyConfig(): Promise<SwarmConfig | null> {
   return config;
 }
 
-// Read swarm config, returns default config if file doesn't exist
+// Read teams config, returns default config if file doesn't exist
 export async function readConfig(): Promise<ReadConfigResult> {
   const configPath = await ensureConfigPath();
 
@@ -355,7 +355,7 @@ export async function readConfig(): Promise<ReadConfigResult> {
   }
 }
 
-// Write swarm config
+// Write teams config
 export async function writeConfig(config: SwarmConfig): Promise<void> {
   const configPath = await ensureConfigPath();
   await fs.writeFile(configPath, JSON.stringify(config, null, 2));
