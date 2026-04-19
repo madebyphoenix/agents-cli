@@ -28,8 +28,8 @@ Each agent resolves to the project-pinned version, with the right skills, MCP se
 agents exec claude "Reply with exactly: agents-qwen route ok" \
   --mode full \
   --model qwen3.6:35b \
-  --env ANTHROPIC_BASE_URL=https://ollama.427yosemite.com \
-  --env ANTHROPIC_AUTH_TOKEN="$(security find-generic-password -a "$USER" -s yosemite-ollama-auth-token -w)" \
+  --env ANTHROPIC_BASE_URL=https://ollama.example.com \
+  --env ANTHROPIC_AUTH_TOKEN="$(security find-generic-password -a "$USER" -s ollama-auth-token -w)" \
   --env ANTHROPIC_MODEL=qwen3.6:35b \
   --env ANTHROPIC_SMALL_FAST_MODEL=qwen3.6:35b
 ```

@@ -301,8 +301,8 @@ describe('buildExecCommand', () => {
 
   describe('exec env', () => {
     it('parses repeated KEY=VALUE entries', () => {
-      expect(parseExecEnv(['ANTHROPIC_BASE_URL=https://ollama.427yosemite.com', 'ANTHROPIC_MODEL=qwen3.6:35b'])).toEqual({
-        ANTHROPIC_BASE_URL: 'https://ollama.427yosemite.com',
+      expect(parseExecEnv(['ANTHROPIC_BASE_URL=https://ollama.example.com', 'ANTHROPIC_MODEL=qwen3.6:35b'])).toEqual({
+        ANTHROPIC_BASE_URL: 'https://ollama.example.com',
         ANTHROPIC_MODEL: 'qwen3.6:35b',
       });
     });
@@ -322,9 +322,9 @@ describe('buildExecCommand', () => {
       process.env.ANTHROPIC_MODEL = 'claude-sonnet-4-5';
 
       try {
-        const env = buildExecEnv(opts({ env: { ANTHROPIC_MODEL: 'qwen3.6:35b', ANTHROPIC_BASE_URL: 'https://ollama.427yosemite.com' } }));
+        const env = buildExecEnv(opts({ env: { ANTHROPIC_MODEL: 'qwen3.6:35b', ANTHROPIC_BASE_URL: 'https://ollama.example.com' } }));
         expect(env.ANTHROPIC_MODEL).toBe('qwen3.6:35b');
-        expect(env.ANTHROPIC_BASE_URL).toBe('https://ollama.427yosemite.com');
+        expect(env.ANTHROPIC_BASE_URL).toBe('https://ollama.example.com');
       } finally {
         if (previous === undefined) {
           delete process.env.ANTHROPIC_MODEL;

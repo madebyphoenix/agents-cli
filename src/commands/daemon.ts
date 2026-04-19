@@ -123,7 +123,7 @@ export function registerDaemonCommands(program: Command): void {
     .command('report')
     .description('Report local sessions to Factory Floor')
     .option('--node-token <token>', 'Node token from Factory Floor')
-    .option('--endpoint <url>', 'Factory Floor endpoint (or AGENTS_FACTORY_URL env)', process.env.AGENTS_FACTORY_URL || 'https://agents.427yosemite.com')
+    .option('--endpoint <url>', 'Factory Floor endpoint (or AGENTS_FACTORY_URL env)', process.env.AGENTS_FACTORY_URL || 'https://factory.prix.dev')
     .option('--interval <seconds>', 'Sync interval in seconds', '30')
     .option('--once', 'Run once and exit (useful for testing)')
     .action(async (options) => {
@@ -133,7 +133,7 @@ export function registerDaemonCommands(program: Command): void {
   daemonCmd
     .command('register')
     .description('Register this machine with Factory Floor')
-    .option('--endpoint <url>', 'Factory Floor endpoint (or AGENTS_FACTORY_URL env)', process.env.AGENTS_FACTORY_URL || 'https://agents.427yosemite.com')
+    .option('--endpoint <url>', 'Factory Floor endpoint (or AGENTS_FACTORY_URL env)', process.env.AGENTS_FACTORY_URL || 'https://factory.prix.dev')
     .option('--node-token <token>', 'API token for registration')
     .action(async (options) => {
       await registerNode(options);
@@ -231,7 +231,7 @@ async function runReportDaemon(options: {
   // Load config, allowing CLI args to override
   const config = loadDaemonConfig();
   const nodeToken = options.nodeToken || config.nodeToken;
-  const endpoint = options.endpoint || config.endpoint || 'https://agents.427yosemite.com';
+  const endpoint = options.endpoint || config.endpoint || 'https://factory.prix.dev';
   const interval = parseInt(options.interval, 10) * 1000;
   let nodeId = config.nodeId;
 

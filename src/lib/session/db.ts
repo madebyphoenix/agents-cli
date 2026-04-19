@@ -562,14 +562,29 @@ export function ftsSearch(input: string, limit = 200): FtsHit[] {
     WHERE label IS NOT NULL AND LOWER(label) LIKE ?
   `).all(`%${lower}%`) as Array<{ id: string; label: string }>;
 
+  let hasExactLabelMatch = false;
   for (const row of labelRows) {
     const labelLower = row.label.toLowerCase();
     let score: number;
-    if (labelLower === lower) score = 1_000_000;
-    else if (labelLower.startsWith(lower)) score = 900_000;
-    else score = 800_000;
-    hits.push({ sessionId: row.id, score, matchedTerms: ['label'] });
+    if (labelLower === lower) {
+      score = 1_000_000;
+      hasExactLabelMatch = true;
+    } else if (labelLower.startsWith(lower)) {
+      score = 900_000;
+    } else {
+      score = 800_000;
+    }
+    // matchedTerms is empty for label hits — the picker can render the label
+    // itself as the highlight, no badge needed.
+    hits.push({ sessionId: row.id, score, matchedTerms: [] });
     seen.add(row.id);
+  }
+
+  // If the query exactly names a labeled session, don't dilute the result
+  // with FTS5 content hits — the user typed a specific thing, show just it.
+  if (hasExactLabelMatch) {
+    hits.sort((a, b) => b.score - a.score);
+    return hits.slice(0, limit);
   }
 
   // Tier 4: FTS5 content match, skipping anything already surfaced via label.

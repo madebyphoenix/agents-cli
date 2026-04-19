@@ -45,6 +45,7 @@ import { registerSyncCommand } from './commands/sync.js';
 import { registerSessionsCommands } from './commands/sessions.js';
 import { registerDriveCommands } from './commands/drive.js';
 import { registerPtyCommands } from './commands/pty.js';
+import { registerTeamsCommands } from './commands/teams.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -99,6 +100,7 @@ Automation:
   routines                        Schedule agents to run on a timer
   daemon                          Start/stop the routines scheduler
   exec <agent> <prompt>           Run an agent non-interactively
+  teams                           Orchestrate agents as named teams (spawn, status, stop)
   pty                             Interactive PTY sessions for AI agents
 
 Automation tips:
@@ -323,6 +325,7 @@ registerPackagesCommands(program);
 registerDaemonCommands(program);
 registerRoutinesCommands(program);
 registerExecCommand(program);
+registerTeamsCommands(program);
 registerSessionsCommands(program);
 registerSyncCommand(program);
 registerDriveCommands(program);

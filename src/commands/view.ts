@@ -270,15 +270,20 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
         const activeStr = vInfo && hasEmail ? formatLastActive(vInfo.lastActive) : '';
         const hasActive = activeStr.length > 0;
 
-        if (hasEmail || hasUsage || hasActive) {
-          const emailCol = (vInfo?.email || '').padEnd(maxEmail);
-          parts.push(hasEmail ? chalk.cyan(emailCol) : ' '.repeat(maxEmail));
+        if (!hasEmail && !hasUsage) {
+          // Installed but never signed in
+          parts.push(chalk.gray('(not signed in — run ' + agent.cliCommand + ' to log in)'));
+        } else {
+          if (hasEmail || hasUsage || hasActive) {
+            const emailCol = (vInfo?.email || '').padEnd(maxEmail);
+            parts.push(hasEmail ? chalk.cyan(emailCol) : ' '.repeat(maxEmail));
+          }
+          if (hasUsage || hasActive) {
+            const usagePad = ' '.repeat(Math.max(0, maxUsageWidth - visibleWidth(usageStr)));
+            parts.push(usageStr + usagePad);
+          }
+          if (hasActive) parts.push(activeStr);
         }
-        if (hasUsage || hasActive) {
-          const usagePad = ' '.repeat(Math.max(0, maxUsageWidth - visibleWidth(usageStr)));
-          parts.push(usageStr + usagePad);
-        }
-        if (hasActive) parts.push(activeStr);
 
         console.log(parts.join('  '));
         if (showPaths) {

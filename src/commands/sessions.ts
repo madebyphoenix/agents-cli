@@ -393,6 +393,19 @@ export function filterSessionsByQuery(
   const terms = trimmed.split(/\s+/).filter(Boolean);
   const contentIndex = searchContentIndex(sessions, trimmed);
 
+  // If the query exactly matches a session label, short-circuit the structural
+  // scorer (which would otherwise surface every session whose topic happens to
+  // contain the same words) and return only the label hits.
+  const EXACT_LABEL_SCORE = 1_000_000;
+  const exactLabelHits = [...contentIndex.values()].filter(
+    s => (s._bm25Score ?? 0) >= EXACT_LABEL_SCORE,
+  );
+  if (exactLabelHits.length > 0) {
+    return exactLabelHits.sort(
+      (a, b) => (b._bm25Score ?? 0) - (a._bm25Score ?? 0),
+    );
+  }
+
   return sessions
     .map(session => ({ session, score: scoreSessionQuery(session, terms) }))
     .filter(entry => {

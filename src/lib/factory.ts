@@ -1,5 +1,5 @@
 // Factory Floor API client for daemon reporting
-// Reports local agent sessions to the Factory Floor at agents.427yosemite.com
+// Reports local agent sessions to the Factory Floor at factory.prix.dev
 
 import * as fs from 'fs';
 import * as path from 'path';
