@@ -25,10 +25,6 @@ import {
 const HOME = os.homedir();
 const AGENTS_DIR = path.join(HOME, '.agents');
 
-const LEGACY_SESSIONS_DIR = path.join(AGENTS_DIR, 'sessions');
-const LEGACY_INDEX_PATH = path.join(LEGACY_SESSIONS_DIR, 'index.jsonl');
-const LEGACY_CONTENT_INDEX_PATH = path.join(LEGACY_SESSIONS_DIR, 'content_index.jsonl');
-
 /** How long OpenClaw channel/cron snapshots stay valid before we re-shell-out. */
 const OPENCLAW_TTL_MS = 60_000;
 
@@ -1171,22 +1167,6 @@ function getOpenClawWorkspaceMap(): Map<string, string> {
 
   cachedOpenClawWorkspaces = workspaces;
   return workspaces;
-}
-
-// ---------------------------------------------------------------------------
-// Legacy index migration
-// ---------------------------------------------------------------------------
-
-/**
- * One-time cleanup of the pre-SQLite JSONL indexes. Best-effort; safe to keep
- * the old files around if deletion fails.
- */
-export function removeLegacyIndexes(): void {
-  for (const p of [LEGACY_INDEX_PATH, LEGACY_CONTENT_INDEX_PATH, LEGACY_INDEX_PATH + '.bak']) {
-    try {
-      if (fs.existsSync(p)) fs.unlinkSync(p);
-    } catch { /* ignore */ }
-  }
 }
 
 // ---------------------------------------------------------------------------
