@@ -163,6 +163,20 @@ export function parseClaude(filePath: string): SessionEvent[] {
           events.push(event);
         }
       }
+      // Capture token usage and model from assistant turn
+      if (raw.message?.usage) {
+        const u = raw.message.usage;
+        events.push({
+          type: 'usage',
+          agent: 'claude',
+          timestamp,
+          model: raw.message.model,
+          inputTokens: u.input_tokens,
+          outputTokens: u.output_tokens,
+          cacheReadTokens: u.cache_read_input_tokens,
+          cacheCreationTokens: u.cache_creation_input_tokens,
+        });
+      }
     } else if (type === 'user') {
       const contentBlocks = raw.message?.content;
 
@@ -191,6 +205,27 @@ export function parseClaude(filePath: string): SessionEvent[] {
                 content: text,
               });
             }
+          } else if (block.type === 'image') {
+            const source = block.source || {};
+            if (source.type === 'base64') {
+              const sizeBytes = Math.ceil(((source.data as string)?.length || 0) * 0.75);
+              events.push({
+                type: 'attachment',
+                agent: 'claude',
+                timestamp,
+                mediaType: source.media_type || 'image/png',
+                sizeBytes,
+              });
+            }
+          } else if (block.type === 'document') {
+            const source = block.source || {};
+            events.push({
+              type: 'attachment',
+              agent: 'claude',
+              timestamp,
+              mediaType: source.media_type || 'application/pdf',
+              sizeBytes: 0,
+            });
           } else if (block.type === 'tool_result') {
             const toolId = block.tool_use_id;
             const toolInfo = toolId ? toolUseMap.get(toolId) : undefined;
