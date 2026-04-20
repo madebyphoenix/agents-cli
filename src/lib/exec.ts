@@ -12,7 +12,8 @@ export type ExecEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
 export interface ExecOptions {
   agent: AgentId;
   version?: string;
-  prompt: string;
+  /** Omit to launch the CLI interactively — no prompt, no --print, stdio fully inherited. */
+  prompt?: string;
   mode: ExecMode;
   effort: ExecEffort;
   cwd?: string;
@@ -215,6 +216,7 @@ export const AGENT_COMMANDS: Record<AgentId, AgentCommandTemplate> = {
 export function buildExecCommand(options: ExecOptions): string[] {
   const template = AGENT_COMMANDS[options.agent];
   const cmd: string[] = [...template.base];
+  const interactive = options.prompt === undefined;
 
   // Use versioned alias if a specific version was requested (e.g., claude@2.1.98)
   if (options.version && cmd.length > 0) {
@@ -240,8 +242,10 @@ export function buildExecCommand(options: ExecOptions): string[] {
   const modeFlags = template.modeFlags[options.mode];
   cmd.push(...modeFlags);
 
-  // Add print/headless flags
-  if (options.headless && template.printFlags) {
+  // Add print/headless flags only when a prompt is provided. Without a prompt
+  // the caller wants an interactive REPL — passing --print would immediately
+  // wait on stdin and never render the TUI.
+  if (!interactive && options.headless && template.printFlags) {
     cmd.push(...template.printFlags);
   }
 
@@ -277,11 +281,13 @@ export function buildExecCommand(options: ExecOptions): string[] {
     }
   }
 
-  // Add prompt
-  if (template.promptFlag === 'positional') {
-    cmd.push(options.prompt);
-  } else {
-    cmd.push(template.promptFlag, options.prompt);
+  // Add prompt (skipped in interactive mode so the CLI launches its TUI)
+  if (!interactive) {
+    if (template.promptFlag === 'positional') {
+      cmd.push(options.prompt!);
+    } else {
+      cmd.push(template.promptFlag, options.prompt!);
+    }
   }
 
   // Claude-specific: add dirs
@@ -320,26 +326,31 @@ async function spawnAgent(options: ExecOptions): Promise<SpawnResult> {
 
   const timeoutMs = options.timeout ? parseTimeout(options.timeout) : undefined;
   const piped = !process.stdout.isTTY;
+  const interactive = options.prompt === undefined;
 
   return new Promise((resolve, reject) => {
+    // Interactive mode inherits all stdio so the CLI owns the TTY (TUI
+    // rendering, raw-mode keystrokes, colored output). Headless mode pipes
+    // stderr so we can scan for rate limits and feed fallback. stdout stays
+    // inherited for TTY, piped when the caller pipes us downstream.
+    const stdio: ('inherit' | 'pipe')[] = interactive
+      ? ['inherit', 'inherit', 'inherit']
+      : ['inherit', piped ? 'pipe' : 'inherit', 'pipe'];
+
     const child = spawn(executable, args, {
       cwd: options.cwd || process.cwd(),
-      stdio: [
-        'inherit',
-        piped ? 'pipe' : 'inherit',
-        'pipe',
-      ],
+      stdio,
       env: buildExecEnv(options),
       shell: false,
     });
 
-    if (piped && child.stdout) {
+    if (!interactive && piped && child.stdout) {
       child.stdout.pipe(process.stdout);
     }
 
     let stderrBuffer = '';
     const STDERR_BUFFER_CAP = 64 * 1024;
-    if (child.stderr) {
+    if (!interactive && child.stderr) {
       child.stderr.on('data', (chunk: Buffer) => {
         process.stderr.write(chunk);
         if (stderrBuffer.length < STDERR_BUFFER_CAP) {
@@ -401,6 +412,8 @@ export interface FallbackEntry {
 export interface FallbackOptions extends ExecOptions {
   /** Ordered list of agents to try if the primary (options.agent) hits a rate limit. */
   fallback: FallbackEntry[];
+  /** Fallback requires a prompt — chain handoff doesn't apply to interactive sessions. */
+  prompt: string;
 }
 
 /**

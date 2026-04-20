@@ -14,6 +14,7 @@ import {
 import type { AgentId } from '../lib/types.js';
 import { profileExists, resolveProfileForRun } from '../lib/profiles.js';
 import { readBundle, resolveBundleEnv } from '../lib/secrets-bundles.js';
+import { resolveRunVersion, type RotateResult } from '../lib/rotate.js';
 
 const VALID_AGENTS = Object.keys(AGENT_COMMANDS);
 
@@ -31,16 +32,24 @@ interface ExecCommandActionOptions {
   verbose?: boolean;
   timeout?: string;
   fallback?: string;
+  rotate?: boolean;
 }
 
 function isValidAgent(agent: string): agent is AgentId {
   return VALID_AGENTS.includes(agent);
 }
 
+function formatRotationBanner(result: RotateResult): string {
+  const { picked, healthy, excluded } = result;
+  const label = picked.email ? `${picked.email} · ${picked.agent}@${picked.version}` : `${picked.agent}@${picked.version}`;
+  const ratio = `${healthy.length} of ${healthy.length + excluded.length} healthy`;
+  return `[agents] rotation picked ${label} (${ratio})`;
+}
+
 export function registerRunCommand(program: Command): void {
   program
-    .command('run <agent> <prompt>')
-    .description('Execute an agent non-interactively from scripts, scheduled jobs, or automation pipelines. Returns when the agent finishes.')
+    .command('run <agent> [prompt]')
+    .description('Execute an agent. Pass a prompt for headless runs; omit it to launch the agent interactively.')
     .option('-m, --mode <mode>', 'How much the agent can do: plan (read-only), edit (can write files), full (writes + all permissions)', 'plan')
     .option('-e, --effort <effort>', 'Reasoning effort: low | medium | high | xhigh | max | auto (claude and codex only)', 'auto')
     .option('--model <model>', 'Override the model directly (e.g., claude-opus-4-6)')
@@ -72,12 +81,32 @@ export function registerRunCommand(program: Command): void {
       '--fallback <agents>',
       'Comma-separated agents to try on rate-limit failure. Each entry accepts an optional @version pin (e.g., codex@0.116.0,gemini). The primary runs first; if it exits with a rate-limit error, the next agent picks up via /continue handoff.',
     )
+    .option(
+      '-r, --rotate',
+      'Rotate across installed versions of the agent. Picks the signed-in, not-out-of-credits account with the oldest last-active timestamp. Ignored when @version is pinned.',
+    )
     .addHelpText('after', `
-Examples:
-  # Quick read-only analysis (plan mode, low reasoning effort)
-  agents run claude "summarize recent git commits" --mode plan --effort low
+Modes:
+  With a prompt -> headless (pipes output, no TTY, exits when the agent finishes).
+  Without a prompt -> interactive (launches the agent's TUI; stdio is fully inherited).
 
-  # Edit files with the agent's default effort
+Version rotation (opt-in with --rotate):
+  Picks across installed versions using the account data 'agents view' already
+  shows: signed-in only, skip out-of-credits, least-recently-active wins. Useful
+  when you have multiple accounts of the same CLI and want to spread usage.
+  Ignored when @version is pinned, when a profile is used, or with --fallback.
+
+Examples:
+  # Interactive with the pinned default version
+  agents run claude
+
+  # Interactive, rotate to the least-used healthy account
+  agents run claude --rotate
+
+  # Headless, rotate per invocation (spreads across accounts over time)
+  agents run claude "summarize recent git commits" --mode plan --rotate
+
+  # Pin a specific version (rotation ignored)
   agents run codex@0.116.0 "fix linting errors in src/" --mode edit
 
   # Full autonomy with maximum reasoning for a complex task
@@ -97,16 +126,14 @@ Examples:
 
   # Pin fallback versions: primary claude@2.0.65, fallback codex@0.116.0 then gemini
   agents run claude@2.0.65 "deep refactor" --fallback codex@0.116.0,gemini
-
-Note: 'agents run' executes non-interactively (no TTY). To work interactively with
-the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
 `)
-    .action(async (agentSpec: string, prompt: string, options: ExecCommandActionOptions) => {
+    .action(async (agentSpec: string, prompt: string | undefined, options: ExecCommandActionOptions) => {
       // Parse agent@version
       const [rawAgent, rawVersion] = agentSpec.split('@');
       let agent: AgentId;
       let version: string | undefined = rawVersion || undefined;
       let profileEnv: Record<string, string> | undefined;
+      let fromProfile = false;
 
       if (isValidAgent(rawAgent)) {
         agent = rawAgent;
@@ -120,6 +147,7 @@ the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
           agent = resolved.agent;
           if (!version) version = resolved.version;
           profileEnv = resolved.env;
+          fromProfile = true;
           process.stderr.write(chalk.gray(`Resolved profile '${resolved.profileName}' -> ${agent}${version ? `@${version}` : ''}\n`));
         } catch (err) {
           console.error(chalk.red((err as Error).message));
@@ -130,6 +158,36 @@ the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
         console.error(chalk.gray(`Available agents: ${VALID_AGENTS.join(', ')}`));
         console.error(chalk.gray(`Or add a profile: agents profiles add <name>`));
         process.exit(1);
+      }
+
+      // Rotation is opt-in via --rotate. Default honors the pinned default
+      // version (from `agents use`) so behavior stays predictable. When
+      // opted in, pick the least-recently-active signed-in version that
+      // isn't out of credits. Skipped when @version is pinned, when running
+      // a profile (profile carries its own version + auth), or when a
+      // fallback chain is configured (fallback pins versions directly).
+      if (options.rotate) {
+        if (version) {
+          process.stderr.write(chalk.yellow(`[agents] --rotate ignored: version ${version} is pinned\n`));
+        } else if (fromProfile) {
+          process.stderr.write(chalk.yellow(`[agents] --rotate ignored: profile pins its own version/auth\n`));
+        } else if (options.fallback) {
+          process.stderr.write(chalk.yellow(`[agents] --rotate ignored: --fallback pins versions directly\n`));
+        } else {
+          try {
+            const resolved = await resolveRunVersion(agent);
+            if (resolved.version) {
+              version = resolved.version;
+              if (resolved.rotation) {
+                process.stderr.write(chalk.gray(formatRotationBanner(resolved.rotation) + '\n'));
+              }
+            } else {
+              process.stderr.write(chalk.yellow(`[agents] --rotate found no healthy ${agent} version; falling back to defaults\n`));
+            }
+          } catch (err) {
+            process.stderr.write(chalk.yellow(`[agents] rotation skipped: ${(err as Error).message}\n`));
+          }
+        }
       }
 
       const mode = options.mode as ExecMode;
@@ -193,6 +251,10 @@ the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
 
       const fallback: FallbackEntry[] = [];
       if (options.fallback) {
+        if (prompt === undefined) {
+          console.error(chalk.red('--fallback requires a prompt. Fallback hands off headless runs only — interactive sessions can\'t be resumed on a different CLI.'));
+          process.exit(1);
+        }
         const entries = options.fallback.split(',').map(s => s.trim()).filter(Boolean);
         for (const entry of entries) {
           const [fbAgent, fbVersion] = entry.split('@');
@@ -214,9 +276,13 @@ the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
       process.stderr.write(chalk.gray(`Running: ${cmd.join(' ')}\n\n`));
 
       try {
-        const exitCode = fallback.length > 0
-          ? await runWithFallback({ ...execOptions, fallback })
-          : await execAgent(execOptions);
+        let exitCode: number;
+        if (fallback.length > 0) {
+          // fallback requires a prompt — enforced above, narrow the type here.
+          exitCode = await runWithFallback({ ...execOptions, prompt: prompt!, fallback });
+        } else {
+          exitCode = await execAgent(execOptions);
+        }
         process.exit(exitCode);
       } catch (err) {
         console.error(chalk.red(`Failed to execute ${agent}: ${(err as Error).message}`));
