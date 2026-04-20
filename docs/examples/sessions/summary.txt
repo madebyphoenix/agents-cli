@@ -1,6 +1,6 @@
 - Parsing claude session...
 
-claude 2.1.112  opus-4-7  muqsitnawaz (HEAD)  Apr 19 05:05 (15 hours ago) · muqsitnawaz@gmail.com
+claude 2.1.112  opus-4-7  example (HEAD)  Apr 19 05:05 (15 hours ago) · user@example.com
 61 turns · 115 tools (10 errors) · 30.7M cached / 160K out · 14h 2min
 ────────────────────────────────────────────────────────────
 
@@ -12,9 +12,9 @@ Read (2)
 
 Commands (90)
   Build/test (12)
-    python3 -c " import re, json with open('/private/tmp/claude-501/-Users-muqsit-s… × 12
-    python3 -c " import re with open('/private/tmp/claude-501/-Users-muqsit-src-git… × 12
-    python3 << 'EOF' import re with open('/private/tmp/claude-501/-Users-muqsit-src… × 12
+    python3 -c " import re, json with open('/tmp/claude-0/-Users-user-s… × 12
+    python3 -c " import re with open('/tmp/claude-0/-Users-user-src-git… × 12
+    python3 << 'EOF' import re with open('/tmp/claude-0/-Users-user-src… × 12
   VCS (19)
     gh pr × 10
     gh api × 7
@@ -31,7 +31,7 @@ Commands (90)
     agents --help 2>&1 | head -80 × 2
     linear --help 2>&1 | head -40
     ~/.agents/skills/linear/scripts/linear --help 2>&1 | head -40 × 4
-    codex --version 2>&1; ls /Users/muqsit/.agents/versions/codex/ 2>/dev/null
+    codex --version 2>&1; ls /Users/user/.agents/versions/codex/ 2>/dev/null
     set -e WORK=$(mktemp -d -t e2e-codex-hooks-XXXXXX) echo "WORKDIR: $WORK"  # Clo…
 
 Errors: 10 failures — first: Bash: Exit code 1
@@ -53,7 +53,7 @@ Goal: ship Codex hook sync support to agents-cli (RUSH-390). PR #8 is open, code
         * `CODEX_MATCHER_EVENTS` set guards matcher field for PreToolUse/PostToolUse/SessionStart only.
         * `vi.mock` removed; tests use `agentsDirOverride` parameter.
     * **Test results verified** by extracting real vitest stdout from agent transcript: 13/13 hooks tests pass, 84 versions tests pass. 7 pre-existing failures (agent claimed 6 — missed `tests/perf-agents.test.ts`).
-    * **Real local e2e** ran successfully: cloned branch to `/var/folders/.../e2e-codex-hooks-XXXXXX.RC4X9HSIOZ/`, built with `bun run build`, exercised `registerHooksToSettings` via Node script against fake `~/.agents/`, fed result to real `~/.agents/versions/codex/0.116.0/node_modules/.bin/codex` with isolated `HOME`. Output: codex emitted `warning: Under-development features enabled: codex_hooks` and `/tmp/e2e-hook-proof.txt` was written with `HOOK FIRED at 2026-04-19T13:32:13Z` (35 bytes, real fs metadata).
+    * **Real local e2e** ran successfully: cloned branch to `/tmp/folders/xxx built with `bun run build`, exercised `registerHooksToSettings` via Node script against fake `~/.agents/`, fed result to real `~/.agents/versions/codex/0.116.0/node_modules/.bin/codex` with isolated `HOME`. Output: codex emitted `warning: Under-development features enabled: codex_hooks` and `/tmp/e2e-hook-proof.txt` was written with `HOOK FIRED at 2026-04-19T13:32:13Z` (35 bytes, real fs metadata).
     * **PR comment** from cloud agent (`#issuecomment-4275941964`) verified to contain hallucinated e2e block — `codex exec` and setup commands in its sandbox were permission-denied, never executed.
 
 ### In Progress
