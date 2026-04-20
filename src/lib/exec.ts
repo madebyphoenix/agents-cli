@@ -3,7 +3,7 @@ import * as path from 'path';
 import type { AgentId } from './types.js';
 import { parseTimeout } from './routines.js';
 import { getVersionHomePath, isVersionInstalled, resolveVersion } from './versions.js';
-import { resolveModel } from './models.js';
+import { resolveModel, buildReasoningFlags } from './models.js';
 
 export type ExecMode = 'plan' | 'edit' | 'full';
 export type ExecEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
@@ -220,6 +220,21 @@ export function buildExecCommand(options: ExecOptions): string[] {
     cmd[0] = `${cmd[0]}@${options.version}`;
   }
 
+  // Add reasoning effort flags (before mode flags for codex -c positioning)
+  // For codex, -c must come before 'exec' subcommand, so we insert at position 1
+  if (options.effort !== 'auto') {
+    const reasoningFlags = buildReasoningFlags(options.agent, options.effort);
+    if (reasoningFlags.length > 0) {
+      if (options.agent === 'codex') {
+        // Insert after 'codex' (or 'codex@version') but before 'exec'
+        cmd.splice(1, 0, ...reasoningFlags);
+      } else {
+        // For other agents, append after base
+        cmd.push(...reasoningFlags);
+      }
+    }
+  }
+
   // Add mode flags
   const modeFlags = template.modeFlags[options.mode];
   cmd.push(...modeFlags);
@@ -234,18 +249,17 @@ export function buildExecCommand(options: ExecOptions): string[] {
     cmd.push('--session-id', options.sessionId);
   }
 
-  // Add model (from explicit option or effort mapping)
-  const model = options.model || EFFORT_MODELS[options.agent][options.effort];
-  if (model && template.modelFlag) {
+  // Add model (only if explicitly provided by user)
+  if (options.model && template.modelFlag) {
     const effectiveVersion = options.version || resolveVersion(options.agent, options.cwd || process.cwd());
     if (effectiveVersion) {
-      const resolved = resolveModel(options.agent, effectiveVersion, model);
+      const resolved = resolveModel(options.agent, effectiveVersion, options.model);
       if (resolved.warning) {
         process.stderr.write(`[agents] ${resolved.warning}\n`);
       }
       cmd.push(template.modelFlag, resolved.forwarded);
     } else {
-      cmd.push(template.modelFlag, model);
+      cmd.push(template.modelFlag, options.model);
     }
   }
 

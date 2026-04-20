@@ -17,7 +17,7 @@ export interface JobConfig {
   schedule: string;
   agent: AgentId;
   mode: 'plan' | 'edit' | 'full';
-  effort: 'fast' | 'default' | 'detailed';
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
   timeout: string;
   enabled: boolean;
   prompt: string;
@@ -43,7 +43,7 @@ export interface RunMeta {
 
 const JOB_DEFAULTS: Partial<JobConfig> = {
   mode: 'plan',
-  effort: 'default',
+  effort: 'auto',
   timeout: '30m',
   enabled: true,
 };
@@ -97,7 +97,7 @@ export function writeJob(config: JobConfig): void {
 
   const output: Record<string, unknown> = { ...config };
   if (output.mode === 'plan') delete output.mode;
-  if (output.effort === 'default') delete output.effort;
+  if (output.effort === 'auto') delete output.effort;
   if (output.timeout === '30m') delete output.timeout;
   if (output.enabled === true) delete output.enabled;
   if (output.runOnce === false || output.runOnce === undefined) delete output.runOnce;

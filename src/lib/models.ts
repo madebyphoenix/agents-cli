@@ -405,11 +405,18 @@ function levenshtein(a: string, b: string): number {
  * Build the per-agent CLI flags for a unified reasoning effort knob.
  *
  * Both Claude (`--effort`) and Codex (`-c model_reasoning_effort=...`) expose a
- * reasoning intensity dial. Inputs accepted: low | medium | high | xhigh | max.
- * Codex only supports low/medium/high; xhigh and max are clamped to high.
+ * reasoning intensity dial. Inputs accepted: low | medium | high | xhigh | max | auto.
+ * - Codex only supports low/medium/high; xhigh and max are clamped to high.
+ * - 'auto' skips reasoning flags for codex (lets it use model default).
+ * - 'auto' passes --effort auto to claude if supported.
  */
 export function buildReasoningFlags(agent: AgentId, level: string): string[] {
   const normalized = level.toLowerCase();
+  if (normalized === 'auto') {
+    // For claude, forward --effort auto if the agent supports it
+    // For codex and others, omit (let agent use its default)
+    return agent === 'claude' ? ['--effort', 'auto'] : [];
+  }
   if (agent === 'claude') {
     return ['--effort', normalized];
   }
