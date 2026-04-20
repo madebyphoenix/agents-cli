@@ -667,7 +667,6 @@ function applyViewFilters(sessions: SessionMeta[], options: ViewOptions): Sessio
 }
 
 async function viewAction(idQuery: string, options: ViewOptions): Promise<void> {
-  console.error('[DEBUG] viewAction options:', JSON.stringify(options), 'idQuery:', idQuery);
   const mode = resolveViewMode(options);
 
   const spinner = ora().start();
