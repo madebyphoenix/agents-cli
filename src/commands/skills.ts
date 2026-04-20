@@ -25,6 +25,7 @@ import {
   getSkillInfo,
   getSkillRules,
   getSkillsDir,
+  countSkillFiles,
   tryParseSkillMetadata,
   diffVersionSkills,
   installSkillToVersion,
@@ -115,7 +116,7 @@ When to use:
       await showResourceList({
         resourcePlural: 'skills',
         resourceSingular: 'skill',
-        extraLabel: 'Rules',
+        extraLabel: 'Files',
         rows,
         emptyMessage: filterAgent
           ? `No skills in central storage for ${agentLabel(filterAgent)}.`
@@ -754,12 +755,13 @@ async function buildSkillRows(opts: {
       });
     }
 
+    const fileCount = countSkillFiles(skill.path);
     rows.push({
       name,
       description: skill.metadata.description,
-      extra: skill.ruleCount > 0 ? `${skill.ruleCount}` : '-',
+      extra: fileCount > 0 ? `${fileCount}` : '-',
       targets,
-      buildDetail: () => formatSkillDetail(name, skill, targets),
+      buildDetail: () => formatSkillDetail(name, skill, targets, fileCount),
     });
   }
 
@@ -777,7 +779,8 @@ async function buildSkillRows(opts: {
 function formatSkillDetail(
   name: string,
   skill: { metadata: { description?: string; author?: string; version?: string; license?: string }; ruleCount: number; path: string },
-  targets: SyncTarget[]
+  targets: SyncTarget[],
+  fileCount: number
 ): string {
   const lines: string[] = [];
   lines.push(chalk.bold.cyan(name));
@@ -790,7 +793,10 @@ function formatSkillDetail(
   if (skill.metadata.author) meta.push(`author ${chalk.white(skill.metadata.author)}`);
   if (skill.metadata.version) meta.push(`v${chalk.white(skill.metadata.version)}`);
   if (skill.metadata.license) meta.push(`license ${chalk.white(skill.metadata.license)}`);
-  meta.push(`${chalk.white(skill.ruleCount)} rule${skill.ruleCount === 1 ? '' : 's'}`);
+  meta.push(`${chalk.white(fileCount)} file${fileCount === 1 ? '' : 's'}`);
+  if (skill.ruleCount > 0) {
+    meta.push(`${chalk.white(skill.ruleCount)} rule${skill.ruleCount === 1 ? '' : 's'}`);
+  }
   lines.push('  ' + meta.join(chalk.gray(' · ')));
   lines.push('  ' + chalk.gray(skill.path));
 

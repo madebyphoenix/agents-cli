@@ -149,6 +149,36 @@ export function countSkillRules(skillDir: string): number {
   }
 }
 
+/**
+ * Count bundled resource files in a skill directory: every regular file
+ * beyond SKILL.md itself (reference docs, scripts, assets, etc). Hidden
+ * files and hidden directories are skipped.
+ */
+export function countSkillFiles(skillDir: string): number {
+  if (!fs.existsSync(skillDir)) return 0;
+  let count = 0;
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile()) {
+        if (dir === skillDir && entry.name === 'SKILL.md') continue;
+        count++;
+      }
+    }
+  };
+  walk(skillDir);
+  return count;
+}
+
 export interface DiscoveredSkill {
   name: string;
   path: string;
