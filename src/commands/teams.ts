@@ -26,6 +26,8 @@ import {
 import { isVersionInstalled } from '../lib/versions.js';
 import { parseTimeFilter } from '../lib/session/discover.js';
 import { parseExecEnv } from '../lib/exec.js';
+import { teamPicker, formatTeamRow, type TeamRow } from './teams-picker.js';
+import { isPromptCancelled, isInteractiveTerminal } from './utils.js';
 
 const AGENT_NAMES: Record<AgentType, string> = {
   claude: 'Claude',
@@ -190,6 +192,30 @@ function printAgentDetail(a: AgentStatusDetail): void {
   if (lastMsg) console.log(`    ${chalk.gray('>')} ${truncate(lastMsg, 96)}`);
   if (a.has_errors) console.log(`    ${chalk.red('reported an error')}`);
   if (a.pr_url) console.log(`    ${chalk.gray('PR')} ${a.pr_url}`);
+}
+
+// Render a team's status in the same format the `status` subcommand uses, so
+// the interactive picker's Enter action drops the user into a familiar view.
+function printTeamStatus(team: string, result: import('../lib/teams/api.js').TaskStatusResult): void {
+  const { summary, agents } = result;
+  console.log(
+    chalk.bold(`Team ${chalk.cyan(team)}  `) +
+      chalk.gray(
+        summary.pending > 0
+          ? `(${summary.pending} pending, ${summary.running} working, ${summary.completed} done, ${summary.failed} failed, ${summary.stopped} stopped)`
+          : `(${summary.running} working, ${summary.completed} done, ${summary.failed} failed, ${summary.stopped} stopped)`
+      )
+  );
+  if (agents.length === 0) {
+    console.log(chalk.gray('  (no teammates yet — add one with `agents teams add`)'));
+  } else {
+    for (const a of agents) {
+      console.log();
+      printAgentDetail(a);
+    }
+  }
+  console.log();
+  console.log(chalk.gray(`cursor: ${result.cursor}`));
 }
 
 // Classify a team into a single bucket for --status filtering.
@@ -376,19 +402,40 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
         return;
       }
 
-      const nameWidth = Math.max(12, ...merged.map((t) => t.task_name.length));
-      console.log(chalk.bold(`${'TEAM'.padEnd(nameWidth)}  MEMBERS  STATUS                         UPDATED`));
-      for (const t of merged) {
-        const parts: string[] = [];
-        if (t.pending) parts.push(chalk.blue(`${t.pending} pending`));
-        if (t.running) parts.push(chalk.yellow(`${t.running} working`));
-        if (t.completed) parts.push(chalk.green(`${t.completed} done`));
-        if (t.failed) parts.push(chalk.red(`${t.failed} failed`));
-        if (t.stopped) parts.push(chalk.gray(`${t.stopped} stopped`));
-        const status = parts.join(' ') || chalk.gray(t.agent_count === 0 ? 'empty' : '-');
-        console.log(
-          `${chalk.cyan(t.task_name.padEnd(nameWidth))}  ${String(t.agent_count).padEnd(7)}  ${status.padEnd(30)} ${chalk.gray(relTime(t.modified_at))}`
-        );
+      // Enrich teams with teammate details for the picker's preview pane.
+      const rows: TeamRow[] = await Promise.all(
+        merged.map(async (team) => {
+          let agents: AgentStatusDetail[] = [];
+          try {
+            const res = await handleStatus(mgr, team.task_name, 'all');
+            agents = res.agents;
+          } catch {
+            // Empty teams (no live agents) throw in some code paths — preview
+            // will just show "no teammates yet".
+          }
+          return { team, agents, description: registry[team.task_name]?.description };
+        })
+      );
+
+      if (isInteractiveTerminal()) {
+        try {
+          const picked = await teamPicker(rows, query);
+          if (picked) {
+            // Fall through to the status subcommand's action for the picked team.
+            const result = await handleStatus(mgr, picked.team, 'all');
+            printTeamStatus(picked.team, result);
+          }
+        } catch (err) {
+          if (!isPromptCancelled(err)) throw err;
+        }
+        return;
+      }
+
+      // Non-interactive fallback: plain table.
+      const nameWidth = Math.max(12, ...rows.map((r) => r.team.task_name.length));
+      console.log(chalk.bold(`${'TEAM'.padEnd(nameWidth)}  MEMBERS      STATUS                                    UPDATED`));
+      for (const row of rows) {
+        console.log(formatTeamRow(row, nameWidth));
       }
     });
 
@@ -555,32 +602,13 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
           return;
         }
 
-        const { summary } = result;
         const exists = await teamExists(team);
         if (!exists && result.agents.length === 0) {
           console.log(chalk.yellow(`No team called '${team}'. Create it with: agents teams create ${team}`));
           return;
         }
 
-        console.log(
-          chalk.bold(`Team ${chalk.cyan(team)}  `) +
-            chalk.gray(
-              (summary.pending > 0
-                ? `(${summary.pending} pending, ${summary.running} working, ${summary.completed} done, ${summary.failed} failed, ${summary.stopped} stopped)`
-                : `(${summary.running} working, ${summary.completed} done, ${summary.failed} failed, ${summary.stopped} stopped)`)
-            )
-        );
-
-        if (agents.length === 0) {
-          console.log(chalk.gray('  (no teammates yet — add one with `agents teams add`)'));
-        } else {
-          for (const a of agents) {
-            console.log();
-            printAgentDetail(a);
-          }
-        }
-        console.log();
-        console.log(chalk.gray(`cursor: ${result.cursor}`));
+        printTeamStatus(team, { ...result, agents });
       } catch (err) {
         die(`Could not check on team ${team}: ${(err as Error).message}`);
       }
