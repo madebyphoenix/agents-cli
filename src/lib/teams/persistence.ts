@@ -65,7 +65,7 @@ async function resolveLegacySwarmifyConfigPath(): Promise<string> {
   return path.join(LEGACY_BASE_DIR, 'agents', 'config.json');
 }
 
-export type EffortLevel = 'fast' | 'default' | 'detailed';
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
 
 export type ModelOverrides = Partial<Record<AgentType, Partial<Record<EffortLevel, string>>>>;
 

@@ -100,7 +100,7 @@ export async function handleSpawn(
   prompt: string,
   cwd: string | null,
   mode: string | null,
-  effort: 'fast' | 'default' | 'detailed' | null = 'default',
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto' | null = 'medium',
   parentSessionId: string | null = null,
   workspaceDir: string | null = null,
   version: string | null = null,
@@ -111,7 +111,7 @@ export async function handleSpawn(
 ): Promise<SpawnResult> {
   const defaultMode = manager.getDefaultMode();
   const resolvedMode = resolveMode(mode, defaultMode);
-  const resolvedEffort = effort ?? 'default';
+  const resolvedEffort = effort ?? 'medium';
 
   debug(
     `[spawn] Spawning ${agentType} agent for task "${taskName}" [${resolvedMode}] effort=${resolvedEffort}...`

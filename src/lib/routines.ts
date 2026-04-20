@@ -149,8 +149,8 @@ export function validateJob(config: Partial<JobConfig>): string[] {
   if (config.mode && !['plan', 'edit', 'full'].includes(config.mode)) {
     errors.push('mode must be plan, edit, or full');
   }
-  if (config.effort && !['fast', 'default', 'detailed'].includes(config.effort)) {
-    errors.push('effort must be fast, default, or detailed');
+  if (config.effort && !['low', 'medium', 'high', 'xhigh', 'max', 'auto'].includes(config.effort)) {
+    errors.push('effort must be low, medium, high, xhigh, max, or auto');
   }
   if (!config.prompt || typeof config.prompt !== 'string') {
     errors.push('prompt is required');

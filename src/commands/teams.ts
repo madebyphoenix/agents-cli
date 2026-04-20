@@ -637,7 +637,7 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
     .description("Add a teammate to work on a task. Runs in background; returns immediately. Use 'status' to check in.")
     .option('-n, --name <name>', 'Friendly name for this teammate (e.g. alice). Required if using --after. Unique within team.')
     .option('-m, --mode <mode>', `Permissions: plan (read-only) | edit (can write files) | full (write + skip permission prompts)`, 'edit')
-    .option('-e, --effort <effort>', `Model tier: ${VALID_EFFORTS.join('|')} (maps to Sonnet/Opus/Haiku)`, 'default')
+    .option('-e, --effort <effort>', `Reasoning intensity: ${VALID_EFFORTS.join('|')}`, 'medium')
     .option('--model <model>', 'Override the effort tier and use this specific model (e.g. claude-opus-4-6)')
     .option(
       '--env <key=value>',

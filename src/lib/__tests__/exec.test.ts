@@ -3,7 +3,6 @@ import {
   buildExecCommand,
   buildExecEnv,
   AGENT_COMMANDS,
-  EFFORT_MODELS,
   parseExecEnv,
   type ExecOptions,
   type ExecMode,
@@ -15,7 +14,7 @@ function opts(overrides: Partial<ExecOptions>): ExecOptions {
     agent: 'claude',
     prompt: 'do the thing',
     mode: 'plan',
-    effort: 'default',
+    effort: 'auto',
     ...overrides,
   };
 }
@@ -237,25 +236,62 @@ describe('buildExecCommand', () => {
   // --- Model selection ---
 
   describe('model selection', () => {
-    it('explicit model overrides effort mapping', () => {
-      const cmd = buildExecCommand(opts({ agent: 'claude', model: 'custom-model', effort: 'fast' }));
+    it('explicit model is forwarded via --model', () => {
+      const cmd = buildExecCommand(opts({ agent: 'claude', model: 'custom-model' }));
       expect(cmd).toContain('--model');
       expect(cmd[cmd.indexOf('--model') + 1]).toBe('custom-model');
     });
 
-    it('effort fast maps to correct claude model', () => {
-      const cmd = buildExecCommand(opts({ agent: 'claude', effort: 'fast' }));
-      expect(cmd[cmd.indexOf('--model') + 1]).toBe(EFFORT_MODELS.claude.fast);
+    it('no --model flag when model is not provided (agent uses its default)', () => {
+      const cmd = buildExecCommand(opts({ agent: 'claude' }));
+      expect(cmd).not.toContain('--model');
     });
 
-    it('effort detailed maps to correct claude model', () => {
-      const cmd = buildExecCommand(opts({ agent: 'claude', effort: 'detailed' }));
-      expect(cmd[cmd.indexOf('--model') + 1]).toBe(EFFORT_MODELS.claude.detailed);
+    it('no --model flag for codex without explicit model', () => {
+      const cmd = buildExecCommand(opts({ agent: 'codex' }));
+      expect(cmd).not.toContain('--model');
+    });
+  });
+
+  // --- Reasoning effort flags ---
+
+  describe('reasoning effort', () => {
+    it('claude effort=high adds --effort high', () => {
+      const cmd = buildExecCommand(opts({ agent: 'claude', effort: 'high' }));
+      const idx = cmd.indexOf('--effort');
+      expect(idx).toBeGreaterThan(-1);
+      expect(cmd[idx + 1]).toBe('high');
     });
 
-    it('effort default maps to correct codex model', () => {
-      const cmd = buildExecCommand(opts({ agent: 'codex', effort: 'default' }));
-      expect(cmd[cmd.indexOf('--model') + 1]).toBe(EFFORT_MODELS.codex.default);
+    it('claude effort=auto omits reasoning flags (agent uses its default)', () => {
+      const cmd = buildExecCommand(opts({ agent: 'claude', effort: 'auto' }));
+      expect(cmd).not.toContain('--effort');
+    });
+
+    it('codex effort=medium injects -c model_reasoning_effort=medium before exec', () => {
+      const cmd = buildExecCommand(opts({ agent: 'codex', effort: 'medium' }));
+      const cIdx = cmd.indexOf('-c');
+      const execIdx = cmd.indexOf('exec');
+      expect(cIdx).toBeGreaterThan(-1);
+      expect(execIdx).toBeGreaterThan(cIdx);
+      expect(cmd[cIdx + 1]).toBe('model_reasoning_effort=medium');
+    });
+
+    it('codex effort=xhigh clamps to high', () => {
+      const cmd = buildExecCommand(opts({ agent: 'codex', effort: 'xhigh' }));
+      const cIdx = cmd.indexOf('-c');
+      expect(cmd[cIdx + 1]).toBe('model_reasoning_effort=high');
+    });
+
+    it('codex effort=auto omits reasoning flags', () => {
+      const cmd = buildExecCommand(opts({ agent: 'codex', effort: 'auto' }));
+      expect(cmd).not.toContain('-c');
+    });
+
+    it('gemini ignores effort (no reasoning flags)', () => {
+      const cmd = buildExecCommand(opts({ agent: 'gemini', effort: 'high' }));
+      expect(cmd).not.toContain('--effort');
+      expect(cmd).not.toContain('-c');
     });
   });
 
@@ -393,7 +429,6 @@ describe('buildExecCommand', () => {
         '--dangerously-skip-permissions',
         '--print',
         '--session-id', 'sess-123',
-        '--model', EFFORT_MODELS.claude.default,
         '--verbose',
         '-p', 'fix the bug',
       ]);
@@ -408,7 +443,37 @@ describe('buildExecCommand', () => {
       expect(cmd).toEqual([
         'codex', 'exec',
         '--full-auto',
-        '--model', EFFORT_MODELS.codex.default,
+        'fix the bug',
+      ]);
+    });
+
+    it('claude with effort=high emits --effort high', () => {
+      const cmd = buildExecCommand(opts({
+        agent: 'claude',
+        mode: 'full',
+        effort: 'high',
+        prompt: 'fix the bug',
+      }));
+      expect(cmd).toEqual([
+        'claude',
+        '--effort', 'high',
+        '--dangerously-skip-permissions',
+        '-p', 'fix the bug',
+      ]);
+    });
+
+    it('codex with effort=medium emits -c model_reasoning_effort=medium before exec', () => {
+      const cmd = buildExecCommand(opts({
+        agent: 'codex',
+        mode: 'full',
+        effort: 'medium',
+        prompt: 'fix the bug',
+      }));
+      expect(cmd).toEqual([
+        'codex',
+        '-c', 'model_reasoning_effort=medium',
+        'exec',
+        '--full-auto',
         'fix the bug',
       ]);
     });

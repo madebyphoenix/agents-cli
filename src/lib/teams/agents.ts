@@ -88,7 +88,7 @@ export const AGENT_COMMANDS: Record<AgentType, string[]> = {
 };
 
 // Effort level type
-export type EffortLevel = 'fast' | 'default' | 'detailed';
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
 export type EffortModelMap = Record<EffortLevel, Record<AgentType, string>>;
 
 // Build effort model map from agent configs
@@ -103,15 +103,18 @@ export function resolveEffortModelMap(
     // Old API: resolveEffortModelMap(base, overrides)
     const base = baseOrAgentConfigs as EffortModelMap;
     const resolved: EffortModelMap = {
-      fast: { ...base.fast },
-      default: { ...base.default },
-      detailed: { ...base.detailed }
+      low: { ...base.low },
+      medium: { ...base.medium },
+      high: { ...base.high },
+      xhigh: { ...base.xhigh },
+      max: { ...base.max },
+      auto: { ...base.auto }
     };
 
     for (const [agentType, effortOverrides] of Object.entries(overrides)) {
       if (!effortOverrides) continue;
       const typedAgent = agentType as AgentType;
-      for (const level of ['fast', 'default', 'detailed'] as const) {
+      for (const level of ['low', 'medium', 'high', 'xhigh', 'max', 'auto'] as const) {
         const model = effortOverrides[level];
         if (typeof model === 'string') {
           const trimmed = model.trim();
@@ -877,7 +880,7 @@ export class AgentProcess {
     prompt: string,
     cwd: string | null = null,
     mode: Mode | null = null,
-    effort: EffortLevel = 'default',
+    effort: EffortLevel = 'medium',
     parentSessionId: string | null = null,
     workspaceDir: string | null = null,
     version: string | null = null,
@@ -1006,7 +1009,7 @@ export class AgentProcess {
       );
     }
 
-    const effort = agent.effort ?? 'default';
+    const effort = agent.effort ?? 'medium';
     // Explicit --model override wins over the effort→model map.
     const resolvedModel: string =
       agent.model ?? this.effortModelMap[effort][agent.agentType];
