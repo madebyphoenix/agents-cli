@@ -194,7 +194,7 @@ agents add claude@2.0.0             # Install specific version
 agents use claude@2.0.0 -p          # Pin to this project
 ```
 
-Like `.nvmrc` for Node -- different projects use different agent versions. A shim system reads `.agents-version` and routes to the right binary automatically. No other tool does this for AI agents.
+Like `.nvmrc` for Node -- different projects use different agent versions. A shim system reads a project-root `agents.yaml` and routes to the right binary automatically. No other tool does this for AI agents.
 
 When you switch versions, configs are backed up and resources are re-synced. Each version gets its own isolated home directory with the right skills, commands, and permissions already in place.
 
@@ -448,7 +448,7 @@ Each agent CLI has its own config format, its own MCP setup, its own version man
 
 ### Is this like `nvm` / `mise` / `asdf` but for AI agents?
 
-For version management, yes — that's the closest analogue. `agents-cli` reads `.agents-version` in a project, walks up the directory tree, and routes `claude` / `codex` / `gemini` to the correct installed binary per project. But `agents` also manages agent-native resources (skills, MCP servers, slash commands, hooks, permissions) that language version managers don't touch.
+For version management, yes — that's the closest analogue. `agents-cli` reads a project-root `agents.yaml`, walks up the directory tree, and routes `claude` / `codex` / `gemini` to the correct installed binary per project. But `agents` also manages agent-native resources (skills, MCP servers, slash commands, hooks, permissions) that language version managers don't touch.
 
 ### How is this different from Vercel's Open Agents?
 

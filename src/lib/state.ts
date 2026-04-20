@@ -49,7 +49,7 @@ export function getProjectAgentsDir(startPath: string = process.cwd()): string |
       }
     }
 
-    const isProjectBoundary = fs.existsSync(path.join(dir, '.git')) || fs.existsSync(path.join(dir, '.agents-version'));
+    const isProjectBoundary = fs.existsSync(path.join(dir, '.git')) || fs.existsSync(path.join(dir, 'agents.yaml'));
     const parent = path.dirname(dir);
     if (parent === dir) {
       break;
