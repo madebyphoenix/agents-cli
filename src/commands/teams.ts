@@ -479,7 +479,7 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
           if (picked) {
             // Fall through to the status subcommand's action for the picked team.
             const result = await handleStatus(mgr, picked.team, 'all');
-            printTeamStatus(picked.team, result);
+            await printTeamStatus(picked.team, result);
           }
         } catch (err) {
           if (!isPromptCancelled(err)) throw err;
@@ -661,7 +661,7 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
           return;
         }
 
-        printTeamStatus(team, { ...result, agents });
+        await printTeamStatus(team, { ...result, agents });
       } catch (err) {
         die(`Could not check on team ${team}: ${(err as Error).message}`);
       }
