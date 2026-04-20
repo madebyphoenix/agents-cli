@@ -35,6 +35,42 @@ export function requireInteractiveSelection(action: string, alternatives: string
 }
 
 /**
+ * Print a properly-cased "missing argument" error for destructive commands and
+ * exit. Destructive commands (remove, disband, disable) deliberately do NOT
+ * fall back to an interactive picker — typing the name is the safety check.
+ *
+ * Lists available items so the user can copy-paste, but never auto-selects.
+ */
+export function requireDestructiveArg(opts: {
+  argName: string;       // e.g. 'team', 'name', 'agent'
+  command: string;       // e.g. 'agents teams disband'
+  itemNoun: string;      // e.g. 'team', 'plugin' — used for grammar
+  available: string[];   // names to list
+  emptyHint?: string;    // shown when no items exist
+}): never {
+  const { argName, command, itemNoun, available, emptyHint } = opts;
+  console.error(chalk.red(`Missing required argument: ${argName.toUpperCase()}`));
+  console.error('');
+  if (available.length === 0) {
+    console.error(chalk.gray(emptyHint || `No ${itemNoun}s to choose from.`));
+  } else {
+    const label = available.length === 1 ? itemNoun : `${itemNoun}s`;
+    console.error(chalk.gray(`Available ${label}:`));
+    for (const name of available) {
+      console.error(`  ${chalk.cyan(name)}`);
+    }
+    console.error('');
+    console.error(chalk.gray(`Re-run with the ${itemNoun} you want:`));
+    console.error(chalk.cyan(`  ${command} ${available[0]}`));
+  }
+  console.error('');
+  console.error(
+    chalk.gray(`Tip: this is a destructive command, so you have to type the ${itemNoun} name explicitly.`)
+  );
+  process.exit(2);
+}
+
+/**
  * Print long content directly in non-interactive shells, use a pager only for real terminals.
  */
 export function printWithPager(output: string, lineCount: number): void {
