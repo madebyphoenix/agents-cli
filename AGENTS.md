@@ -47,7 +47,7 @@ Shims in `~/.agents/shims/` resolve version from `.agents-version` (project) or 
 src/
   index.ts           # CLI entry (commander.js)
   commands/          # Command implementations
-    sessions.ts      # agents sessions list/view (default: summary mode)
+    sessions.ts      # agents sessions (single smart command: picker, table, or render)
     exec.ts          # agents run
     routines.ts      # agents routines (scheduled jobs)
     drive.ts         # agents drive (remote session sync)
@@ -126,12 +126,12 @@ agents search <query>        # Search MCP servers
 agents install <pkg>         # Install mcp:name or skill:user/repo
 
 # Sessions
-agents sessions              # List sessions across all agents
-agents sessions list         # Same, with --agent/--project filters
-agents sessions view <id>    # View session (summary by default)
-agents sessions view <id> --transcript   # Full conversation transcript
-agents sessions view <id> --trace        # Reasoning trace as markdown
-agents sessions view <id> --json         # Normalized events as JSON
+agents sessions                       # Interactive picker (TTY) or table (piped)
+agents sessions <query>               # Search by text, path, or session ID
+agents sessions <id> --transcript     # Full conversation transcript
+agents sessions <id> --trace          # Reasoning trace as markdown
+agents sessions <id> --timeline       # Chronological timeline
+agents sessions <id> --json           # Normalized events as JSON
 
 # Execution
 agents run <agent> <prompt> # Execute agent non-interactively
