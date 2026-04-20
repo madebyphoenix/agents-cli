@@ -71,7 +71,7 @@ Each teammate runs detached. Close your terminal; they keep working. Check in wh
 
 - `--name alice` gives a teammate a handle. Refer to them by name everywhere (`teams rm auth alice`, `teams logs alice`).
 - `--after name1,name2` stages a teammate as pending. `teams start` fires the ones whose blockers are `completed`. Cycles rejected at add time; a failed blocker keeps its dependents pending so you decide what to do.
-- For Claude teammates, `agent_id` IS the Claude session UUID -- `agents sessions view <agent_id>` opens the full transcript.
+- For Claude teammates, `agent_id` IS the Claude session UUID -- `agents sessions <agent_id> --transcript` opens the full transcript.
 - Modes match `exec`: `plan | edit | full`. `--model`, `--env KEY=VALUE`, `--cwd` all passthroughs too.
 - `teams ls` filters: substring query, `--agent claude[@version]`, `--status working|done|failed|empty`, `--since 2h --until 30d`.
 - Non-TTY output is valid JSON by default, with a `cursor` field in every `status` response for efficient delta polling (`--since <cursor>`).
@@ -92,7 +92,7 @@ agents skills add --names agents-cli --agents claude@default
 agents install ./team-agent-pack --agents codex@0.113.0
 agents mcp add postgres --agents claude@2.1.79 -- npx -y @modelcontextprotocol/server-postgres
 agents mcp register postgres
-agents sessions view <session-id>
+agents sessions <session-id> --transcript
 agents routines view <job-name>
 ```
 
@@ -113,10 +113,10 @@ If a command still needs a human-only picker, it now exits with a plain-text hin
 Interactive terminals now get a live-search picker for sessions:
 
 ```bash
-agents sessions view
+agents sessions
 agents sessions --agent codex
 agents sessions --project agents-cli
-agents sessions view --agent gemini "session discovery"
+agents sessions --agent gemini "session discovery"
 ```
 
 What you can type into the picker:
@@ -129,7 +129,7 @@ What you can type into the picker:
 
 The shared `Agent` column also shows the resolved agent version when it is known, so filtered lists read like `claude@2.1.110`, `codex@0.113.0`, `gemini@0.29.5`, and `opencode@1.2.6`.
 
-Use `agents sessions view <id>` in non-interactive shells when you already know the session you want.
+Pass `<id>` (with `--transcript`, `--trace`, `--timeline`, or `--json` for a specific view) in non-interactive shells when you already know the session you want.
 
 ---
 
@@ -310,7 +310,7 @@ agents drive status                # Show drive state
 
 # Execution
 agents run <agent> <prompt>      # Run agent
-agents sessions view <id>         # Read a session by exact ID
+agents sessions <id> --transcript # Read a session by exact ID
 agents sessions --agent codex     # Interactive filtered session search
 agents sessions --project agents  # Interactive project-scoped session search
 agents routines add <name>        # Schedule a job
