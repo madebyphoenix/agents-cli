@@ -2,7 +2,7 @@
 
 **The package manager and runtime for AI coding agents.**
 
-Install versions. Install skills. Run any agent through one interface. Build pipelines across Claude, Codex, Gemini, Cursor, OpenCode, and more.
+Install versions. Install skills. Run any agent through one interface. Put agents on a team to work a shared task in parallel. Works with Claude, Codex, Gemini, Cursor, OpenCode, and more.
 
 ```bash
 npm install -g @swarmify/agents-cli
@@ -48,6 +48,35 @@ agents exec claude "Review all PRs merged this week, summarize risks"
 ```
 
 Supports plan (read-only) and edit modes, effort levels that map to the right model per agent, and JSON output for scripting.
+
+---
+
+## Put agents on a team
+
+`agents exec` runs one agent synchronously. **Teams** run many agents on the same task, in the background, with coordination.
+
+```bash
+agents teams create auth-feature
+
+agents teams add auth-feature claude "Research auth libraries"         --name researcher
+agents teams add auth-feature codex  "Draft the migration"             --name migrator --after researcher
+agents teams add auth-feature claude "Write tests for the new code"    --name tester   --after migrator
+
+agents teams start auth-feature    # launches teammates whose --after deps are done
+agents teams status auth-feature   # who's working, what they've changed, what they said
+agents teams disband auth-feature  # stop everyone, clean up
+```
+
+Each teammate runs detached. Close your terminal; they keep working. Check in whenever.
+
+- `--name alice` gives a teammate a handle. Refer to them by name everywhere (`teams rm auth alice`, `teams logs alice`).
+- `--after name1,name2` stages a teammate as pending. `teams start` fires the ones whose blockers are `completed`. Cycles rejected at add time; a failed blocker keeps its dependents pending so you decide what to do.
+- For Claude teammates, `agent_id` IS the Claude session UUID -- `agents sessions view <agent_id>` opens the full transcript.
+- Modes match `exec`: `plan | edit | full`. `--model`, `--env KEY=VALUE`, `--cwd` all passthroughs too.
+- `teams ls` filters: substring query, `--agent claude[@version]`, `--status working|done|failed|empty`, `--since 2h --until 30d`.
+- Non-TTY output is valid JSON by default, with a `cursor` field in every `status` response for efficient delta polling (`--since <cursor>`).
+
+State lives in `~/.agents/teams/`. Teammates survive terminal restarts. Synced config (commands, skills, rules, MCP servers, hooks, permissions) applies to teammates the same way it applies to `agents exec` -- one config, both flows.
 
 ---
 
@@ -288,6 +317,21 @@ agents routines add <name>        # Schedule a job
 agents routines list              # Show all jobs
 agents daemon start               # Start scheduler
 
+# Teams (orchestrate multiple agents on a shared task)
+agents teams create <team>             # Start a new team
+agents teams add <team> <agent> <task> # Add a teammate (runs immediately)
+  --name alice                         #   give them a handle
+  --after alice,bob                    #   stage as pending until deps complete
+  --mode plan|edit|full                #   permissions
+  --model <model> --env K=V            #   same passthroughs as exec
+agents teams start <team>              # Launch pending teammates whose deps are done
+agents teams status <team>             # Team standup (pass --since <cursor> for deltas)
+agents teams ls                        # List teams (--agent, --status, --since filters)
+agents teams remove <team> <teammate>  # Let one teammate go (name or UUID prefix)
+agents teams disband <team>            # Stop everyone, remove the team
+agents teams logs <teammate>           # Read their raw log
+agents teams doctor                    # Check which agents can join a team
+
 # PTY sessions
 agents pty start                  # Start a PTY session (returns ID)
 agents pty exec <id> <command>    # Run a command in the session
@@ -326,14 +370,14 @@ Add rule files in a `rules/` subdirectory -- each rule is a markdown file with s
 
 ## Compatibility
 
-| Agent | Versions | MCP | Commands | Skills | Rules | Hooks | Permissions | Routines |
-|-------|----------|-----|----------|--------|-------|-------|-------------|----------|
-| Claude | yes | yes | yes | yes | CLAUDE.md | yes | yes | yes |
-| Codex | yes | yes | yes | yes | AGENTS.md | yes | yes | yes |
-| Gemini | yes | yes | yes | yes | GEMINI.md | yes | -- | yes |
-| Cursor | yes | yes | yes | yes | .cursorrules | -- | -- | -- |
-| OpenCode | yes | yes | yes | yes | AGENTS.md | yes | yes | -- |
-| OpenClaw | yes | yes | -- | yes | workspace/AGENTS.md | yes | -- | -- |
+| Agent | Versions | MCP | Commands | Skills | Rules | Hooks | Permissions | Routines | Teams |
+|-------|----------|-----|----------|--------|-------|-------|-------------|----------|-------|
+| Claude | yes | yes | yes | yes | CLAUDE.md | yes | yes | yes | yes |
+| Codex | yes | yes | yes | yes | AGENTS.md | yes | yes | yes | yes |
+| Gemini | yes | yes | yes | yes | GEMINI.md | yes | -- | yes | yes |
+| Cursor | yes | yes | yes | yes | .cursorrules | -- | -- | -- | yes |
+| OpenCode | yes | yes | yes | yes | AGENTS.md | yes | yes | -- | yes |
+| OpenClaw | yes | yes | -- | yes | workspace/AGENTS.md | yes | -- | -- | -- |
 
 ## How It Compares
 
