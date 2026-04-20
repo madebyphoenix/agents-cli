@@ -173,6 +173,7 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
   try {
     let sessions = await discoverSessions({
       agent,
+      version,
       all: pathFilter ? true : options.all,
       cwd: process.cwd(),
       project: options.project,
@@ -190,10 +191,6 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
 
     tracker.stop();
     spinner?.stop();
-
-    if (version) {
-      sessions = sessions.filter(s => s.version === version);
-    }
 
     // Filter out team-spawned sessions by default. Pass --teams to include them.
     const { visible: visibleSessions, hiddenCount } = filterTeamSessions(sessions, !!options.teams);
