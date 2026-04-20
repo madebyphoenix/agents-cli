@@ -6,7 +6,7 @@ import { getVersionHomePath, isVersionInstalled, resolveVersion } from './versio
 import { resolveModel } from './models.js';
 
 export type ExecMode = 'plan' | 'edit' | 'full';
-export type ExecEffort = 'fast' | 'default' | 'detailed';
+export type ExecEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
 
 export interface ExecOptions {
   agent: AgentId;
@@ -75,64 +75,6 @@ export function buildExecEnv(options: ExecOptions): NodeJS.ProcessEnv {
   };
 }
 
-// Model mapping per agent per effort level
-export const EFFORT_MODELS: Record<AgentId, Record<ExecEffort, string>> = {
-  claude: {
-    fast: 'claude-haiku-4-5-20251001',
-    default: 'claude-sonnet-4-5',
-    detailed: 'claude-opus-4-5',
-  },
-  codex: {
-    fast: 'gpt-4o-mini',
-    default: 'gpt-5.2-codex',
-    detailed: 'gpt-5.1-codex-max',
-  },
-  gemini: {
-    fast: 'gemini-3-flash-preview',
-    default: 'gemini-3-flash-preview',
-    detailed: 'gemini-3-pro-preview',
-  },
-  cursor: {
-    fast: 'composer-1',
-    default: 'composer-1',
-    detailed: 'composer-1',
-  },
-  opencode: {
-    fast: 'zai-coding-plan/glm-4.7-flash',
-    default: 'zai-coding-plan/glm-4.7',
-    detailed: 'zai-coding-plan/glm-4.7',
-  },
-  openclaw: {
-    fast: 'claude-haiku-4-5-20251001',
-    default: 'claude-sonnet-4-5',
-    detailed: 'claude-opus-4-5',
-  },
-  copilot: {
-    fast: 'gpt-4o-mini',
-    default: 'gpt-4o',
-    detailed: 'claude-sonnet-4-5',
-  },
-  amp: {
-    fast: 'claude-haiku-4-5-20251001',
-    default: 'claude-sonnet-4-5',
-    detailed: 'claude-opus-4-5',
-  },
-  kiro: {
-    fast: 'claude-haiku-4-5-20251001',
-    default: 'claude-sonnet-4-5',
-    detailed: 'claude-opus-4-5',
-  },
-  goose: {
-    fast: 'gpt-4o-mini',
-    default: 'gpt-4o',
-    detailed: 'claude-sonnet-4-5',
-  },
-  roo: {
-    fast: 'claude-haiku-4-5-20251001',
-    default: 'claude-sonnet-4-5',
-    detailed: 'claude-opus-4-5',
-  },
-};
 
 // Command templates per agent
 export interface AgentCommandTemplate {
