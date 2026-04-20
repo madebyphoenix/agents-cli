@@ -4,7 +4,7 @@ import ora from 'ora';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { checkbox } from '@inquirer/prompts';
+import { checkbox, confirm } from '@inquirer/prompts';
 
 import {
   AGENTS,
@@ -24,6 +24,10 @@ import {
   removeHook,
   getHookInfo,
   parseHookManifest,
+  diffVersionHooks,
+  installHookToVersion,
+  removeHookFromVersion,
+  iterHooksCapableVersions,
 } from '../lib/hooks.js';
 import {
   listInstalledVersions,
@@ -536,6 +540,180 @@ Examples:
           console.log(chalk.yellow(`Hook '${hookName}' not found for any agent`));
         }
       }
+    });
+
+  hooksCmd
+    .command('sync')
+    .description('Reconcile version-home hook scripts against central ~/.agents/hooks/ (add + update, never delete)')
+    .option('-a, --agent <agent>', 'Scope to a specific agent or agent@version')
+    .addHelpText('after', `
+Examples:
+  # Sync every installed hooks-capable version
+  agents hooks sync
+
+  # Scope to one agent or version
+  agents hooks sync --agent claude
+  agents hooks sync --agent claude@2.1.113
+
+Sync reconciles the hook script files in each version home against the central
+source of truth in ~/.agents/hooks/. It does NOT touch settings.json
+registrations — those point at central paths and are managed on install.
+
+Sync is additive: to remove orphan scripts, use 'agents hooks prune'.
+`)
+    .action(async (options) => {
+      let filter: { agent?: AgentId; version?: string } | undefined;
+      if (options.agent) {
+        const [name, version] = String(options.agent).split('@');
+        const agentId = resolveAgentName(name);
+        if (!agentId) {
+          console.log(chalk.red(formatAgentError(name, HOOKS_CAPABLE_AGENTS as unknown as AgentId[])));
+          process.exit(1);
+        }
+        filter = { agent: agentId, version: version || undefined };
+      }
+
+      const pairs = iterHooksCapableVersions(filter);
+      if (pairs.length === 0) {
+        console.log(chalk.gray('No matching installed versions.'));
+        return;
+      }
+
+      const diffs = pairs.map(({ agent, version }) => diffVersionHooks(agent, version));
+      const plan = diffs.filter((d) => d.toAdd.length > 0 || d.toUpdate.length > 0);
+
+      if (plan.length === 0) {
+        console.log(chalk.green('All version homes are up to date with central.'));
+        if (diffs.some((d) => d.orphans.length > 0)) {
+          console.log(chalk.gray('Orphan hooks present. Run \'agents hooks prune --dry-run\' to review.'));
+        }
+        return;
+      }
+
+      console.log(chalk.bold('Syncing hooks\n'));
+      let adds = 0, updates = 0, failures = 0;
+      for (const diff of plan) {
+        const label = `${diff.agent}@${diff.version}`;
+        if (diff.toAdd.length > 0) {
+          console.log(`  ${chalk.cyan(label)} ${chalk.gray('add:')} ${diff.toAdd.join(', ')}`);
+          for (const name of diff.toAdd) {
+            const r = installHookToVersion(diff.agent, diff.version, name);
+            if (r.success) adds++;
+            else { failures++; console.log(chalk.red(`    ! ${name}: ${r.error}`)); }
+          }
+        }
+        if (diff.toUpdate.length > 0) {
+          console.log(`  ${chalk.cyan(label)} ${chalk.gray('update:')} ${diff.toUpdate.join(', ')}`);
+          for (const name of diff.toUpdate) {
+            const r = installHookToVersion(diff.agent, diff.version, name);
+            if (r.success) updates++;
+            else { failures++; console.log(chalk.red(`    ! ${name}: ${r.error}`)); }
+          }
+        }
+      }
+
+      console.log();
+      console.log(chalk.green(`Synced: ${adds} added, ${updates} updated${failures > 0 ? chalk.red(`, ${failures} failed`) : ''}.`));
+
+      const totalOrphans = diffs.reduce((n, d) => n + d.orphans.length, 0);
+      if (totalOrphans > 0) {
+        console.log(chalk.gray(`${totalOrphans} orphan(s) remain. Run 'agents hooks prune --dry-run' to review.`));
+      }
+    });
+
+  hooksCmd
+    .command('prune')
+    .description('Remove orphan hook scripts from version homes (scripts present locally but not in central)')
+    .option('-a, --agent <agent>', 'Scope to a specific agent or agent@version')
+    .option('--dry-run', 'Show orphans without deleting')
+    .option('-y, --yes', 'Skip confirmation prompt')
+    .addHelpText('after', `
+Examples:
+  # See what would be pruned
+  agents hooks prune --dry-run
+
+  # Prune across every installed version (prompts for confirmation)
+  agents hooks prune
+
+  # Scope to one agent or version
+  agents hooks prune --agent claude@2.1.80
+
+  # Skip confirmation (for scripts)
+  agents hooks prune -y
+
+Prune removes hook SCRIPT FILES from version homes. It does not edit
+settings.json registrations — those are keyed off central paths and remain
+consistent as long as central ~/.agents/hooks/ and ~/.agents/hooks.yaml are
+the source of truth.
+`)
+    .action(async (options) => {
+      let filter: { agent?: AgentId; version?: string } | undefined;
+      if (options.agent) {
+        const [name, version] = String(options.agent).split('@');
+        const agentId = resolveAgentName(name);
+        if (!agentId) {
+          console.log(chalk.red(formatAgentError(name, HOOKS_CAPABLE_AGENTS as unknown as AgentId[])));
+          process.exit(1);
+        }
+        filter = { agent: agentId, version: version || undefined };
+      }
+
+      const pairs = iterHooksCapableVersions(filter);
+      const diffs = pairs
+        .map(({ agent, version }) => diffVersionHooks(agent, version))
+        .filter((d) => d.orphans.length > 0);
+
+      if (diffs.length === 0) {
+        console.log(chalk.green('No orphan hooks.'));
+        return;
+      }
+
+      const total = diffs.reduce((n, d) => n + d.orphans.length, 0);
+      console.log(chalk.bold(`Orphans (in version home, not in central)\n`));
+      for (const d of diffs) {
+        console.log(`  ${chalk.cyan(`${d.agent}@${d.version}`)}  ${d.orphans.join(', ')}`);
+      }
+      console.log();
+
+      if (options.dryRun) {
+        console.log(chalk.gray(`${total} orphan(s). Run without --dry-run to delete.`));
+        return;
+      }
+
+      if (!options.yes) {
+        if (!isInteractiveTerminal()) {
+          console.log(chalk.yellow('Non-interactive shell: pass -y to confirm, or --dry-run to preview.'));
+          process.exit(1);
+        }
+        let ok = false;
+        try {
+          ok = await confirm({
+            message: `Delete ${total} orphan hook${total === 1 ? '' : 's'}?`,
+            default: false,
+          });
+        } catch (err) {
+          if (isPromptCancelled(err)) {
+            console.log(chalk.gray('Cancelled'));
+            return;
+          }
+          throw err;
+        }
+        if (!ok) {
+          console.log(chalk.gray('Cancelled'));
+          return;
+        }
+      }
+
+      let removed = 0, failures = 0;
+      for (const d of diffs) {
+        for (const name of d.orphans) {
+          const r = removeHookFromVersion(d.agent, d.version, name);
+          if (r.success) removed++;
+          else { failures++; console.log(chalk.red(`  ! ${d.agent}@${d.version} ${name}: ${r.error}`)); }
+        }
+      }
+
+      console.log(chalk.green(`Pruned ${removed} orphan(s)${failures > 0 ? chalk.red(`, ${failures} failed`) : ''}.`));
     });
 
   hooksCmd

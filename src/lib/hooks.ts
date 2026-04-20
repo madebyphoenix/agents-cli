@@ -2,9 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
 import * as TOML from 'smol-toml';
-import { AGENTS, ALL_AGENT_IDS } from './agents.js';
+import { AGENTS, ALL_AGENT_IDS, HOOKS_CAPABLE_AGENTS } from './agents.js';
 import { getAgentsDir, getHooksDir as getCentralHooksDir, getProjectAgentsDir } from './state.js';
-import { getEffectiveHome } from './versions.js';
+import { getEffectiveHome, getVersionHomePath, listInstalledVersions } from './versions.js';
 import type { AgentId, InstalledHook, ManifestHook } from './types.js';
 
 export type HookEntry = { name: string; scriptPath: string; dataFile?: string };
@@ -312,6 +312,144 @@ export async function installHooks(
   }
 
   return { installed, errors };
+}
+
+/**
+ * Path to the hooks dir of a specific version home (not the active one).
+ */
+export function getVersionHooksDir(agent: AgentId, version: string): string {
+  const home = getVersionHomePath(agent, version);
+  return path.join(home, `.${agent}`, AGENTS[agent].hooksDir);
+}
+
+/**
+ * List hook entries in a specific version home.
+ */
+export function listHooksInVersionHome(agent: AgentId, version: string): HookEntry[] {
+  return listHookEntriesFromDir(getVersionHooksDir(agent, version));
+}
+
+/**
+ * Check if a hook installed in a specific version matches central content.
+ */
+function versionHookMatches(agent: AgentId, version: string, hookName: string): boolean {
+  const central = listHookEntriesFromDir(getCentralHooksDir()).find((e) => e.name === hookName);
+  if (!central) return false;
+  const installed = listHooksInVersionHome(agent, version).find((e) => e.name === hookName);
+  if (!installed) return false;
+
+  try {
+    if (normalizeContent(fs.readFileSync(installed.scriptPath, 'utf-8')) !==
+        normalizeContent(fs.readFileSync(central.scriptPath, 'utf-8'))) {
+      return false;
+    }
+    if (!!installed.dataFile !== !!central.dataFile) return false;
+    if (installed.dataFile && central.dataFile) {
+      if (normalizeContent(fs.readFileSync(installed.dataFile, 'utf-8')) !==
+          normalizeContent(fs.readFileSync(central.dataFile, 'utf-8'))) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface VersionHookDiff {
+  agent: AgentId;
+  version: string;
+  toAdd: string[];
+  toUpdate: string[];
+  matched: string[];
+  orphans: string[];
+}
+
+/**
+ * Compare a version home's hooks against central. Returns the reconciliation diff.
+ */
+export function diffVersionHooks(agent: AgentId, version: string): VersionHookDiff {
+  const central = new Set(listHookEntriesFromDir(getCentralHooksDir()).map((e) => e.name));
+  const installed = new Set(listHooksInVersionHome(agent, version).map((e) => e.name));
+
+  const toAdd: string[] = [];
+  const toUpdate: string[] = [];
+  const matched: string[] = [];
+  const orphans: string[] = [];
+
+  for (const name of central) {
+    if (!installed.has(name)) {
+      toAdd.push(name);
+    } else if (!versionHookMatches(agent, version, name)) {
+      toUpdate.push(name);
+    } else {
+      matched.push(name);
+    }
+  }
+
+  for (const name of installed) {
+    if (!central.has(name)) orphans.push(name);
+  }
+
+  return { agent, version, toAdd: toAdd.sort(), toUpdate: toUpdate.sort(), matched, orphans: orphans.sort() };
+}
+
+/**
+ * Install a single hook from central into a specific version home.
+ */
+export function installHookToVersion(
+  agent: AgentId,
+  version: string,
+  hookName: string
+): { success: boolean; error?: string } {
+  const central = listHookEntriesFromDir(getCentralHooksDir()).find((e) => e.name === hookName);
+  if (!central) {
+    return { success: false, error: `Hook '${hookName}' not found in central` };
+  }
+
+  const targetDir = getVersionHooksDir(agent, version);
+  try {
+    fs.mkdirSync(targetDir, { recursive: true });
+    copyHook(central, targetDir);
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+  return { success: true };
+}
+
+/**
+ * Remove a single hook (script + data file) from a specific version home.
+ */
+export function removeHookFromVersion(
+  agent: AgentId,
+  version: string,
+  hookName: string
+): { success: boolean; error?: string } {
+  try {
+    removeHookFiles(getVersionHooksDir(agent, version), hookName);
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+  return { success: true };
+}
+
+/**
+ * Iterate all (agent, version) pairs that support hooks and are installed,
+ * optionally scoped to a single agent/version.
+ */
+export function iterHooksCapableVersions(filter?: { agent?: AgentId; version?: string }): Array<{ agent: AgentId; version: string }> {
+  const pairs: Array<{ agent: AgentId; version: string }> = [];
+  const hookAgents: AgentId[] = HOOKS_CAPABLE_AGENTS as unknown as AgentId[];
+  const agents = filter?.agent ? [filter.agent] : hookAgents;
+  for (const agent of agents) {
+    if (!hookAgents.includes(agent)) continue;
+    const versions = listInstalledVersions(agent);
+    for (const version of versions) {
+      if (filter?.version && filter.version !== version) continue;
+      pairs.push({ agent, version });
+    }
+  }
+  return pairs;
 }
 
 export async function removeHook(
