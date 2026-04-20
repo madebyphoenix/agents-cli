@@ -16,6 +16,10 @@ const NOISE_LINE_PATTERNS = [
 
 const LOCAL_COMMAND_PREFIX = '<local-command-caveat>';
 
+// Prefix prepended to every Claude-in-plan-mode team spawn prompt.
+// Ends at a blank line before the real user task.
+export const HEADLESS_PLAN_MODE_PREFIX = 'You are running in HEADLESS PLAN MODE.';
+
 export function cleanSessionPrompt(raw: string): string {
   let text = raw.replace(/\r/g, '').trim();
   if (!text) return '';
@@ -33,11 +37,21 @@ export function cleanSessionPrompt(raw: string): string {
 
 export function extractSessionTopic(raw: string): string | undefined {
   if (!raw.trim()) return undefined;
-  if (WHOLE_MESSAGE_SKIP_PATTERNS.some(pattern => pattern.test(raw))) {
+
+  // Strip the HEADLESS PLAN MODE header so team sessions show their real task.
+  // The header ends at the first blank line (\n\n) before the actual prompt.
+  let text = raw;
+  if (text.trimStart().startsWith(HEADLESS_PLAN_MODE_PREFIX)) {
+    const blankLine = text.indexOf('\n\n');
+    if (blankLine === -1) return undefined;
+    text = text.slice(blankLine + 2);
+  }
+
+  if (WHOLE_MESSAGE_SKIP_PATTERNS.some(pattern => pattern.test(text))) {
     return undefined;
   }
 
-  const cleaned = cleanSessionPrompt(raw);
+  const cleaned = cleanSessionPrompt(text);
   if (!cleaned) return undefined;
   if (WHOLE_MESSAGE_SKIP_PATTERNS.some(pattern => pattern.test(cleaned))) {
     return undefined;

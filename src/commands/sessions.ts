@@ -8,6 +8,7 @@ import ora from 'ora';
 import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types.js';
 import { SESSION_AGENTS } from '../lib/session/types.js';
 import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter, type ScanProgress } from '../lib/session/discover.js';
+import { filterTeamSessions } from '../lib/session/team-filter.js';
 import { parseSession } from '../lib/session/parse.js';
 import { renderTranscript, renderSummary, renderSummaryHeader, computeSummaryStats, renderTrace, renderJson } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
@@ -21,6 +22,7 @@ interface SessionFilterOptions {
   agent?: string;
   project?: string;
   all?: boolean;
+  teams?: boolean;
   since?: string;
   until?: string;
 }
@@ -183,6 +185,10 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
       sessions = sessions.filter(s => s.version === version);
     }
 
+    // Filter out team-spawned sessions by default. Pass --teams to include them.
+    const { visible: visibleSessions, hiddenCount } = filterTeamSessions(sessions, !!options.teams);
+    sessions = visibleSessions;
+
     // Smart ID routing: a bare query that resolves to one session renders
     // directly. If nothing matches in the scoped window and the query looks
     // like a session ID, widen to global scope (incl. Claude /resume history).
@@ -214,6 +220,9 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
       } else {
         console.log(chalk.gray(formatNoSessionsMessage(options.all, options.project)));
       }
+      if (hiddenCount > 0) {
+        console.log(chalk.gray(formatTeamHiddenFooter(hiddenCount)));
+      }
       return;
     }
 
@@ -221,7 +230,7 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
       const message = pathFilter
         ? `Search sessions (${path.basename(pathFilter)}):`
         : formatSearchMessage(options);
-      const picked = await pickSessionInteractive(sessions, message, searchQuery);
+      const picked = await pickSessionInteractive(sessions, message, searchQuery, hiddenCount);
       if (picked) {
         await handlePickedSession(picked);
         return;
@@ -231,7 +240,7 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
 
     // Non-interactive fallback (piped output)
     const filtered = searchQuery ? filterSessionsByQuery(sessions, searchQuery) : sessions;
-    printSessionTable(filtered);
+    printSessionTable(filtered, hiddenCount);
   } catch (err: any) {
     tracker.stop();
     spinner?.stop();
@@ -244,22 +253,36 @@ function looksLikeSessionId(query: string): boolean {
   return /^[0-9a-f-]{6,}$/i.test(query.trim());
 }
 
-function printSessionTable(sessions: SessionMeta[]): void {
+function teamTag(session: SessionMeta): string {
+  const origin = session.teamOrigin;
+  if (!origin) return '';
+  const parts = [origin.handle, origin.mode].filter(Boolean).join(' · ');
+  return parts ? `[${parts}] ` : '[team] ';
+}
+
+function printSessionTable(sessions: SessionMeta[], hiddenCount = 0): void {
   for (const session of sessions) {
     const agentColor = colorAgent(session.agent);
     const when = formatRelativeTime(session.timestamp);
     const project = session.project || '-';
+    const tag = teamTag(session);
+    const label = (session as any).label;
+    const topic = tag ? `${tag}${session.topic ?? ''}` : session.topic;
 
     console.log(
       chalk.white(padRight(session.shortId, 10)) +
       agentColor(padRight(truncate(session.agent, 9), 10)) +
       chalk.cyan(padRight(truncate(project, 14), 16)) +
-      renderTopicCell((session as any).label, session.topic, '', 50, 52) +
+      renderTopicCell(label, topic, '', 50, 52) +
       chalk.gray(when)
     );
   }
 
-  console.log(chalk.gray(`\n${sessions.length} session${sessions.length === 1 ? '' : 's'}.`));
+  const countLine = `${sessions.length} session${sessions.length === 1 ? '' : 's'}.`;
+  console.log(chalk.gray(`\n${countLine}`));
+  if (hiddenCount > 0) {
+    console.log(chalk.gray(formatTeamHiddenFooter(hiddenCount)));
+  }
 }
 
 function resolveViewMode(options: { transcript?: boolean; trace?: boolean; timeline?: boolean; json?: boolean }): ViewMode {
@@ -376,12 +399,15 @@ function formatPickerLabel(s: SessionMeta, query: string): string {
   const agentColor = colorAgent(s.agent);
   const when = formatRelativeTime(s.timestamp);
   const project = s.project || '-';
+  const tag = teamTag(s);
+  const label = (s as any).label;
+  const topic = tag ? `${tag}${s.topic ?? ''}` : s.topic;
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
     agentColor(padRight(truncate(s.agent, 9), 10)) +
     chalk.cyan(padRight(truncate(project, 14), 16)) +
-    renderTopicCell((s as any).label, s.topic, query, 50, 52) +
+    renderTopicCell(label, topic, query, 50, 52) +
     chalk.gray(when)
   );
 }
@@ -390,7 +416,11 @@ async function pickSessionInteractive(
   sessions: SessionMeta[],
   message = 'Search sessions:',
   initialSearch?: string,
+  hiddenCount = 0,
 ): Promise<PickedSession | null> {
+  if (hiddenCount > 0) {
+    console.log(chalk.gray(formatTeamHiddenFooter(hiddenCount)));
+  }
   try {
     return await sessionPicker({
       message,
@@ -698,6 +728,7 @@ export function registerSessionsCommands(program: Command): void {
     .description('Browse, search, resume, and render agent sessions')
     .option('-a, --agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
+    .option('--teams', 'Include team-spawned sessions (hidden by default)')
     .option('--project <name>', 'Filter by project name across all directories')
     .option('--since <time>', 'Filter sessions newer than time (e.g., "2h", "7d", "4w", ISO date)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
@@ -722,6 +753,11 @@ function formatNoSessionsMessage(
   if (showAll) return 'No sessions found.';
   const command = 'agents sessions --all';
   return `No sessions found for ${process.cwd()}. Run "${command}" to see sessions from every directory.`;
+}
+
+function formatTeamHiddenFooter(hiddenCount: number): string {
+  const noun = hiddenCount === 1 ? 'team session' : 'team sessions';
+  return `(${hiddenCount} ${noun} hidden — use --teams to show, or \`agents teams status\`)`;
 }
 
 function findClaudeHistoryEntry(idQuery: string): ClaudeHistoryEntry | null {
