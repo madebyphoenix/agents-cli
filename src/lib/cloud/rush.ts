@@ -25,7 +25,7 @@ interface UserYaml {
 
 interface Installation {
   id: number;
-  account: { login: string };
+  account_login: string;
   repositories?: { name: string; full_name: string }[];
   repository_selection?: string;
 }
@@ -87,9 +87,7 @@ async function findInstallation(token: string, owner: string, repo: string): Pro
   const data = await res.json() as { installations: Installation[] };
 
   for (const inst of data.installations ?? []) {
-    // Check by account login (covers "all repos" installs)
-    if (inst.account?.login?.toLowerCase() === owner.toLowerCase()) {
-      // If all repos, or specific repo is listed
+    if (inst.account_login?.toLowerCase() === owner.toLowerCase()) {
       if (inst.repository_selection === 'all') return inst.id;
       if (inst.repositories?.some(r => r.name.toLowerCase() === repo.toLowerCase())) {
         return inst.id;
