@@ -39,7 +39,7 @@ function stripTeamWrappers(raw: string): string {
 }
 
 export function cleanSessionPrompt(raw: string): string {
-  let text = raw.replace(/\r/g, '').trim();
+  let text = stripTeamWrappers(raw).replace(/\r/g, '').trim();
   if (!text) return '';
 
   text = text.replace(/<\/?[a-z_][a-z0-9_-]*>/gi, '');
@@ -55,24 +55,11 @@ export function cleanSessionPrompt(raw: string): string {
 
 export function extractSessionTopic(raw: string): string | undefined {
   if (!raw.trim()) return undefined;
-
-  // Strip the HEADLESS PLAN MODE header so team sessions show their real task.
-  // The header ends at the first blank line (\n\n) before the actual prompt.
-  let text = raw;
-  if (text.trimStart().startsWith(HEADLESS_PLAN_MODE_PREFIX)) {
-    const blankLine = text.indexOf('\n\n');
-    if (blankLine === -1) return undefined;
-    text = text.slice(blankLine + 2);
-  }
-
-  if (WHOLE_MESSAGE_SKIP_PATTERNS.some(pattern => pattern.test(text))) {
+  if (WHOLE_MESSAGE_SKIP_PATTERNS.some(pattern => pattern.test(raw))) {
     return undefined;
   }
 
-  const unwrapped = stripTeamWrappers(raw);
-  if (!unwrapped) return undefined;
-
-  const cleaned = cleanSessionPrompt(unwrapped);
+  const cleaned = cleanSessionPrompt(raw);
   if (!cleaned) return undefined;
   if (WHOLE_MESSAGE_SKIP_PATTERNS.some(pattern => pattern.test(cleaned))) {
     return undefined;

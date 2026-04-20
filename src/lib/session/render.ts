@@ -644,12 +644,11 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
 
   // 1. Prompt
   if (firstUserMessage) {
-    const topic = extractSessionTopic(firstUserMessage);
     const cleaned = cleanSessionPrompt(firstUserMessage);
-    if (topic) {
-      lines.push(chalk.bold('Prompt:') + ' ' + topic);
-      const secondLine = cleaned.split('\n').find(l => l.trim() && l.trim() !== topic);
-      if (secondLine) lines.push('  ' + secondLine.trim());
+    if (cleaned) {
+      lines.push(chalk.bold('Prompt:') + ' ' + cleaned.split('\n')[0]);
+      const secondLine = cleaned.split('\n')[1]?.trim();
+      if (secondLine) lines.push('  ' + secondLine);
 
       const refs = extractReferences(cleaned);
       if (refs.length > 0) {
