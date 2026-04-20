@@ -129,10 +129,13 @@ agents routines logs <name> --run <id>  # Show specific run
 agents routines report <name>         # Show report from latest run
 agents routines report <name> --run <id>  # Show specific run report
 
-# Daemon
-agents daemon start                   # Start scheduler daemon
-agents daemon stop                    # Stop daemon
-agents daemon status                  # Check if daemon is running
+# Scheduler (auto-starts on first `routines add`; these are manual controls)
+agents routines start                 # Start the background scheduler
+agents routines stop                  # Stop the scheduler
+agents routines status                # Show scheduler status + upcoming runs
+agents routines scheduler-logs        # Read scheduler log output
+
+# Deprecated (removed in v2.0): `agents daemon start|stop|status|logs`
 ```
 
 ### Non-Interactive Usage
@@ -151,17 +154,19 @@ agents routines run morning-briefing
 agents routines report morning-briefing
 ```
 
-## Daemon
+## Scheduler
 
-The daemon is a lightweight process that watches for cron-triggered jobs. It persists across CLI invocations and auto-reloads when job configs change.
+A background scheduler (historically called "the daemon" internally) watches for cron-triggered jobs. It persists across CLI invocations and auto-reloads when job configs change.
 
 ```bash
-agents daemon start   # Start (background)
-agents daemon stop    # Stop
-agents daemon status  # Check PID and uptime
+agents routines start     # Start manually (usually unnecessary)
+agents routines stop      # Stop
+agents routines status    # Check PID, uptime, and upcoming runs
 ```
 
-When you `add`, `remove`, `pause`, or `resume` a job, the daemon auto-reloads -- no manual restart needed.
+The scheduler **auto-starts on the first `agents routines add`**, so in most cases you never invoke `start` manually. When you `add`, `remove`, `pause`, or `resume` a job, it auto-reloads -- no manual restart needed.
+
+The legacy `agents daemon <cmd>` subcommands still work but print a deprecation warning and will be removed in v2.0.
 
 ## Key Functions
 

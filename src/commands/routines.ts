@@ -170,7 +170,7 @@ Examples:
 
   routinesCmd
     .command('add [nameOrPath]')
-    .description('Create a new routine from a YAML file or inline flags. Returns immediately; the daemon handles execution.')
+    .description('Create a new routine from a YAML file or inline flags. Starts the scheduler automatically if it is not already running.')
     .option('-s, --schedule <cron>', 'Cron schedule in standard format (5 fields: minute hour day month weekday)')
     .option('-a, --agent <agent>', 'Which agent runs this routine: claude, codex, gemini, cursor, or opencode')
     .option('-p, --prompt <prompt>', 'Task instruction for the agent')

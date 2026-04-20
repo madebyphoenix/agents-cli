@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+**Scheduler merged into `routines`; top-level help simplified**
+
+- `agents routines add` now auto-starts the background scheduler when it is not already running. First-time users no longer need a separate `daemon start` step — the common path is just `routines add`.
+- New subcommands mirror the old daemon controls under `routines`: `agents routines start`, `stop`, `status`, `scheduler-logs`. The word "daemon" is no longer exposed in user-facing help.
+- `agents daemon <start|stop|status|logs>` is **deprecated**. It still works but prints a migration warning and is hidden from top-level help. Will be removed in v2.0.
+- Top-level help restructured: the old "Automation" grab-bag is gone. Commands are now grouped as **Run agents** (`run`, `teams`, `sessions`), **Schedule** (`routines`), and **Helpers** (`pty`).
+
+**Dev: sqlite auto-rebuild on `bun run test`**
+
+- Added `scripts/rebuild-sqlite.sh` and a `pretest` hook. The script probes `better-sqlite3` by opening an in-memory database and only rebuilds (plain `node-gyp rebuild --release`, no Electron flags) when the probe fails. Fixes the napi ABI mismatch that `bun install` sometimes leaves behind.
+
 **Default upstream moved to `phnx-labs/.agents`**
 
 - `DEFAULT_SYSTEM_REPO` now resolves to `gh:phnx-labs/.agents` — a curated, org-owned upstream. `agents pull` (no args) and `agents fork` target the new repo on fresh machines.

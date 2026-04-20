@@ -229,9 +229,10 @@ agents routines add daily-digest \
   --schedule "0 9 * * 1-5" \
   --agent claude \
   --prompt "Review yesterday's PRs and summarize key changes"
+# The scheduler auto-starts on first add — no separate daemon command needed.
 
-agents daemon start                    # Start the scheduler
 agents routines list                   # See all jobs
+agents routines status                 # Check scheduler and upcoming runs
 agents routines logs daily-digest      # Check execution logs
 ```
 
@@ -313,9 +314,9 @@ agents run <agent> <prompt>      # Run agent
 agents sessions <id> --markdown   # Read a session by exact ID
 agents sessions --agent codex     # Interactive filtered session search
 agents sessions --project agents  # Interactive project-scoped session search
-agents routines add <name>        # Schedule a job
+agents routines add <name>        # Schedule a job (scheduler auto-starts)
 agents routines list              # Show all jobs
-agents daemon start               # Start scheduler
+agents routines status            # Check scheduler status + upcoming runs
 
 # Teams (orchestrate multiple agents on a shared task)
 agents teams create <team>             # Start a new team
