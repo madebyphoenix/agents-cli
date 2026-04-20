@@ -47,6 +47,16 @@ function truncate(s: string, n: number): string {
   return s.slice(0, n - 1) + '…';
 }
 
+function firstLine(s: string): string {
+  // Collapse to the first non-empty line so multi-line messages (markdown,
+  // code blocks) render cleanly inside a one-line preview slot.
+  for (const line of s.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return '';
+}
+
 function displayAgent(agent: string, version?: string | null): string {
   const label = AGENT_LABEL[agent] || agent;
   return version ? `${label}@${version}` : label;
@@ -120,7 +130,10 @@ export function buildTeamPreview(row: TeamRow): string {
 
     const lastMsg = a.last_messages[a.last_messages.length - 1];
     if (lastMsg) {
-      lines.push(`    ${chalk.gray('└')} ${chalk.gray(truncate(lastMsg, 96))}`);
+      const oneLine = firstLine(lastMsg);
+      if (oneLine) {
+        lines.push(`    ${chalk.gray('└')} ${chalk.gray(truncate(oneLine, 96))}`);
+      }
     }
     if (a.has_errors) {
       lines.push(`    ${chalk.red('!')} ${chalk.red('reported an error')}`);
