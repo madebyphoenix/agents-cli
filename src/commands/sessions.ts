@@ -275,12 +275,14 @@ function printSessionTable(sessions: SessionMeta[], hiddenCount = 0): void {
     const tag = teamTag(session);
     const label = (session as any).label;
     const topic = tag ? `${tag}${session.topic ?? ''}` : session.topic;
+    const versionStr = session.version || '-';
 
     console.log(
       chalk.white(padRight(session.shortId, 10)) +
-      agentColor(padRight(truncate(session.agent, 9), 10)) +
+      agentColor(padRight(truncate(session.agent, 7), 9)) +
+      chalk.yellow(padRight(truncate(versionStr, 8), 10)) +
       chalk.cyan(padRight(truncate(project, 14), 16)) +
-      renderTopicCell(label, topic, '', 50, 52) +
+      renderTopicCell(label, topic, '', 46, 48) +
       chalk.gray(when)
     );
   }
@@ -439,12 +441,14 @@ function formatPickerLabel(s: SessionMeta, query: string): string {
   const tag = teamTag(s);
   const label = (s as any).label;
   const topic = tag ? `${tag}${s.topic ?? ''}` : s.topic;
+  const versionStr = s.version || '-';
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
-    agentColor(padRight(truncate(s.agent, 9), 10)) +
+    agentColor(padRight(truncate(s.agent, 7), 9)) +
+    chalk.yellow(padRight(truncate(versionStr, 8), 10)) +
     chalk.cyan(padRight(truncate(project, 14), 16)) +
-    renderTopicCell(label, topic, query, 50, 52) +
+    renderTopicCell(label, topic, query, 46, 48) +
     chalk.gray(when)
   );
 }
