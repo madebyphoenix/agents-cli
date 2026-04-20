@@ -54,8 +54,7 @@ import {
   type ResourceSelection,
 } from '../lib/versions.js';
 import {
-  createShim,
-  shimExists,
+  ensureShimCurrent,
   isShimsInPath,
   addShimsToPath,
   getPathSetupInstructions,
@@ -274,10 +273,8 @@ Skip CLI installs with --skip-clis when you only want config updates, not versio
               } else {
                 cliSpinner.succeed(`${agentLabel(agent.id)}@${result.installedVersion}`);
               }
-              // Ensure shim exists (repair if deleted)
-              if (!shimExists(agentId)) {
-                createShim(agentId);
-              }
+              // Repair if deleted and regenerate if its schema is out of date.
+              ensureShimCurrent(agentId);
             } else {
               cliSpinner.warn(`${agentLabel(agent.id)}: ${result.error}`);
             }

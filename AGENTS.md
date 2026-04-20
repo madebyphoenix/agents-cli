@@ -130,10 +130,13 @@ agents install <pkg>         # Install mcp:name or skill:user/repo
 agents sessions                       # Interactive picker (TTY) or table (piped); team-spawned sessions hidden by default
 agents sessions <query>               # Search by text, path, or session ID
 agents sessions --teams               # Include team-spawned sessions with [team/handle · mode] tag
-agents sessions <id> --transcript     # Full conversation transcript
-agents sessions <id> --trace          # Reasoning trace as markdown
-agents sessions <id> --timeline       # Chronological timeline
+agents sessions <id>                  # Default activity summary
+agents sessions <id> --markdown       # Full conversation as markdown (user, assistant, thinking, tools)
 agents sessions <id> --json           # Normalized events as JSON
+agents sessions <id> --include user   # Only user messages (auto-markdown)
+agents sessions <id> --exclude thinking --markdown   # Drop reasoning from markdown
+agents sessions <id> --last 3         # Last 3 turns (turn = user message)
+agents sessions <id> --first 10 --include user --json # Compose filters + format
 
 # Execution
 agents run <agent> <prompt> # Execute agent non-interactively

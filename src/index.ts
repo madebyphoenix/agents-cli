@@ -107,7 +107,7 @@ Automation:
   pty                             Interactive PTY sessions for AI agents
 
 Automation tips:
-  Pass explicit names/IDs         Avoid pickers: agents sessions <id> --transcript
+  Pass explicit names/IDs         Avoid pickers: agents sessions <id> --markdown
   Use --yes for defaults          Auto-accept sync/default prompts on add/use/pull
   Use --names for central items   e.g. agents commands add --names review-pr,debug
   Use agent@version targets       e.g. --agents claude@2.1.79,codex@default

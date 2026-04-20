@@ -177,8 +177,10 @@ export async function promptConflictStrategy(
  *   v1 — initial shim (implicit, no marker).
  *   v2 — `--version=...` form in sync/refresh-memory calls; refresh-memory
  *        shim hook for non-@-capable agents.
+ *   v3 — sync/refresh-memory flag renamed `--version` → `--agent-version`
+ *        so it no longer collides with commander's top-level `--version`.
  */
-export const SHIM_SCHEMA_VERSION = 2;
+export const SHIM_SCHEMA_VERSION = 3;
 
 const SHIM_VERSION_MARKER = 'agents-shim-version:';
 
@@ -199,14 +201,12 @@ export CLAUDE_CONFIG_DIR="$VERSION_DIR/home/${configDirName}"
   // agents-cli to recompile when the user edits a rule/preset file. The
   // check is fast (sha256 of ~8 small files) and skips the recompile when
   // sources haven't changed.
-  // Note: use `--version=...` (not `--version ...`) to avoid commander's
-  // top-level --version flag eating the subcommand's value.
   const refreshMemoryCall = !agentConfig.capabilities.memoryImports
     ? `
 # Recompile memory if any rule/preset source has changed since last sync.
 # Fast-path check (~10-20ms) when nothing changed; full recompile only on
 # actual diff. Non-blocking failure — if the refresh errors, we still launch.
-agents refresh-memory --agent "$AGENT" --version="$VERSION" --quiet 2>/dev/null || true
+agents refresh-memory --agent "$AGENT" --agent-version "$VERSION" --quiet 2>/dev/null || true
 `
     : '';
 
@@ -338,7 +338,7 @@ fi
 # Sync project-scoped resources into version home if a project .agents/ is present
 PROJECT_AGENTS_DIR=$(find_project_agents_dir)
 if [ -n "$PROJECT_AGENTS_DIR" ]; then
-  agents sync --agent "$AGENT" --version="$VERSION" --project-dir "$PROJECT_AGENTS_DIR" --quiet >/dev/null 2>&1
+  agents sync --agent "$AGENT" --agent-version "$VERSION" --project-dir "$PROJECT_AGENTS_DIR" --quiet >/dev/null 2>&1
 fi
 ${refreshMemoryCall}${managedEnv}
 

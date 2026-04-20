@@ -11,9 +11,16 @@
 
 - Removed `agents sessions list` and `agents sessions view` subcommands; `agents sessions` is now a single smart command
 - Positional query resolves to a session ID (renders directly), a path (`.`, `../`, `/path`) to filter by project, or free text for search
-- `--transcript`, `--trace`, `--timeline`, `--json` flags render the matched session; scope widens to global when a render flag is set or the query looks like a session ID
 - Claude `/resume` history fallback (previously only in `view`) now fires from the top-level command too
 - Picker shows the selected-session preview by default; space hides it
+
+**Session view flags: filters + formats split cleanly**
+
+- Formats: default is the activity summary; `--markdown` renders the full conversation (user + assistant + thinking + tool calls) as markdown; `--json` emits normalized events
+- Filters compose orthogonally: `--include <roles>` / `--exclude <roles>` (values: `user`, `assistant`, `thinking`, `tools`), plus `--first N` / `--last N` to slice by turn (a turn starts at each user message)
+- Any filter flag without `--markdown`/`--json` defaults to markdown output — summary is an aggregate view so filters would be meaningless there
+- Mutual exclusion: `--include` vs `--exclude`, `--first` vs `--last`
+- Removed `--transcript`, `--trace`, `--timeline`, and `--role` (replaced by the above)
 
 ## 1.12.0
 

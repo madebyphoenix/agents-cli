@@ -15,11 +15,11 @@ export function registerRefreshMemoryCommand(program: Command): void {
     .command('refresh-memory', { hidden: true })
     .description('Internal: recompile memory for an agent if sources have changed. Called by shims.')
     .requiredOption('--agent <agent>', 'Agent identifier (codex, opencode, cursor, etc.)')
-    .requiredOption('--version <version>', 'Installed version whose memory file should be refreshed')
+    .requiredOption('--agent-version <version>', 'Installed version whose memory file should be refreshed')
     .option('--quiet', 'Suppress all output (exit code indicates success)', false)
     .action((opts) => {
       const agentId = opts.agent as keyof typeof AGENTS;
-      const version = opts.version as string;
+      const version = opts.agentVersion as string;
       const quiet = !!opts.quiet;
 
       if (!AGENTS[agentId]) {

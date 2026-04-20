@@ -5,7 +5,7 @@ import * as yaml from 'yaml';
 import type { AgentId, SkillMetadata, InstalledSkill } from './types.js';
 import { AGENTS, SKILLS_CAPABLE_AGENTS, ensureSkillsDir } from './agents.js';
 import { getAgentsDir, getProjectAgentsDir } from './state.js';
-import { getEffectiveHome } from './versions.js';
+import { getEffectiveHome, getVersionHomePath, listInstalledVersions } from './versions.js';
 
 const HOME = os.homedir();
 
@@ -350,6 +350,180 @@ export function skillContentMatches(
   } catch {
     return false;
   }
+}
+
+/**
+ * List skill names in the central ~/.agents/skills/ directory.
+ */
+export function listCentralSkills(): string[] {
+  const dir = getSkillsDir();
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+    .filter((e) => fs.existsSync(path.join(dir, e.name, 'SKILL.md')))
+    .map((e) => e.name)
+    .sort();
+}
+
+/**
+ * Path to the skills dir of a specific version home (not the active one).
+ */
+export function getVersionSkillsDir(agent: AgentId, version: string): string {
+  const home = getVersionHomePath(agent, version);
+  return path.join(home, `.${agent}`, 'skills');
+}
+
+/**
+ * List skill names installed in a specific version home.
+ */
+export function listSkillsInVersionHome(agent: AgentId, version: string): string[] {
+  const dir = getVersionSkillsDir(agent, version);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+    .filter((e) => fs.existsSync(path.join(dir, e.name, 'SKILL.md')))
+    .map((e) => e.name)
+    .sort();
+}
+
+/**
+ * Check if a skill installed in a specific version matches central content.
+ */
+function versionSkillMatches(agent: AgentId, version: string, skillName: string): boolean {
+  const installedPath = path.join(getVersionSkillsDir(agent, version), skillName);
+  const centralPath = path.join(getSkillsDir(), skillName);
+  if (!fs.existsSync(installedPath) || !fs.existsSync(centralPath)) return false;
+
+  const installedSkillMd = path.join(installedPath, 'SKILL.md');
+  const centralSkillMd = path.join(centralPath, 'SKILL.md');
+  if (!fs.existsSync(installedSkillMd) || !fs.existsSync(centralSkillMd)) return false;
+
+  try {
+    if (normalizeContent(fs.readFileSync(installedSkillMd, 'utf-8')) !==
+        normalizeContent(fs.readFileSync(centralSkillMd, 'utf-8'))) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return directoriesMatch(path.join(installedPath, 'rules'), path.join(centralPath, 'rules'));
+}
+
+export interface VersionSkillDiff {
+  agent: AgentId;
+  version: string;
+  toAdd: string[];      // in central, not in version home
+  toUpdate: string[];   // in both, content differs
+  matched: string[];    // in both, content matches
+  orphans: string[];    // in version home, not in central
+}
+
+/**
+ * Compare a version home's skills against central. Returns the reconciliation diff.
+ */
+export function diffVersionSkills(agent: AgentId, version: string): VersionSkillDiff {
+  const central = new Set(listCentralSkills());
+  const installed = new Set(listSkillsInVersionHome(agent, version));
+
+  const toAdd: string[] = [];
+  const toUpdate: string[] = [];
+  const matched: string[] = [];
+  const orphans: string[] = [];
+
+  for (const name of central) {
+    if (!installed.has(name)) {
+      toAdd.push(name);
+    } else if (!versionSkillMatches(agent, version, name)) {
+      toUpdate.push(name);
+    } else {
+      matched.push(name);
+    }
+  }
+
+  for (const name of installed) {
+    if (!central.has(name)) orphans.push(name);
+  }
+
+  return { agent, version, toAdd: toAdd.sort(), toUpdate: toUpdate.sort(), matched, orphans: orphans.sort() };
+}
+
+/**
+ * Install a single skill from central into a specific version home.
+ */
+export function installSkillToVersion(
+  agent: AgentId,
+  version: string,
+  skillName: string,
+  method: 'symlink' | 'copy' = 'copy'
+): { success: boolean; error?: string } {
+  const centralPath = path.join(getSkillsDir(), skillName);
+  if (!fs.existsSync(centralPath)) {
+    return { success: false, error: `Skill '${skillName}' not found in central` };
+  }
+
+  const skillsDir = getVersionSkillsDir(agent, version);
+  if (!fs.existsSync(skillsDir)) {
+    fs.mkdirSync(skillsDir, { recursive: true });
+  }
+
+  const target = path.join(skillsDir, skillName);
+  if (fs.existsSync(target) || fs.lstatSync(target, { throwIfNoEntry: false })) {
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+    } catch (err) {
+      return { success: false, error: `Failed to remove existing: ${(err as Error).message}` };
+    }
+  }
+
+  try {
+    if (method === 'symlink') {
+      fs.symlinkSync(centralPath, target, 'dir');
+    } else {
+      fs.cpSync(centralPath, target, { recursive: true });
+    }
+  } catch (err) {
+    return { success: false, error: `Failed to ${method}: ${(err as Error).message}` };
+  }
+  return { success: true };
+}
+
+/**
+ * Remove a single skill from a specific version home.
+ */
+export function removeSkillFromVersion(
+  agent: AgentId,
+  version: string,
+  skillName: string
+): { success: boolean; error?: string } {
+  const target = path.join(getVersionSkillsDir(agent, version), skillName);
+  if (!fs.existsSync(target) && !fs.lstatSync(target, { throwIfNoEntry: false })) {
+    return { success: true };
+  }
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+  return { success: true };
+}
+
+/**
+ * Iterate all (agent, version) pairs that support skills and are installed,
+ * optionally scoped to a single agent/version.
+ */
+export function iterSkillsCapableVersions(filter?: { agent?: AgentId; version?: string }): Array<{ agent: AgentId; version: string }> {
+  const pairs: Array<{ agent: AgentId; version: string }> = [];
+  const agents = filter?.agent ? [filter.agent] : SKILLS_CAPABLE_AGENTS;
+  for (const agent of agents) {
+    if (!SKILLS_CAPABLE_AGENTS.includes(agent)) continue;
+    const versions = listInstalledVersions(agent);
+    for (const version of versions) {
+      if (filter?.version && filter.version !== version) continue;
+      pairs.push({ agent, version });
+    }
+  }
+  return pairs;
 }
 
 export function uninstallSkill(skillName: string): { success: boolean; error?: string } {

@@ -354,14 +354,23 @@ describe('shims - generateShimScript', () => {
   test('includes project sync hook in shim', () => {
     const script = generateShimScript('claude');
     expect(script).toContain('find_project_agents_dir');
-    // Uses `--version=...` (not `--version ...`) to avoid commander's
-    // top-level --version flag eating the subcommand's value.
-    expect(script).toContain('agents sync --agent "$AGENT" --version="$VERSION" --project-dir "$PROJECT_AGENTS_DIR"');
+    expect(script).toContain('agents sync --agent "$AGENT" --agent-version "$VERSION" --project-dir "$PROJECT_AGENTS_DIR"');
   });
 
   test('non-@-capable agents get a refresh-memory shim hook', () => {
     const script = generateShimScript('codex');
-    expect(script).toContain('agents refresh-memory --agent "$AGENT" --version="$VERSION"');
+    expect(script).toContain('agents refresh-memory --agent "$AGENT" --agent-version "$VERSION"');
+  });
+
+  test('shim does not use --version flag, which collides with the top-level CLI version flag', () => {
+    // Commander's `.version()` on the top-level program intercepts any
+    // `--version <value>` before subcommands see it — passing --version to
+    // `sync` or `refresh-memory` would silently print the CLI version and
+    // exit 0 instead of running the subcommand. Guard against regression.
+    for (const agent of ['claude', 'codex', 'gemini', 'cursor', 'opencode', 'openclaw'] as const) {
+      const script = generateShimScript(agent);
+      expect(script, `${agent} shim must not pass --version to subcommands`).not.toMatch(/--version[ =]"?\$VERSION/);
+    }
   });
 
   test('@-capable agents do NOT get a refresh-memory shim hook', () => {
