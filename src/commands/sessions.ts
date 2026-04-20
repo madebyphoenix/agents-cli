@@ -279,10 +279,10 @@ function printSessionTable(sessions: SessionMeta[], hiddenCount = 0): void {
 
     console.log(
       chalk.white(padRight(session.shortId, 10)) +
-      agentColor(padRight(truncate(session.agent, 7), 9)) +
-      chalk.yellow(padRight(truncate(versionStr, 8), 10)) +
+      agentColor(padRight(truncate(session.agent, 8), 9)) +
+      chalk.yellow(padRight(truncate(versionStr, 7), 8)) +
       chalk.cyan(padRight(truncate(project, 14), 16)) +
-      renderTopicCell(label, topic, '', 46, 48) +
+      renderTopicCell(label, topic, '', 48, 50) +
       chalk.gray(when)
     );
   }
@@ -445,10 +445,10 @@ function formatPickerLabel(s: SessionMeta, query: string): string {
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
-    agentColor(padRight(truncate(s.agent, 7), 9)) +
-    chalk.yellow(padRight(truncate(versionStr, 8), 10)) +
+    agentColor(padRight(truncate(s.agent, 8), 9)) +
+    chalk.yellow(padRight(truncate(versionStr, 7), 8)) +
     chalk.cyan(padRight(truncate(project, 14), 16)) +
-    renderTopicCell(label, topic, query, 46, 48) +
+    renderTopicCell(label, topic, query, 48, 50) +
     chalk.gray(when)
   );
 }
