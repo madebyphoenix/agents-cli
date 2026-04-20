@@ -5,6 +5,7 @@ import { spawn } from 'child_process';
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import type { AgentId } from '../lib/types.js';
 import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types.js';
 import { SESSION_AGENTS } from '../lib/session/types.js';
 import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter, type ScanProgress } from '../lib/session/discover.js';
@@ -13,6 +14,7 @@ import { parseSession } from '../lib/session/parse.js';
 import { renderConversationMarkdown, renderSummary, renderSummaryHeader, computeSummaryStats, renderJson, filterEvents, parseRoleList, type FilterOptions } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
 import { colorAgent } from '../lib/agents.js';
+import { resolveVersion } from '../lib/versions.js';
 import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
 import { sessionPicker, type PickedSession } from './sessions-picker.js';
 
@@ -487,7 +489,12 @@ async function handlePickedSession(picked: PickedSession): Promise<void> {
     return;
   }
 
-  const resume = buildResumeCommand(picked.session);
+  const cwd = picked.session.cwd && fs.existsSync(picked.session.cwd)
+    ? picked.session.cwd
+    : process.cwd();
+
+  const activeVersion = resolveVersion(picked.session.agent as AgentId, cwd) ?? undefined;
+  const resume = buildResumeCommand(picked.session, activeVersion);
   if (!resume) {
     console.log(chalk.yellow(
       `Resume is not supported for ${picked.session.agent} sessions yet. Showing summary instead.`
@@ -496,9 +503,13 @@ async function handlePickedSession(picked: PickedSession): Promise<void> {
     return;
   }
 
-  const cwd = picked.session.cwd && fs.existsSync(picked.session.cwd)
-    ? picked.session.cwd
-    : process.cwd();
+  if (picked.session.version && activeVersion && picked.session.version !== activeVersion) {
+    console.log(chalk.gray(
+      `Cross-version handoff: session is ${picked.session.agent} ${picked.session.version}, ` +
+      `default is ${activeVersion}. Starting fresh and passing /continue so the new agent ` +
+      `reads the prior transcript via 'agents sessions'.`
+    ));
+  }
 
   console.log(chalk.gray(`Resuming: ${resume.join(' ')} (cwd: ${cwd})`));
 
@@ -519,11 +530,25 @@ async function handlePickedSession(picked: PickedSession): Promise<void> {
   });
 }
 
-function buildResumeCommand(session: SessionMeta): string[] | null {
+/**
+ * Build the shell command that resumes a picked session.
+ *
+ * Cross-version handoff: when the session was created on a different version
+ * than the one the shim will launch (activeVersion), the session file lives in
+ * the other version's isolated home and `--resume <id>` would silently fail to
+ * find it. Fall back to a fresh session seeded with `/continue <id>`, which is
+ * wired (~/.claude/commands/continue.md) to read the prior transcript via
+ * `agents sessions <id>` — that reader is version-agnostic.
+ */
+export function buildResumeCommand(session: SessionMeta, activeVersion?: string): string[] | null {
+  const versionMismatch = !!(session.version && activeVersion && session.version !== activeVersion);
+
   switch (session.agent) {
     case 'claude':
+      if (versionMismatch) return ['claude', `/continue ${session.id}`];
       return ['claude', '--resume', session.id];
     case 'codex':
+      if (versionMismatch) return ['codex', `/continue ${session.id}`];
       return ['codex', 'resume', session.id];
     case 'opencode':
       return ['opencode', '--session', session.id];

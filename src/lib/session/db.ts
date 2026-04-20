@@ -96,10 +96,16 @@ export interface QueryOptions {
   agent?: SessionAgentId;
   agents?: SessionAgentId[];
   cwd?: string;
+  /** Match any session whose cwd equals this or is a descendant of it. */
+  cwdPrefix?: string;
   project?: string;
   sinceMs?: number;
   untilMs?: number;
   limit?: number;
+  /** Drop rows flagged as team-origin before LIMIT is applied. */
+  excludeTeamOrigin?: boolean;
+  /** Keep only team-origin rows (for hidden-count queries). */
+  onlyTeamOrigin?: boolean;
 }
 
 let dbInstance: Database.Database | null = null;
