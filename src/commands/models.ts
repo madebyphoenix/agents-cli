@@ -1,5 +1,6 @@
 import type { Command } from 'commander';
 import chalk from 'chalk';
+import * as fs from 'fs';
 import {
   AGENTS,
   ALL_AGENT_IDS,
@@ -11,7 +12,27 @@ import type { AgentId } from '../lib/types.js';
 import { listInstalledVersions, getGlobalDefault, resolveVersion } from '../lib/versions.js';
 import { getModelCatalog, locateModelSource } from '../lib/models.js';
 
-const MODEL_CAPABLE_AGENTS: AgentId[] = ['claude', 'codex'];
+const MODEL_CAPABLE_AGENTS: AgentId[] = ['claude', 'codex', 'gemini', 'opencode', 'cursor', 'openclaw'];
+
+/**
+ * Agents that don't necessarily install under ~/.agents/versions (cursor ships
+ * via a curl script). For these, fall back to the PATH binary and synthesize
+ * a version label from the install path so cache keys stay stable.
+ */
+const PATH_ONLY_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(['cursor']);
+
+function fallbackPathVersion(agent: AgentId): string | null {
+  const src = locateModelSource(agent, 'unresolved');
+  if (!src) return null;
+  let real = src.path;
+  try {
+    real = fs.realpathSync(src.path);
+  } catch {
+    /* keep symlink path */
+  }
+  const m = real.match(/\/versions\/([^/]+)\//);
+  return m ? m[1] : 'installed';
+}
 
 export function registerModelsCommand(program: Command): void {
   program
@@ -53,7 +74,10 @@ async function resolveTargets(agentSpec: string | undefined): Promise<Target[]> 
   if (!agentSpec) {
     const targets: Target[] = [];
     for (const agent of MODEL_CAPABLE_AGENTS) {
-      const version = getGlobalDefault(agent) || (listInstalledVersions(agent)[0] ?? null);
+      let version: string | null = getGlobalDefault(agent) || (listInstalledVersions(agent)[0] ?? null);
+      if (!version && PATH_ONLY_AGENTS.has(agent)) {
+        version = fallbackPathVersion(agent);
+      }
       if (version) targets.push({ agent, version, isDefault: true });
     }
     if (targets.length === 0) {
@@ -82,7 +106,10 @@ async function resolveTargets(agentSpec: string | undefined): Promise<Target[]> 
     }));
   }
 
-  const version = versionSpec || resolveVersion(agent, process.cwd()) || getGlobalDefault(agent);
+  let version: string | null = versionSpec || resolveVersion(agent, process.cwd()) || getGlobalDefault(agent);
+  if (!version && PATH_ONLY_AGENTS.has(agent)) {
+    version = fallbackPathVersion(agent);
+  }
   if (!version) {
     console.error(chalk.red(`No version of ${agent} is installed. Try \`agents add ${agent}@latest\`.`));
     return [];

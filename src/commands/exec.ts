@@ -12,6 +12,7 @@ import {
   type FallbackEntry,
 } from '../lib/exec.js';
 import type { AgentId } from '../lib/types.js';
+import { profileExists, resolveProfileForRun } from '../lib/profiles.js';
 
 const VALID_AGENTS = Object.keys(AGENT_COMMANDS);
 
@@ -91,11 +92,32 @@ the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
 `)
     .action(async (agentSpec: string, prompt: string, options: ExecCommandActionOptions) => {
       // Parse agent@version
-      const [agent, version] = agentSpec.split('@');
+      const [rawAgent, rawVersion] = agentSpec.split('@');
+      let agent: AgentId;
+      let version: string | undefined = rawVersion || undefined;
+      let profileEnv: Record<string, string> | undefined;
 
-      if (!isValidAgent(agent)) {
-        console.error(chalk.red(`Unknown agent: ${agent}`));
-        console.error(chalk.gray(`Available: ${VALID_AGENTS.join(', ')}`));
+      if (isValidAgent(rawAgent)) {
+        agent = rawAgent;
+      } else if (profileExists(rawAgent)) {
+        // Not a known agent id, but a profile by this name exists. Profiles
+        // bind (host agent, version, env overrides, keychain-backed auth)
+        // so Chinese models (Kimi, DeepSeek, Qwen, GLM) can run inside
+        // Claude Code without a local proxy.
+        try {
+          const resolved = resolveProfileForRun(rawAgent);
+          agent = resolved.agent;
+          if (!version) version = resolved.version;
+          profileEnv = resolved.env;
+          process.stderr.write(chalk.gray(`Resolved profile '${resolved.profileName}' -> ${agent}${version ? `@${version}` : ''}\n`));
+        } catch (err) {
+          console.error(chalk.red((err as Error).message));
+          process.exit(1);
+        }
+      } else {
+        console.error(chalk.red(`Unknown agent: ${rawAgent}`));
+        console.error(chalk.gray(`Available agents: ${VALID_AGENTS.join(', ')}`));
+        console.error(chalk.gray(`Or add a profile: agents profiles add <name>`));
         process.exit(1);
       }
 
@@ -111,13 +133,22 @@ the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
         process.exit(1);
       }
 
-      let env: Record<string, string> | undefined;
+      let userEnv: Record<string, string> | undefined;
       try {
-        env = parseExecEnv(options.env);
+        userEnv = parseExecEnv(options.env);
       } catch (err) {
         console.error(chalk.red((err as Error).message));
         process.exit(1);
       }
+
+      // Merge order: profile env is the base (resolved at exec time from
+      // keychain), then user --env flags override. This lets users tweak a
+      // single variable (e.g. --env ANTHROPIC_MODEL=...) without losing the
+      // profile's endpoint + auth.
+      const env: Record<string, string> | undefined =
+        profileEnv || userEnv
+          ? { ...(profileEnv ?? {}), ...(userEnv ?? {}) }
+          : undefined;
 
       const execOptions: ExecOptions = {
         agent,

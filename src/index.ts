@@ -49,6 +49,7 @@ import { registerSessionsCommands } from './commands/sessions.js';
 import { registerDriveCommands } from './commands/drive.js';
 import { registerPtyCommands } from './commands/pty.js';
 import { registerTeamsCommands } from './commands/teams.js';
+import { registerProfilesCommands } from './commands/profiles.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -344,6 +345,7 @@ program
   });
 
 registerTeamsCommands(program);
+registerProfilesCommands(program);
 registerSessionsCommands(program);
 registerSyncCommand(program);
 registerRefreshMemoryCommand(program);

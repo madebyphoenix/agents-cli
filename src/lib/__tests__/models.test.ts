@@ -14,8 +14,8 @@ const HOME = os.homedir();
 const CLAUDE_VERSIONS_DIR = path.join(HOME, '.agents', 'versions', 'claude');
 const CODEX_VERSIONS_DIR = path.join(HOME, '.agents', 'versions', 'codex');
 
-function pickInstalledVersion(agent: 'claude' | 'codex', preference: (vs: string[]) => string | undefined): string | null {
-  const dir = agent === 'claude' ? CLAUDE_VERSIONS_DIR : CODEX_VERSIONS_DIR;
+function pickInstalledVersion(agent: 'claude' | 'codex' | 'gemini' | 'opencode' | 'openclaw', preference: (vs: string[]) => string | undefined): string | null {
+  const dir = path.join(HOME, '.agents', 'versions', agent);
   if (!fs.existsSync(dir)) return null;
   const versions = listInstalledVersions(agent);
   const chosen = preference(versions);
@@ -29,6 +29,9 @@ const claudeBinaryVer = pickInstalledVersion('claude', (vs) =>
   vs.find((v) => fs.existsSync(path.join(CLAUDE_VERSIONS_DIR, v, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')))
 );
 const codexVer = pickInstalledVersion('codex', () => undefined);
+const geminiVer = pickInstalledVersion('gemini', () => undefined);
+const opencodeVer = pickInstalledVersion('opencode', () => undefined);
+const openclawVer = pickInstalledVersion('openclaw', () => undefined);
 
 describe('locateModelSource', () => {
   it('finds the JS bundle for Claude versions that ship one', () => {
@@ -169,6 +172,63 @@ describe('resolveModel', () => {
     const r = resolveModel('claude', '0.0.0-not-installed', 'whatever');
     expect(r.forwarded).toBe('whatever');
     expect(r.warning).toBeUndefined();
+  });
+});
+
+describe('getModelCatalog (gemini)', () => {
+  it('parses the models.js ES module and surfaces aliases', () => {
+    if (!geminiVer) return;
+    const src = locateModelSource('gemini', geminiVer);
+    expect(src).not.toBeNull();
+    expect(src!.kind).toBe('js');
+    expect(src!.path).toMatch(/gemini-cli-core\/dist\/src\/config\/models\.js$/);
+
+    const catalog = getModelCatalog('gemini', geminiVer);
+    expect(catalog).not.toBeNull();
+    expect(catalog!.models.length).toBeGreaterThan(0);
+    // All extracted ids must look like `gemini-*` — Gemini has no providers.
+    for (const m of catalog!.models) {
+      expect(m.id).toMatch(/^gemini-/);
+    }
+    // The `flash` / `flash-lite` / `pro` aliases always resolve somewhere.
+    expect(Object.keys(catalog!.aliases)).toEqual(
+      expect.arrayContaining(['flash', 'flash-lite', 'pro'])
+    );
+    // At least one model must be marked default (pointed to by an alias).
+    expect(catalog!.models.some((m) => m.isDefault)).toBe(true);
+  });
+});
+
+describe('getModelCatalog (opencode)', () => {
+  it('delegates to `opencode models --verbose` and returns provider/id keys', () => {
+    if (!opencodeVer) return;
+    const src = locateModelSource('opencode', opencodeVer);
+    expect(src).not.toBeNull();
+    expect(src!.kind).toBe('cli');
+
+    const catalog = getModelCatalog('opencode', opencodeVer);
+    expect(catalog).not.toBeNull();
+    expect(catalog!.models.length).toBeGreaterThan(10);
+    for (const m of catalog!.models) {
+      expect(m.id).toMatch(/^[a-z0-9][a-z0-9.-]*\/.+$/i);
+    }
+  });
+});
+
+describe('getModelCatalog (openclaw)', () => {
+  it('parses `openclaw models list --all --json` output', () => {
+    if (!openclawVer) return;
+    const src = locateModelSource('openclaw', openclawVer);
+    expect(src).not.toBeNull();
+    expect(src!.kind).toBe('cli');
+
+    const catalog = getModelCatalog('openclaw', openclawVer);
+    expect(catalog).not.toBeNull();
+    expect(catalog!.models.length).toBeGreaterThan(50);
+    // OpenClaw always scopes models by provider.
+    for (const m of catalog!.models) {
+      expect(m.id).toContain('/');
+    }
   });
 });
 

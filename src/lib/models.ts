@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { execFileSync } from 'child_process';
 import type { AgentId } from './types.js';
 import { getVersionDir } from './versions.js';
 
@@ -37,14 +38,20 @@ export interface ModelInfo {
 export interface ModelCatalog {
   agent: AgentId;
   version: string;
-  source: 'bundle' | 'binary';
+  source: ModelSourceKind;
   sourcePath: string;
   models: ModelInfo[];
-  /** Aliases from the CLI's alias map (claude only): { opus: "claude-opus-4-7", ... } */
+  /** Aliases that the CLI resolves to a canonical id (e.g. { opus: "claude-opus-4-7" } for claude, { flash: "gemini-3-flash-preview" } for gemini) */
   aliases: Record<string, string>;
 }
 
 const CACHE_PATH = path.join(os.homedir(), '.agents', '.models-cache.json');
+
+/**
+ * Bump when the extractor logic changes shape in an incompatible way so cached
+ * catalogs from older agents-cli builds are re-extracted.
+ */
+const CACHE_SCHEMA_VERSION = 2;
 
 interface CacheEntry {
   sourcePath: string;
@@ -52,18 +59,29 @@ interface CacheEntry {
   catalog: ModelCatalog;
 }
 
-let memoryCache: Record<string, CacheEntry> | null = null;
+interface CacheFile {
+  schema: number;
+  entries: Record<string, CacheEntry>;
+}
+
+let memoryCache: CacheFile | null = null;
 
 function cacheKey(agent: AgentId, version: string): string {
   return `${agent}@${version}`;
 }
 
-function loadCache(): Record<string, CacheEntry> {
+function loadCache(): CacheFile {
   if (memoryCache) return memoryCache;
   try {
-    memoryCache = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf-8'));
+    const raw = JSON.parse(fs.readFileSync(CACHE_PATH, 'utf-8'));
+    if (raw && raw.schema === CACHE_SCHEMA_VERSION && raw.entries) {
+      memoryCache = raw as CacheFile;
+    } else {
+      // Legacy (pre-schema) or stale-schema cache — drop it.
+      memoryCache = { schema: CACHE_SCHEMA_VERSION, entries: {} };
+    }
   } catch {
-    memoryCache = {};
+    memoryCache = { schema: CACHE_SCHEMA_VERSION, entries: {} };
   }
   return memoryCache!;
 }
@@ -79,14 +97,27 @@ function saveCache(): void {
   }
 }
 
+export type ModelSourceKind = 'bundle' | 'binary' | 'js' | 'cli';
+
+export interface ModelSource {
+  path: string;
+  kind: ModelSourceKind;
+}
+
 /**
- * Locate the bundle (cli.js) or native binary that holds the installed model
- * catalog for a given (agent, version). Returns null if not found.
+ * Locate the file that authoritatively describes the installed model catalog
+ * for a given (agent, version). The `kind` tells `getModelCatalog` how to
+ * read it:
+ *   bundle/binary — strings(1)-style extraction (claude/codex)
+ *   js            — read + regex-parse an exported JS module (gemini)
+ *   cli           — spawn the agent's own `models` command (opencode/cursor/openclaw)
+ *
+ * Returns null if nothing usable is found.
  */
 export function locateModelSource(
   agent: AgentId,
   version: string
-): { path: string; kind: 'bundle' | 'binary' } | null {
+): ModelSource | null {
   const versionDir = getVersionDir(agent, version);
 
   if (agent === 'claude') {
@@ -122,6 +153,66 @@ export function locateModelSource(
     return null;
   }
 
+  if (agent === 'gemini') {
+    // Gemini ships a clean ES module with all constants and aliases — no need
+    // to parse the minified CLI bundle.
+    const modelsJs = path.join(
+      versionDir,
+      'node_modules',
+      '@google',
+      'gemini-cli-core',
+      'dist',
+      'src',
+      'config',
+      'models.js'
+    );
+    if (fs.existsSync(modelsJs)) return { path: modelsJs, kind: 'js' };
+    return null;
+  }
+
+  if (agent === 'opencode') {
+    // The `opencode` shim under node_modules/.bin dispatches to a platform-
+    // specific native binary. We don't parse the 100MB binary; we let the CLI
+    // produce its own catalog via `opencode models --verbose`.
+    const cli = path.join(versionDir, 'node_modules', '.bin', 'opencode');
+    if (fs.existsSync(cli)) return { path: cli, kind: 'cli' };
+    return null;
+  }
+
+  if (agent === 'openclaw') {
+    const cli = path.join(versionDir, 'node_modules', '.bin', 'openclaw');
+    if (fs.existsSync(cli)) return { path: cli, kind: 'cli' };
+    // Fallback: installed outside agents-cli version management (e.g. global npm).
+    const pathBin = findOnPath('openclaw');
+    if (pathBin) return { path: pathBin, kind: 'cli' };
+    return null;
+  }
+
+  if (agent === 'cursor') {
+    // cursor-agent is installed via curl script, not agents-cli. Version argument
+    // is accepted for API symmetry but ignored — cursor lives on PATH.
+    const pathBin = findOnPath('cursor-agent');
+    if (pathBin) return { path: pathBin, kind: 'cli' };
+    return null;
+  }
+
+  return null;
+}
+
+function findOnPath(command: string): string | null {
+  const pathEnv = process.env.PATH || '';
+  const exts = process.platform === 'win32' ? (process.env.PATHEXT || '').split(';') : [''];
+  for (const dir of pathEnv.split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const full = path.join(dir, command + ext);
+      try {
+        if (fs.statSync(full).isFile()) return full;
+      } catch {
+        /* not here */
+      }
+    }
+  }
   return null;
 }
 
@@ -272,9 +363,273 @@ function extractCodexCatalog(text: string): { models: ModelInfo[]; aliases: Reco
 }
 
 /**
+ * Extract Gemini's model catalog from `@google/gemini-cli-core/.../config/models.js`.
+ *
+ * The module exports a set of named constants (e.g. `DEFAULT_GEMINI_MODEL`,
+ * `PREVIEW_GEMINI_FLASH_MODEL`) plus a `VALID_GEMINI_MODELS` Set and a handful
+ * of `GEMINI_MODEL_ALIAS_*` strings. We parse it with regex (a JS-module import
+ * would pollute the runtime and ES-module interop is awkward from a CJS build).
+ */
+function extractGeminiCatalog(text: string): { models: ModelInfo[]; aliases: Record<string, string> } {
+  const constRe = /export\s+const\s+([A-Z0-9_]+)\s*=\s*'([^']+)'/g;
+  const constants = new Map<string, string>();
+  let m: RegExpExecArray | null;
+  while ((m = constRe.exec(text)) !== null) {
+    constants.set(m[1], m[2]);
+  }
+
+  // The set of ids the CLI accepts as "valid model names". Names (not values)
+  // are listed inside `new Set([...])`, so we expand them via the constants map.
+  const validIds = new Set<string>();
+  const setBlock = text.match(/VALID_GEMINI_MODELS\s*=\s*new\s+Set\(\[([\s\S]*?)\]\)/);
+  if (setBlock) {
+    const nameRe = /([A-Z0-9_]+)/g;
+    let nm: RegExpExecArray | null;
+    while ((nm = nameRe.exec(setBlock[1])) !== null) {
+      const id = constants.get(nm[1]);
+      if (id) validIds.add(id);
+    }
+  }
+  // Fall back to any gemini-shaped id we saw in the constants map — useful
+  // when the Set shape changes across gemini versions.
+  if (validIds.size === 0) {
+    for (const [name, value] of constants) {
+      if (/^(DEFAULT_|PREVIEW_)/.test(name) && /^gemini-/.test(value)) {
+        validIds.add(value);
+      }
+    }
+  }
+
+  // Aliases are exported as `GEMINI_MODEL_ALIAS_FLASH = 'flash'` etc. The alias
+  // is the *value*; the target model is resolved at runtime by `resolveModel()`.
+  // We replicate that logic here so callers get a concrete id per alias.
+  const defaultId = constants.get('DEFAULT_GEMINI_MODEL');
+  const previewPro = constants.get('PREVIEW_GEMINI_MODEL');
+  const previewFlash = constants.get('PREVIEW_GEMINI_FLASH_MODEL');
+  const flashLite = constants.get('DEFAULT_GEMINI_FLASH_LITE_MODEL');
+
+  const aliases: Record<string, string> = {};
+  if (previewPro) {
+    aliases.auto = previewPro;
+    aliases.pro = previewPro;
+  }
+  if (previewFlash) aliases.flash = previewFlash;
+  if (flashLite) aliases['flash-lite'] = flashLite;
+
+  const aliasReverse: Record<string, string[]> = {};
+  for (const [alias, id] of Object.entries(aliases)) {
+    (aliasReverse[id] ||= []).push(alias);
+  }
+
+  const defaults = new Set<string>();
+  if (defaultId) defaults.add(defaultId);
+  if (previewPro) defaults.add(previewPro); // auto/pro alias resolves here
+
+  const displayNameFor = (id: string): string | undefined => {
+    // Gemini has a `getDisplayString` for some aliases but the canonical id
+    // is human-readable enough ("gemini-3-pro-preview") — no separate map.
+    return undefined;
+  };
+
+  const models: ModelInfo[] = Array.from(validIds)
+    .sort()
+    .map((id) => ({
+      id,
+      displayName: displayNameFor(id),
+      alias: aliasReverse[id]?.[0],
+      isDefault: defaults.has(id),
+    }));
+
+  return { models, aliases };
+}
+
+/**
+ * Extract OpenCode's catalog by invoking `opencode models --verbose`. The
+ * output is a sequence of `<provider>/<id>\n{json}` blocks — we parse every
+ * JSON block that follows a provider/id line.
+ *
+ * OpenCode caches the models.dev snapshot internally, so this is a local,
+ * non-network call after first launch.
+ */
+function extractOpenCodeCatalog(binaryPath: string): { models: ModelInfo[]; aliases: Record<string, string> } {
+  let stdout: string;
+  try {
+    stdout = execFileSync(binaryPath, ['models', '--verbose'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 15_000,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch {
+    return { models: [], aliases: {} };
+  }
+
+  const models: ModelInfo[] = [];
+  const seen = new Set<string>();
+
+  // Blocks look like:
+  //   provider/model-id
+  //   {
+  //     "id": "...", "providerID": "...", "name": "...", ...
+  //   }
+  // Walk forward finding `{` at column 0 that terminates with a `}` at column 0.
+  const lines = stdout.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!/^[a-z0-9][a-z0-9.-]*\/[^\s]+$/i.test(line)) continue;
+    const fullKey = line;
+    // Find the opening `{` right after this line, collect until matching `}`.
+    let start = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j] === '{') { start = j; break; }
+      if (lines[j].trim() !== '') break;
+    }
+    if (start === -1) continue;
+    let depth = 0;
+    let end = -1;
+    for (let j = start; j < lines.length; j++) {
+      for (const ch of lines[j]) {
+        if (ch === '{') depth++;
+        else if (ch === '}') depth--;
+      }
+      if (depth === 0) { end = j; break; }
+    }
+    if (end === -1) continue;
+    const json = lines.slice(start, end + 1).join('\n');
+    try {
+      const obj = JSON.parse(json);
+      if (seen.has(fullKey)) continue;
+      seen.add(fullKey);
+      // obj.status can be "active" | "deprecated" | "preview" — surface only
+      // when it isn't the default so the consumer can flag stale models.
+      const nonDefaultStatus = obj.status && obj.status !== 'active' ? obj.status : undefined;
+      models.push({
+        id: fullKey,
+        displayName: obj.name,
+        description: nonDefaultStatus,
+      });
+    } catch {
+      /* skip malformed block */
+    }
+    i = end;
+  }
+
+  // Second pass: if --verbose produced nothing, fall back to the plain list.
+  if (models.length === 0) {
+    try {
+      const plain = execFileSync(binaryPath, ['models'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 10_000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      for (const raw of plain.split('\n')) {
+        const id = raw.trim();
+        if (!id || !/^[a-z0-9][a-z0-9.-]*\/[^\s]+$/i.test(id)) continue;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        models.push({ id });
+      }
+    } catch {
+      /* leave empty */
+    }
+  }
+
+  return { models, aliases: {} };
+}
+
+/**
+ * Extract Cursor's catalog via `cursor-agent --list-models`. Output lines look like:
+ *   `auto - Auto`
+ *   `composer-2-fast - Composer 2 Fast  (current, default)`
+ *   `gpt-5.3-codex - Codex 5.3`
+ */
+function extractCursorCatalog(binaryPath: string): { models: ModelInfo[]; aliases: Record<string, string> } {
+  let stdout: string;
+  try {
+    stdout = execFileSync(binaryPath, ['--list-models'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 15_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+  } catch {
+    return { models: [], aliases: {} };
+  }
+
+  // Strip ANSI escape sequences; cursor renders a loading spinner.
+  // eslint-disable-next-line no-control-regex
+  const plain = stdout.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+  const models: ModelInfo[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of plain.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    // Expect `id - display[  (flag1, flag2, ...)]`
+    const m = line.match(/^([A-Za-z0-9][A-Za-z0-9.\-_]*)\s+-\s+(.+)$/);
+    if (!m) continue;
+    const id = m[1];
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const rest = m[2];
+    const flagMatch = rest.match(/\s+\(([^)]+)\)\s*$/);
+    const flags = flagMatch ? flagMatch[1].split(',').map((s) => s.trim().toLowerCase()) : [];
+    const displayName = (flagMatch ? rest.slice(0, flagMatch.index) : rest).trim();
+    models.push({
+      id,
+      displayName,
+      isDefault: flags.includes('default'),
+    });
+  }
+
+  return { models, aliases: {} };
+}
+
+/**
+ * Extract OpenClaw's catalog via `openclaw models list --all --json`. OpenClaw
+ * bundles its own models.dev-like snapshot and exposes a stable JSON shape.
+ */
+function extractOpenClawCatalog(binaryPath: string): { models: ModelInfo[]; aliases: Record<string, string> } {
+  let stdout: string;
+  try {
+    stdout = execFileSync(binaryPath, ['models', 'list', '--all', '--json'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 20_000,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch {
+    return { models: [], aliases: {} };
+  }
+
+  // OpenClaw prefaces output with a banner line on stderr; stdout should be
+  // pure JSON, but be defensive and skip preface text if any slipped through.
+  const firstBrace = stdout.indexOf('{');
+  if (firstBrace === -1) return { models: [], aliases: {} };
+  let parsed: any;
+  try {
+    parsed = JSON.parse(stdout.slice(firstBrace));
+  } catch {
+    return { models: [], aliases: {} };
+  }
+
+  const rawModels = Array.isArray(parsed?.models) ? parsed.models : [];
+  const models: ModelInfo[] = rawModels
+    .filter((m: any) => typeof m?.key === 'string')
+    .map((m: any) => ({
+      id: m.key,
+      displayName: typeof m.name === 'string' ? m.name : undefined,
+      isDefault: m.available === true && m.tags?.includes?.('default'),
+    }));
+
+  return { models, aliases: {} };
+}
+
+/**
  * Build (or load from cache) the model catalog for a specific (agent, version).
- * Cache is keyed on binary mtime, so re-extracts automatically when the user
- * upgrades or reinstalls a version.
+ * Cache is keyed on source-file mtime (binary or js module), so re-extracts
+ * automatically when the user upgrades or reinstalls a version.
  */
 export function getModelCatalog(agent: AgentId, version: string): ModelCatalog | null {
   const src = locateModelSource(agent, version);
@@ -289,16 +644,32 @@ export function getModelCatalog(agent: AgentId, version: string): ModelCatalog |
 
   const cache = loadCache();
   const key = cacheKey(agent, version);
-  const cached = cache[key];
+  const cached = cache.entries[key];
   if (cached && cached.sourcePath === src.path && cached.mtime === mtime) {
     return cached.catalog;
   }
 
-  const text = extractStrings(src.path);
-  const { models, aliases } =
-    agent === 'claude' ? extractClaudeCatalog(text)
-    : agent === 'codex' ? extractCodexCatalog(text)
-    : { models: [], aliases: {} };
+  let models: ModelInfo[] = [];
+  let aliases: Record<string, string> = {};
+
+  if (src.kind === 'bundle' || src.kind === 'binary') {
+    const text = extractStrings(src.path);
+    ({ models, aliases } =
+      agent === 'claude' ? extractClaudeCatalog(text)
+      : agent === 'codex' ? extractCodexCatalog(text)
+      : { models: [], aliases: {} });
+  } else if (src.kind === 'js') {
+    try {
+      const text = fs.readFileSync(src.path, 'utf-8');
+      if (agent === 'gemini') ({ models, aliases } = extractGeminiCatalog(text));
+    } catch {
+      /* unreadable */
+    }
+  } else if (src.kind === 'cli') {
+    if (agent === 'opencode') ({ models, aliases } = extractOpenCodeCatalog(src.path));
+    else if (agent === 'cursor') ({ models, aliases } = extractCursorCatalog(src.path));
+    else if (agent === 'openclaw') ({ models, aliases } = extractOpenClawCatalog(src.path));
+  }
 
   const catalog: ModelCatalog = {
     agent,
@@ -309,7 +680,7 @@ export function getModelCatalog(agent: AgentId, version: string): ModelCatalog |
     aliases,
   };
 
-  cache[key] = { sourcePath: src.path, mtime, catalog };
+  cache.entries[key] = { sourcePath: src.path, mtime, catalog };
   saveCache();
   return catalog;
 }
