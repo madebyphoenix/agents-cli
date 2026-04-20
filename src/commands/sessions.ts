@@ -327,9 +327,10 @@ function printSessionTable(sessions: SessionMeta[]): void {
   console.log(chalk.gray(`\n${sessions.length} session${sessions.length === 1 ? '' : 's'}.`));
 }
 
-function resolveViewMode(options: { transcript?: boolean; trace?: boolean; json?: boolean }): ViewMode {
+function resolveViewMode(options: { transcript?: boolean; trace?: boolean; timeline?: boolean; json?: boolean }): ViewMode {
   if (options.transcript) return 'transcript';
   if (options.trace) return 'trace';
+  if (options.timeline) return 'timeline';
   if (options.json) return 'json';
   return 'summary';
 }
@@ -354,7 +355,7 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
   const agentColor = colorAgent(session.agent);
   console.log('');
 
-  if (mode === 'summary') {
+  if (mode === 'summary' || mode === 'timeline') {
     const stats = computeSummaryStats(events);
     const modelStr = stats.models.length > 0 ? chalk.yellow(`  ${stats.models.join(', ')}`) : '';
     const branchStr = session.gitBranch ? chalk.gray(` (${session.gitBranch})`) : '';
@@ -372,7 +373,7 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
     if (statsLine) console.log(chalk.gray(statsLine));
     console.log(chalk.gray('─'.repeat(60)));
 
-    process.stdout.write(renderSummary(events, session.cwd));
+    process.stdout.write(renderSummary(events, session.cwd, { timeline: mode === 'timeline' }));
     return;
   }
 
@@ -766,6 +767,7 @@ export function registerSessionsCommands(program: Command): void {
     .option('-n, --limit <n>', 'Max sessions to show', '50')
     .option('--transcript', 'Show full conversation transcript (with ID)')
     .option('--trace', 'Show reasoning trace as markdown (with ID)')
+    .option('--timeline', 'Show chronological timeline of narration + tool clusters (with ID)')
     .option('--json', 'Output as JSON')
     .action(async (query: string | undefined, options: SessionsOptions) => {
       await sessionsAction(query, options);
@@ -794,6 +796,7 @@ export function registerSessionsCommands(program: Command): void {
     .description('Render a session by ID (non-interactive)')
     .option('--transcript', 'Show full conversation transcript')
     .option('--trace', 'Show reasoning trace as markdown')
+    .option('--timeline', 'Show chronological timeline of narration + tool clusters')
     .option('--json', 'Output normalized events as JSON')
     .option('-a, --agent <agent>', 'Narrow the search to one agent, e.g. claude or claude@2.1.112')
     .option('--project <name>', 'Narrow the search to sessions in a specific project directory')

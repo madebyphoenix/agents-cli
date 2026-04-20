@@ -12,7 +12,7 @@ agents-cli is a developer workstation tool that combines:
 
 1. **Version management** -- Pin AI agent CLI versions per project via `.agents-version`, with shim-based resolution and isolated config per version
 2. **Package management** -- Install and sync skills, MCP servers, slash commands, rules, hooks, and permissions across all agents
-3. **Unified execution** -- Run any agent through one interface (`agents exec <agent> <prompt>`), enabling pipelines and CI scripting
+3. **Unified execution** -- Run any agent through one interface (`agents run <agent> <prompt>`), enabling pipelines and CI scripting
 4. **Team sharing** -- Git-based push/pull of your entire agent setup, so teammates and new machines get the same config in one command
 5. **Automation** -- Scheduled routines with sandboxed permissions
 
@@ -58,7 +58,7 @@ agents-cli's config sync is version-aware: when you switch agent versions, confi
 | [Rivet Sandbox Agent SDK](https://sandboxagent.dev) | Unified HTTP API to control Claude Code, Codex, OpenCode, Amp, Cursor, Pi inside sandboxes. 1,300+ stars. | Server-side infrastructure -- designed for running agents in cloud sandboxes, containers, and CI. agents-cli is a local developer tool. Complementary: a team could use agents-cli locally and Rivet in production. |
 | [Rivet Actors](https://rivet.dev) | Stateful compute primitives for AI agents. Hierarchical actor trees, message passing, workflows. 5,400+ stars, YC W23. | Full agent orchestration platform, not a CLI tool. Solves "how do I run agents at scale" rather than "how do I manage agent CLIs on my machine." |
 
-agents-cli's `agents exec` resolves to the project-pinned version with pre-synced skills and permissions, making it suitable for scripting pipelines locally and in CI.
+agents-cli's `agents run` resolves to the project-pinned version with pre-synced skills and permissions, making it suitable for scripting pipelines locally and in CI.
 
 ---
 

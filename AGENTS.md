@@ -48,7 +48,7 @@ src/
   index.ts           # CLI entry (commander.js)
   commands/          # Command implementations
     sessions.ts      # agents sessions list/view (default: summary mode)
-    exec.ts          # agents exec
+    exec.ts          # agents run
     routines.ts      # agents routines (scheduled jobs)
     drive.ts         # agents drive (remote session sync)
     plugins.ts       # agents plugins
@@ -134,7 +134,7 @@ agents sessions view <id> --trace        # Reasoning trace as markdown
 agents sessions view <id> --json         # Normalized events as JSON
 
 # Execution
-agents exec <agent> <prompt> # Execute agent non-interactively
+agents run <agent> <prompt> # Execute agent non-interactively
 
 # Automation
 agents routines              # Manage scheduled jobs

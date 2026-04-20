@@ -15,17 +15,17 @@ Also available as `ag` -- all commands work with both `agents` and `ag`.
 ## Run any agent. Same interface.
 
 ```bash
-agents exec claude "Find all auth vulnerabilities in src/"
-agents exec codex "Fix the issues Claude found"
-agents exec gemini "Write tests for the fixed code"
+agents run claude "Find all auth vulnerabilities in src/"
+agents run codex "Fix the issues Claude found"
+agents run gemini "Write tests for the fixed code"
 ```
 
 Each agent resolves to the project-pinned version, with the right skills, MCP servers, and permissions already synced. No setup between steps -- just run.
 
-`agents exec` also passes through environment overrides to the spawned CLI, so Claude can target any Anthropic-compatible endpoint:
+`agents run` also passes through environment overrides to the spawned CLI, so Claude can target any Anthropic-compatible endpoint:
 
 ```bash
-agents exec claude "Reply with exactly: agents-qwen route ok" \
+agents run claude "Reply with exactly: agents-qwen route ok" \
   --mode full \
   --model qwen3.6:35b \
   --env ANTHROPIC_BASE_URL=https://ollama.example.com \
@@ -38,12 +38,12 @@ This makes agent pipelines possible. Chain agents by strength, swap one for anot
 
 ```bash
 # Friday night code review
-agents exec claude "Review all PRs merged this week, summarize risks" \
-  | agents exec codex "Write regression tests for the top 3 risks"
+agents run claude "Review all PRs merged this week, summarize risks" \
+  | agents run codex "Write regression tests for the top 3 risks"
 
 # Same pipeline, different project -- different agent versions, same commands
 cd ../other-project
-agents exec claude "Review all PRs merged this week, summarize risks"
+agents run claude "Review all PRs merged this week, summarize risks"
 # ^ resolves to claude@2.0.0 here instead of claude@2.1.89
 ```
 
@@ -53,7 +53,7 @@ Supports plan (read-only) and edit modes, effort levels that map to the right mo
 
 ## Put agents on a team
 
-`agents exec` runs one agent synchronously. **Teams** run many agents on the same task, in the background, with coordination.
+`agents run` runs one agent synchronously. **Teams** run many agents on the same task, in the background, with coordination.
 
 ```bash
 agents teams create auth-feature
@@ -76,7 +76,7 @@ Each teammate runs detached. Close your terminal; they keep working. Check in wh
 - `teams ls` filters: substring query, `--agent claude[@version]`, `--status working|done|failed|empty`, `--since 2h --until 30d`.
 - Non-TTY output is valid JSON by default, with a `cursor` field in every `status` response for efficient delta polling (`--since <cursor>`).
 
-State lives in `~/.agents/teams/`. Teammates survive terminal restarts. Synced config (commands, skills, rules, MCP servers, hooks, permissions) applies to teammates the same way it applies to `agents exec` -- one config, both flows.
+State lives in `~/.agents/teams/`. Teammates survive terminal restarts. Synced config (commands, skills, rules, MCP servers, hooks, permissions) applies to teammates the same way it applies to `agents run` -- one config, both flows.
 
 ---
 
@@ -309,7 +309,7 @@ agents drive detach                # Restore to version home
 agents drive status                # Show drive state
 
 # Execution
-agents exec <agent> <prompt>      # Run agent
+agents run <agent> <prompt>      # Run agent
 agents sessions view <id>         # Read a session by exact ID
 agents sessions --agent codex     # Interactive filtered session search
 agents sessions --project agents  # Interactive project-scoped session search
