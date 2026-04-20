@@ -15,8 +15,8 @@ const MODEL_CAPABLE_AGENTS: AgentId[] = ['claude', 'codex'];
 
 export function registerModelsCommand(program: Command): void {
   program
-    .command('models [agentSpec]')
-    .description('List models supported by an installed agent version')
+    .command('models [agentSpec]', { hidden: true })
+    .description('List models supported by an installed agent version (internal/debug)')
     .option('--cloud', 'Show per-cloud IDs (Claude only)')
     .option('--reasoning', 'Show reasoning levels per model (Codex only)')
     .option('--json', 'Output catalog as JSON')

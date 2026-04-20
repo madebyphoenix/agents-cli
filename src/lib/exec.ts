@@ -3,6 +3,7 @@ import * as path from 'path';
 import type { AgentId } from './types.js';
 import { parseTimeout } from './routines.js';
 import { getVersionHomePath, isVersionInstalled, resolveVersion } from './versions.js';
+import { resolveModel } from './models.js';
 
 export type ExecMode = 'plan' | 'edit' | 'full';
 export type ExecEffort = 'fast' | 'default' | 'detailed';
@@ -294,7 +295,16 @@ export function buildExecCommand(options: ExecOptions): string[] {
   // Add model (from explicit option or effort mapping)
   const model = options.model || EFFORT_MODELS[options.agent][options.effort];
   if (model && template.modelFlag) {
-    cmd.push(template.modelFlag, model);
+    const effectiveVersion = options.version || resolveVersion(options.agent, options.cwd || process.cwd());
+    if (effectiveVersion) {
+      const resolved = resolveModel(options.agent, effectiveVersion, model);
+      if (resolved.warning) {
+        process.stderr.write(`[agents] ${resolved.warning}\n`);
+      }
+      cmd.push(template.modelFlag, resolved.forwarded);
+    } else {
+      cmd.push(template.modelFlag, model);
+    }
   }
 
   // Add JSON output flags if requested
