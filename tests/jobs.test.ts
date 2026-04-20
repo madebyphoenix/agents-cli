@@ -30,7 +30,7 @@ function makeConfig(overrides: Partial<JobConfig> = {}): JobConfig {
     schedule: '0 9 * * *',
     agent: 'claude',
     mode: 'plan',
-    effort: 'default',
+    effort: 'medium',
     timeout: '30m',
     enabled: true,
     prompt: 'do something',
