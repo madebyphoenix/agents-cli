@@ -90,7 +90,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     format: 'markdown',
     variableSyntax: '$ARGUMENTS',
     supportsHooks: true,
-    capabilities: { hooks: true, mcp: true, allowlist: true, skills: true, commands: true, plugins: true },
+    capabilities: { hooks: true, mcp: true, allowlist: true, skills: true, commands: true, plugins: true, memoryImports: true },
   },
   codex: {
     id: 'codex',
@@ -125,7 +125,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     variableSyntax: '{{args}}',
     supportsHooks: true,
     nativeAgentsSkillsDir: true,
-    capabilities: { hooks: true, mcp: true, allowlist: false, skills: true, commands: true, plugins: false },
+    capabilities: { hooks: true, mcp: true, allowlist: false, skills: true, commands: true, plugins: false, memoryImports: true },
   },
   cursor: {
     id: 'cursor',

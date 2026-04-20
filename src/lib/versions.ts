@@ -16,6 +16,7 @@ import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getCon
 import { listInstalledSubagents, transformSubagentForClaude, syncSubagentToOpenclaw, SUBAGENT_CAPABLE_AGENTS } from './subagents.js';
 import { parseHookManifest, registerHooksToSettings } from './hooks.js';
 import { discoverPlugins, syncPluginToVersion, isPluginSynced, pluginSupportsAgent, cleanOrphanedPluginSkills } from './plugins.js';
+import { compileMemoryForAgent } from './memory-compile.js';
 import { PLUGINS_CAPABLE_AGENTS } from './agents.js';
 
 const execAsync = promisify(exec);
@@ -1455,6 +1456,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     const centralMemory = getMemoryDir();
     const projectMemoryDir = projectAgentsDir ? path.join(projectAgentsDir, 'memory') : null;
     const syncedMemory: string[] = [];
+    const agentSupportsImports = !!agentConfig.capabilities.memoryImports;
 
     for (const mem of memoryToSync) {
       const projectSource = projectMemoryDir ? path.join(projectMemoryDir, `${mem}.md`) : null;
@@ -1467,7 +1469,15 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
       const destFile = path.join(agentDir, targetName);
 
       removePath(destFile);
-      fs.copyFileSync(srcFile, destFile);
+      // For the primary memory file (AGENTS.md), agents that don't natively
+      // resolve @-imports get a compiled (inlined) copy + sidecar manifest.
+      // Everything else (secondary memory files, @-capable agents) gets a
+      // straight copy.
+      if (mem === 'AGENTS' && !agentSupportsImports) {
+        compileMemoryForAgent(agent, version);
+      } else {
+        fs.copyFileSync(srcFile, destFile);
+      }
       result.memory.push(targetName);
       syncedMemory.push(mem);
     }

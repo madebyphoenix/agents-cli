@@ -27,6 +27,12 @@ export interface AgentConfig {
     skills: boolean;
     commands: boolean;
     plugins: boolean;
+    /**
+     * Whether the agent natively resolves `@path/to/file` imports inside its
+     * memory file at session start. If false, agents-cli must pre-compile the
+     * memory file (inline all @-imports) when syncing it into the version home.
+     */
+    memoryImports?: boolean;
   };
 }
 

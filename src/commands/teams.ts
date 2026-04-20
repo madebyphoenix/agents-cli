@@ -332,6 +332,56 @@ function mergeTeams(
   );
 }
 
+// Build the same enriched rows the `list` picker uses. Shared between `list`
+// (interactive default) and the picker fallback for `status` / `start`.
+async function loadTeamRows(
+  mgr: AgentManager
+): Promise<{ rows: TeamRow[]; names: string[] }> {
+  const [tasks, registry] = await Promise.all([handleTasks(mgr, 1000), loadTeams()]);
+  const merged = mergeTeams(registry, tasks.tasks);
+  const rows: TeamRow[] = await Promise.all(
+    merged.map(async (team) => {
+      let agents: AgentStatusDetail[] = [];
+      try {
+        const res = await handleStatus(mgr, team.task_name, 'all');
+        agents = res.agents;
+      } catch {
+        // Empty teams (no live agents) throw in some code paths.
+      }
+      return { team, agents, description: registry[team.task_name]?.description };
+    })
+  );
+  return { rows, names: merged.map((t) => t.task_name) };
+}
+
+// Fallback for read-only / constructive subcommands when the user omits the
+// team argument. In a TTY, show the picker and return the chosen team. Outside
+// a TTY, hard-fail with a clear error so scripts surface the missing arg.
+async function pickTeamOr(
+  mgr: AgentManager,
+  command: string
+): Promise<string | null> {
+  if (!isInteractiveTerminal()) {
+    requireInteractiveSelection(`Picking a team for \`${command}\``, [
+      `${command} <team>`,
+      `agents teams list  # to see your teams`,
+    ]);
+  }
+  const { rows } = await loadTeamRows(mgr);
+  if (rows.length === 0) {
+    console.log(chalk.gray("You haven't started any teams yet."));
+    console.log(chalk.gray('  Start one with:  agents teams create <name>'));
+    return null;
+  }
+  try {
+    const picked = await teamPicker(rows);
+    return picked?.team ?? null;
+  } catch (err) {
+    if (isPromptCancelled(err)) return null;
+    throw err;
+  }
+}
+
 export function registerTeamsCommands(program: Command): void {
   const teams = program
     .command('teams')
