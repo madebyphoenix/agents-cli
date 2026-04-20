@@ -4,11 +4,12 @@ import ora from 'ora';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { checkbox } from '@inquirer/prompts';
+import { checkbox, confirm } from '@inquirer/prompts';
 
 import {
   AGENTS,
   ALL_AGENT_IDS,
+  COMMANDS_CAPABLE_AGENTS,
   getAllCliStates,
   resolveAgentName,
   formatAgentError,
@@ -24,6 +25,10 @@ import {
   listCentralCommands,
   listInstalledCommandsWithScope,
   getCommandInfo,
+  diffVersionCommands,
+  installCommandToVersion,
+  removeCommandFromVersion,
+  iterCommandsCapableVersions,
 } from '../lib/commands.js';
 import {
   listInstalledVersions,
@@ -507,6 +512,178 @@ Examples:
           console.log(chalk.yellow(`Command '${cmdName}' not found for any agent`));
         }
       }
+    });
+
+  commandsCmd
+    .command('sync')
+    .description('Reconcile version-home commands against central ~/.agents/commands/ (add + update, never delete)')
+    .option('-a, --agent <agent>', 'Scope to a specific agent or agent@version')
+    .option('-m, --method <method>', 'Install method: copy (default) or symlink (markdown-format agents only)', 'copy')
+    .addHelpText('after', `
+Examples:
+  # Sync every installed version
+  agents commands sync
+
+  # Scope to one agent or version
+  agents commands sync --agent claude
+  agents commands sync --agent claude@2.1.113
+
+  # Symlink into version homes (propagates central edits automatically, markdown agents only)
+  agents commands sync --method symlink
+
+Note: Gemini uses TOML — symlink is ignored and a fresh conversion is written
+on every sync. Sync is additive: to remove orphans, use 'agents commands prune'.
+`)
+    .action(async (options) => {
+      const method = (options.method === 'symlink' ? 'symlink' : 'copy') as 'symlink' | 'copy';
+
+      let filter: { agent?: AgentId; version?: string } | undefined;
+      if (options.agent) {
+        const [name, version] = String(options.agent).split('@');
+        const agentId = resolveAgentName(name);
+        if (!agentId) {
+          console.log(chalk.red(formatAgentError(name, COMMANDS_CAPABLE_AGENTS)));
+          process.exit(1);
+        }
+        filter = { agent: agentId, version: version || undefined };
+      }
+
+      const pairs = iterCommandsCapableVersions(filter);
+      if (pairs.length === 0) {
+        console.log(chalk.gray('No matching installed versions.'));
+        return;
+      }
+
+      const diffs = pairs.map(({ agent, version }) => diffVersionCommands(agent, version));
+      const plan = diffs.filter((d) => d.toAdd.length > 0 || d.toUpdate.length > 0);
+
+      if (plan.length === 0) {
+        console.log(chalk.green('All version homes are up to date with central.'));
+        if (diffs.some((d) => d.orphans.length > 0)) {
+          console.log(chalk.gray('Orphan commands present. Run \'agents commands prune --dry-run\' to review.'));
+        }
+        return;
+      }
+
+      console.log(chalk.bold(`Syncing commands (method: ${method})\n`));
+      let adds = 0, updates = 0, failures = 0;
+      for (const diff of plan) {
+        const label = `${diff.agent}@${diff.version}`;
+        if (diff.toAdd.length > 0) {
+          console.log(`  ${chalk.cyan(label)} ${chalk.gray('add:')} ${diff.toAdd.join(', ')}`);
+          for (const name of diff.toAdd) {
+            const r = installCommandToVersion(diff.agent, diff.version, name, method);
+            if (r.success) adds++;
+            else { failures++; console.log(chalk.red(`    ! ${name}: ${r.error}`)); }
+          }
+        }
+        if (diff.toUpdate.length > 0) {
+          console.log(`  ${chalk.cyan(label)} ${chalk.gray('update:')} ${diff.toUpdate.join(', ')}`);
+          for (const name of diff.toUpdate) {
+            const r = installCommandToVersion(diff.agent, diff.version, name, method);
+            if (r.success) updates++;
+            else { failures++; console.log(chalk.red(`    ! ${name}: ${r.error}`)); }
+          }
+        }
+      }
+
+      console.log();
+      console.log(chalk.green(`Synced: ${adds} added, ${updates} updated${failures > 0 ? chalk.red(`, ${failures} failed`) : ''}.`));
+
+      const totalOrphans = diffs.reduce((n, d) => n + d.orphans.length, 0);
+      if (totalOrphans > 0) {
+        console.log(chalk.gray(`${totalOrphans} orphan(s) remain. Run 'agents commands prune --dry-run' to review.`));
+      }
+    });
+
+  commandsCmd
+    .command('prune')
+    .description('Remove orphan commands from version homes (commands present locally but not in central)')
+    .option('-a, --agent <agent>', 'Scope to a specific agent or agent@version')
+    .option('--dry-run', 'Show orphans without deleting')
+    .option('-y, --yes', 'Skip confirmation prompt')
+    .addHelpText('after', `
+Examples:
+  # See what would be pruned
+  agents commands prune --dry-run
+
+  # Prune across every installed version (prompts for confirmation)
+  agents commands prune
+
+  # Scope to one agent or version
+  agents commands prune --agent claude@2.0.65
+
+  # Skip confirmation (for scripts)
+  agents commands prune -y
+`)
+    .action(async (options) => {
+      let filter: { agent?: AgentId; version?: string } | undefined;
+      if (options.agent) {
+        const [name, version] = String(options.agent).split('@');
+        const agentId = resolveAgentName(name);
+        if (!agentId) {
+          console.log(chalk.red(formatAgentError(name, COMMANDS_CAPABLE_AGENTS)));
+          process.exit(1);
+        }
+        filter = { agent: agentId, version: version || undefined };
+      }
+
+      const pairs = iterCommandsCapableVersions(filter);
+      const diffs = pairs
+        .map(({ agent, version }) => diffVersionCommands(agent, version))
+        .filter((d) => d.orphans.length > 0);
+
+      if (diffs.length === 0) {
+        console.log(chalk.green('No orphan commands.'));
+        return;
+      }
+
+      const total = diffs.reduce((n, d) => n + d.orphans.length, 0);
+      console.log(chalk.bold(`Orphans (in version home, not in central)\n`));
+      for (const d of diffs) {
+        console.log(`  ${chalk.cyan(`${d.agent}@${d.version}`)}  ${d.orphans.join(', ')}`);
+      }
+      console.log();
+
+      if (options.dryRun) {
+        console.log(chalk.gray(`${total} orphan(s). Run without --dry-run to delete.`));
+        return;
+      }
+
+      if (!options.yes) {
+        if (!isInteractiveTerminal()) {
+          console.log(chalk.yellow('Non-interactive shell: pass -y to confirm, or --dry-run to preview.'));
+          process.exit(1);
+        }
+        let ok = false;
+        try {
+          ok = await confirm({
+            message: `Delete ${total} orphan command${total === 1 ? '' : 's'}?`,
+            default: false,
+          });
+        } catch (err) {
+          if (isPromptCancelled(err)) {
+            console.log(chalk.gray('Cancelled'));
+            return;
+          }
+          throw err;
+        }
+        if (!ok) {
+          console.log(chalk.gray('Cancelled'));
+          return;
+        }
+      }
+
+      let removed = 0, failures = 0;
+      for (const d of diffs) {
+        for (const name of d.orphans) {
+          const r = removeCommandFromVersion(d.agent, d.version, name);
+          if (r.success) removed++;
+          else { failures++; console.log(chalk.red(`  ! ${d.agent}@${d.version} ${name}: ${r.error}`)); }
+        }
+      }
+
+      console.log(chalk.green(`Pruned ${removed} orphan(s)${failures > 0 ? chalk.red(`, ${failures} failed`) : ''}.`));
     });
 
   commandsCmd

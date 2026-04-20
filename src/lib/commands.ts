@@ -1,10 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
-import { AGENTS, ensureCommandsDir } from './agents.js';
+import { AGENTS, COMMANDS_CAPABLE_AGENTS, ensureCommandsDir } from './agents.js';
 import { markdownToToml } from './convert.js';
 import { getCommandsDir, getProjectAgentsDir } from './state.js';
-import { getEffectiveHome } from './versions.js';
+import { getEffectiveHome, getVersionHomePath, listInstalledVersions } from './versions.js';
 import type { AgentId, CommandInstallation } from './types.js';
 
 export type CommandScope = 'user' | 'project';
@@ -200,6 +200,173 @@ export function installCommand(
 
   fs.copyFileSync(sourcePath, targetPath);
   return { path: targetPath, method: 'copy', warnings: validation.warnings };
+}
+
+/**
+ * Path to the commands dir of a specific version home (not the active one).
+ * Respects per-agent commandsSubdir (e.g. 'prompts' for codex).
+ */
+export function getVersionCommandsDir(agent: AgentId, version: string): string {
+  const home = getVersionHomePath(agent, version);
+  return path.join(home, `.${agent}`, AGENTS[agent].commandsSubdir);
+}
+
+/**
+ * List command names (without extension) installed in a specific version home.
+ */
+export function listCommandsInVersionHome(agent: AgentId, version: string): string[] {
+  const dir = getVersionCommandsDir(agent, version);
+  if (!fs.existsSync(dir)) return [];
+  const ext = AGENTS[agent].format === 'toml' ? '.toml' : '.md';
+  return fs.readdirSync(dir)
+    .filter((f) => f.endsWith(ext))
+    .map((f) => f.slice(0, -ext.length))
+    .sort();
+}
+
+/**
+ * Check if a command installed in a specific version matches the central source.
+ * Handles markdown-to-TOML conversion for Gemini.
+ */
+function versionCommandMatches(agent: AgentId, version: string, commandName: string): boolean {
+  const sourcePath = path.join(getCommandsDir(), `${commandName}.md`);
+  if (!fs.existsSync(sourcePath)) return false;
+
+  const agentConfig = AGENTS[agent];
+  const ext = agentConfig.format === 'toml' ? '.toml' : '.md';
+  const installedPath = path.join(getVersionCommandsDir(agent, version), `${commandName}${ext}`);
+  if (!fs.existsSync(installedPath)) return false;
+
+  try {
+    const installedContent = fs.readFileSync(installedPath, 'utf-8');
+    const sourceContent = fs.readFileSync(sourcePath, 'utf-8');
+
+    if (agentConfig.format === 'toml') {
+      const convertedSource = markdownToToml(commandName, sourceContent);
+      return normalizeContent(installedContent) === normalizeContent(convertedSource);
+    }
+    return normalizeContent(installedContent) === normalizeContent(sourceContent);
+  } catch {
+    return false;
+  }
+}
+
+export interface VersionCommandDiff {
+  agent: AgentId;
+  version: string;
+  toAdd: string[];
+  toUpdate: string[];
+  matched: string[];
+  orphans: string[];
+}
+
+/**
+ * Compare a version home's commands against central. Returns the reconciliation diff.
+ */
+export function diffVersionCommands(agent: AgentId, version: string): VersionCommandDiff {
+  const central = new Set(listCentralCommands());
+  const installed = new Set(listCommandsInVersionHome(agent, version));
+
+  const toAdd: string[] = [];
+  const toUpdate: string[] = [];
+  const matched: string[] = [];
+  const orphans: string[] = [];
+
+  for (const name of central) {
+    if (!installed.has(name)) {
+      toAdd.push(name);
+    } else if (!versionCommandMatches(agent, version, name)) {
+      toUpdate.push(name);
+    } else {
+      matched.push(name);
+    }
+  }
+
+  for (const name of installed) {
+    if (!central.has(name)) orphans.push(name);
+  }
+
+  return { agent, version, toAdd: toAdd.sort(), toUpdate: toUpdate.sort(), matched, orphans: orphans.sort() };
+}
+
+/**
+ * Install a single command from central into a specific version home.
+ * Handles markdown-to-TOML conversion when the agent requires it.
+ */
+export function installCommandToVersion(
+  agent: AgentId,
+  version: string,
+  commandName: string,
+  method: 'symlink' | 'copy' = 'copy'
+): { success: boolean; error?: string } {
+  const sourcePath = path.join(getCommandsDir(), `${commandName}.md`);
+  if (!fs.existsSync(sourcePath)) {
+    return { success: false, error: `Command '${commandName}' not found in central` };
+  }
+
+  const agentConfig = AGENTS[agent];
+  const commandsDir = getVersionCommandsDir(agent, version);
+  fs.mkdirSync(commandsDir, { recursive: true });
+
+  const ext = agentConfig.format === 'toml' ? '.toml' : '.md';
+  const targetPath = path.join(commandsDir, `${commandName}${ext}`);
+
+  try {
+    if (fs.existsSync(targetPath) || fs.lstatSync(targetPath, { throwIfNoEntry: false })) {
+      fs.unlinkSync(targetPath);
+    }
+
+    if (agentConfig.format === 'toml') {
+      const sourceContent = fs.readFileSync(sourcePath, 'utf-8');
+      fs.writeFileSync(targetPath, markdownToToml(commandName, sourceContent), 'utf-8');
+    } else if (method === 'symlink') {
+      fs.symlinkSync(sourcePath, targetPath);
+    } else {
+      fs.copyFileSync(sourcePath, targetPath);
+    }
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+  return { success: true };
+}
+
+/**
+ * Remove a single command from a specific version home.
+ */
+export function removeCommandFromVersion(
+  agent: AgentId,
+  version: string,
+  commandName: string
+): { success: boolean; error?: string } {
+  const ext = AGENTS[agent].format === 'toml' ? '.toml' : '.md';
+  const targetPath = path.join(getVersionCommandsDir(agent, version), `${commandName}${ext}`);
+  if (!fs.existsSync(targetPath) && !fs.lstatSync(targetPath, { throwIfNoEntry: false })) {
+    return { success: true };
+  }
+  try {
+    fs.unlinkSync(targetPath);
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+  return { success: true };
+}
+
+/**
+ * Iterate all (agent, version) pairs that support commands and are installed,
+ * optionally scoped to a single agent/version.
+ */
+export function iterCommandsCapableVersions(filter?: { agent?: AgentId; version?: string }): Array<{ agent: AgentId; version: string }> {
+  const pairs: Array<{ agent: AgentId; version: string }> = [];
+  const agents = filter?.agent ? [filter.agent] : COMMANDS_CAPABLE_AGENTS;
+  for (const agent of agents) {
+    if (!COMMANDS_CAPABLE_AGENTS.includes(agent)) continue;
+    const versions = listInstalledVersions(agent);
+    for (const version of versions) {
+      if (filter?.version && filter.version !== version) continue;
+      pairs.push({ agent, version });
+    }
+  }
+  return pairs;
 }
 
 export function uninstallCommand(agentId: AgentId, commandName: string): boolean {
