@@ -38,7 +38,7 @@ import { registerVersionsCommands } from './commands/versions.js';
 import { registerPackagesCommands } from './commands/packages.js';
 import { registerDaemonCommands } from './commands/daemon.js';
 import { registerRoutinesCommands } from './commands/routines.js';
-import { registerExecCommand } from './commands/exec.js';
+import { registerRunCommand } from './commands/exec.js';
 import { registerModelsCommand } from './commands/models.js';
 import { registerSubagentsCommands } from './commands/subagents.js';
 import { registerPluginsCommands } from './commands/plugins.js';
@@ -100,7 +100,7 @@ Sessions:
 Automation:
   routines                        Schedule agents to run on a timer
   daemon                          Start/stop the routines scheduler
-  exec <agent> <prompt>           Run an agent non-interactively
+  run <agent> <prompt>            Run an agent non-interactively
   teams                           Put AI agents on a team (create, add, status, disband)
   pty                             Interactive PTY sessions for AI agents
 
@@ -325,8 +325,21 @@ registerVersionsCommands(program);
 registerPackagesCommands(program);
 registerDaemonCommands(program);
 registerRoutinesCommands(program);
-registerExecCommand(program);
+registerRunCommand(program);
 registerModelsCommand(program);
+
+// Deprecated 'exec' alias for 'run'
+program
+  .command('exec', { hidden: true })
+  .allowUnknownOption()
+  .allowExcessArguments()
+  .action(async () => {
+    console.log(chalk.yellow('Deprecated: Use "agents run" instead of "agents exec"\n'));
+    const args = process.argv.slice(2);
+    args[0] = 'run';
+    await program.parseAsync(['node', 'agents', ...args]);
+  });
+
 registerTeamsCommands(program);
 registerSessionsCommands(program);
 registerSyncCommand(program);

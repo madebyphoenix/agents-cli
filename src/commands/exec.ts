@@ -31,10 +31,10 @@ function isValidAgent(agent: string): agent is AgentId {
   return VALID_AGENTS.includes(agent);
 }
 
-export function registerExecCommand(program: Command): void {
+export function registerRunCommand(program: Command): void {
   program
-    .command('exec <agent> <prompt>')
-    .description('Execute an agent CLI with unified interface')
+    .command('run <agent> <prompt>')
+    .description('Run an agent non-interactively')
     .option('-m, --mode <mode>', 'Execution mode: plan (read-only), edit (write), or full (full autonomy)', 'plan')
     .option('-e, --effort <effort>', 'Effort level: fast, default, detailed', 'default')
     .option('--model <model>', 'Override model selection')
