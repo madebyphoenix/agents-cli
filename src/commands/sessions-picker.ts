@@ -14,9 +14,11 @@ import {
   Separator,
 } from '@inquirer/core';
 import chalk from 'chalk';
-import type { SessionMeta } from '../lib/session/types.js';
+import type { SessionEvent, SessionMeta } from '../lib/session/types.js';
 import { parseSession } from '../lib/session/parse.js';
 import { cleanSessionPrompt } from '../lib/session/prompt.js';
+import { linkPath, relativeToCwd } from '../lib/session/render.js';
+import { renderMarkdown } from '../lib/markdown.js';
 
 export interface PickedSession {
   session: SessionMeta;
