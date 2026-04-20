@@ -597,7 +597,7 @@ describe('agents sessions (render-mode)', () => {
         '2026-04-17T19:36:30.000Z'
       );
 
-      const result = runAgents(['sessions', siblingSessionId, '--transcript'], swarmifyDir, tempHome);
+      const result = runAgents(['sessions', siblingSessionId, '--markdown'], swarmifyDir, tempHome);
       expect(result.status).toBe(0);
 
       const output = outputOf(result);
@@ -693,7 +693,7 @@ describe('agents sessions (render-mode)', () => {
         'utf-8'
       );
 
-      const result = runAgents(['sessions', historyOnlyId, '--transcript'], repoRoot, tempHome);
+      const result = runAgents(['sessions', historyOnlyId, '--markdown'], repoRoot, tempHome);
       expect(result.status).toBe(0);
 
       const output = outputOf(result);
@@ -725,7 +725,7 @@ describe('agents sessions (render-mode)', () => {
         '2026-04-17T19:41:30.000Z'
       );
 
-      const result = runAgents(['sessions', 'prompt text', '--transcript'], projectDir, tempHome);
+      const result = runAgents(['sessions', 'prompt text', '--markdown'], projectDir, tempHome);
       expect(result.status).toBe(0);
 
       const output = outputOf(result);
@@ -762,7 +762,7 @@ describe('agents sessions (render-mode)', () => {
       );
 
       const result = runAgents(
-        ['sessions', '--project', 'agents-cli', 'scoped search', '--transcript'],
+        ['sessions', '--project', 'agents-cli', 'scoped search', '--markdown'],
         workspaceDir,
         tempHome,
       );
@@ -801,7 +801,7 @@ describe('agents sessions (render-mode)', () => {
       );
 
       const result = runAgents(
-        ['sessions', '--agent', 'codex', 'shared filter phrase', '--transcript'],
+        ['sessions', '--agent', 'codex', 'shared filter phrase', '--markdown'],
         projectDir,
         tempHome,
       );

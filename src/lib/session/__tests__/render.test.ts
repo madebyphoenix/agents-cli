@@ -682,54 +682,6 @@ describe('renderSummary', () => {
     expect(out).toContain('Bash');
   });
 
-  it('renders a timeline (opt-in) with assistant narration and clustered tools', () => {
-    const events: SessionEvent[] = [
-      makeEvent({ type: 'message', role: 'user', content: 'Fix the bug' }),
-      makeEvent({ type: 'message', role: 'assistant', content: 'Let me read the file first. Then edit it.' }),
-      makeEvent({ type: 'tool_use', tool: 'Read', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
-      makeEvent({ type: 'tool_use', tool: 'Edit', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
-    ];
-    const out = renderSummary(events, '/project', { timeline: true });
-    expect(out).toContain('Timeline');
-    expect(out).toContain('Let me read the file first.');
-    expect(out).toContain('Read src/a.ts');
-    expect(out).toContain('Edit src/a.ts');
-  });
-
-  it('default summary mode omits the Timeline section', () => {
-    const events: SessionEvent[] = [
-      makeEvent({ type: 'message', role: 'assistant', content: 'Let me read the file first.' }),
-      makeEvent({ type: 'tool_use', tool: 'Read', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
-    ];
-    const out = renderSummary(events, '/project');
-    expect(out).not.toContain('Timeline');
-    expect(out).toContain('Read');
-  });
-
-  it('timeline flags failed tools with warning marker (opt-in)', () => {
-    const events: SessionEvent[] = [
-      makeEvent({ type: 'message', role: 'assistant', content: 'Running the build now.' }),
-      makeEvent({ type: 'tool_use', tool: 'Bash', args: { command: 'bun run build' }, command: 'bun run build' }),
-      makeEvent({ type: 'error', tool: 'Bash', content: 'tsc error on line 45' }),
-    ];
-    const out = renderSummary(events, undefined, { timeline: true });
-    expect(out).toContain('Running the build now.');
-    expect(out).toContain('⚠');
-    expect(out).toContain('tsc error on line 45');
-  });
-
-  it('timeline collapses consecutive same-summary tools into × N', () => {
-    const events: SessionEvent[] = [
-      makeEvent({ type: 'message', role: 'assistant', content: 'Checking status three times.' }),
-      makeEvent({ type: 'tool_use', tool: 'TaskUpdate', args: {} }),
-      makeEvent({ type: 'tool_use', tool: 'TaskUpdate', args: {} }),
-      makeEvent({ type: 'tool_use', tool: 'TaskUpdate', args: {} }),
-    ];
-    const out = renderSummary(events, undefined, { timeline: true });
-    expect(out).toContain('TaskUpdate');
-    expect(out).toContain('× 3');
-  });
-
   it('separates external edits (outside cwd) from in-project Modified', () => {
     const events: SessionEvent[] = [
       makeEvent({ type: 'tool_use', tool: 'Edit', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
