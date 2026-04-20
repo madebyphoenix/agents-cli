@@ -29,7 +29,12 @@ import type { SessionMeta } from '../lib/session/types.js';
 import { buildPreview as buildSessionPreview } from './sessions-picker.js';
 import { parseExecEnv } from '../lib/exec.js';
 import { teamPicker, printTeamTable, type TeamRow } from './teams-picker.js';
-import { isPromptCancelled, isInteractiveTerminal } from './utils.js';
+import {
+  isPromptCancelled,
+  isInteractiveTerminal,
+  requireDestructiveArg,
+  requireInteractiveSelection,
+} from './utils.js';
 
 const AGENT_NAMES: Record<AgentType, string> = {
   claude: 'Claude',
