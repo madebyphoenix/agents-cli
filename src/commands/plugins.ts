@@ -285,9 +285,9 @@ Examples:
       }
     });
 
-  // agents plugins remove <name>
+  // agents plugins remove [name]
   pluginsCmd
-    .command('remove <name>')
+    .command('remove [name]')
     .description('Unsync a plugin from all agent versions and optionally delete its source directory')
     .option('--keep-source', 'Keep the directory at ~/.agents/plugins/<name> (only unsync from agents)')
     .addHelpText('after', `
@@ -298,7 +298,17 @@ Examples:
   # Unsync but keep source directory
   agents plugins remove rush-toolkit --keep-source
 `)
-    .action((name: string, options: { keepSource?: boolean }) => {
+    .action((nameArg: string | undefined, options: { keepSource?: boolean }) => {
+      if (!nameArg) {
+        requireDestructiveArg({
+          argName: 'name',
+          command: 'agents plugins remove',
+          itemNoun: 'plugin',
+          available: discoverPlugins().map((p) => p.name),
+          emptyHint: 'No plugins installed.',
+        });
+      }
+      const name = nameArg;
       const pluginsDir = path.join(process.env.HOME || '', '.agents', 'plugins');
       const pluginRoot = path.join(pluginsDir, name);
 

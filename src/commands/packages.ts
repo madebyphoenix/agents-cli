@@ -42,6 +42,61 @@ import {
   resolveConfiguredAgentTargets,
   syncResourcesToVersion,
 } from '../lib/versions.js';
+import {
+  isInteractiveTerminal,
+  isPromptCancelled,
+  requireDestructiveArg,
+  requireInteractiveSelection,
+} from './utils.js';
+import { itemPicker } from '../lib/picker.js';
+
+// Picker fallback for `registry enable/config [name]`. Returns the picked
+// name, or null if the user cancels. In non-TTY shells, hard-fails with a
+// clear reminder of the positional form.
+async function pickRegistryName(
+  type: RegistryType,
+  verb: string,
+  pred?: (cfg: { enabled: boolean; url: string }) => boolean
+): Promise<string | null> {
+  const registries = getRegistries(type);
+  const entries = Object.entries(registries).filter(([, cfg]) => (pred ? pred(cfg) : true));
+  if (entries.length === 0) {
+    console.log(chalk.gray(`No ${type} registries to ${verb}.`));
+    return null;
+  }
+  if (!isInteractiveTerminal()) {
+    requireInteractiveSelection(`Picking a ${type} registry to ${verb}`, [
+      `agents registry ${verb} ${type} <name>`,
+      `agents registry list --type ${type}`,
+    ]);
+  }
+  const nameW = Math.max(8, ...entries.map(([n]) => n.length));
+  type Entry = [string, { enabled: boolean; url: string }];
+  try {
+    const picked = await itemPicker<Entry>({
+      message: `Select a ${type} registry to ${verb}:`,
+      items: entries,
+      filter: (q) => {
+        const t = q.trim().toLowerCase();
+        if (!t) return entries;
+        return entries.filter(([n, cfg]) => `${n} ${cfg.url}`.toLowerCase().includes(t));
+      },
+      labelFor: ([n, cfg]) => {
+        const status = cfg.enabled ? chalk.green('enabled') : chalk.gray('disabled');
+        const isDefault = DEFAULT_REGISTRIES[type]?.[n] ? chalk.gray(' (default)') : '';
+        return `${chalk.cyan(n.padEnd(nameW))}${isDefault}  ${status}  ${chalk.gray(cfg.url)}`;
+      },
+      shortIdFor: ([n]) => n,
+      pageSize: 10,
+      emptyMessage: 'No registries match.',
+      enterHint: verb,
+    });
+    return picked?.item[0] ?? null;
+  } catch (err) {
+    if (isPromptCancelled(err)) return null;
+    throw err;
+  }
+}
 
 export function registerPackagesCommands(program: Command): void {
   // ==========================================================================
@@ -101,13 +156,29 @@ export function registerPackagesCommands(program: Command): void {
     });
 
   registryCmd
-    .command('remove <type> <name>')
+    .command('remove <type> [name]')
     .description('Remove a registry')
-    .action((type: string, name: string) => {
+    .action((type: string, nameArg: string | undefined) => {
       if (type !== 'mcp' && type !== 'skill') {
         console.log(chalk.red(`Invalid type '${type}'. Use 'mcp' or 'skill'.`));
         process.exit(1);
       }
+
+      if (!nameArg) {
+        // Show only user-added registries — default registries can't be removed.
+        const registries = getRegistries(type as RegistryType);
+        const removable = Object.keys(registries).filter(
+          (n) => !DEFAULT_REGISTRIES[type as RegistryType]?.[n]
+        );
+        requireDestructiveArg({
+          argName: 'name',
+          command: `agents registry remove ${type}`,
+          itemNoun: `${type} registry`,
+          available: removable,
+          emptyHint: `No user-added ${type} registries to remove. (Defaults can't be removed — disable them instead.)`,
+        });
+      }
+      const name = nameArg;
 
       // Check if it's a default registry
       if (DEFAULT_REGISTRIES[type as RegistryType]?.[name]) {
@@ -123,12 +194,19 @@ export function registerPackagesCommands(program: Command): void {
     });
 
   registryCmd
-    .command('enable <type> <name>')
+    .command('enable <type> [name]')
     .description('Enable a registry')
-    .action((type: string, name: string) => {
+    .action(async (type: string, nameArg: string | undefined) => {
       if (type !== 'mcp' && type !== 'skill') {
         console.log(chalk.red(`Invalid type '${type}'. Use 'mcp' or 'skill'.`));
         process.exit(1);
+      }
+
+      let name = nameArg;
+      if (!name) {
+        const picked = await pickRegistryName(type as RegistryType, 'enable', (cfg) => !cfg.enabled);
+        if (!picked) return;
+        name = picked;
       }
 
       const registries = getRegistries(type as RegistryType);
@@ -142,13 +220,29 @@ export function registerPackagesCommands(program: Command): void {
     });
 
   registryCmd
-    .command('disable <type> <name>')
+    .command('disable <type> [name]')
     .description('Disable a registry')
-    .action((type: string, name: string) => {
+    .action((type: string, nameArg: string | undefined) => {
       if (type !== 'mcp' && type !== 'skill') {
         console.log(chalk.red(`Invalid type '${type}'. Use 'mcp' or 'skill'.`));
         process.exit(1);
       }
+
+      if (!nameArg) {
+        // Disabling is reversible but still mutates state; force typing.
+        const registries = getRegistries(type as RegistryType);
+        const candidates = Object.entries(registries)
+          .filter(([, cfg]) => cfg.enabled)
+          .map(([n]) => n);
+        requireDestructiveArg({
+          argName: 'name',
+          command: `agents registry disable ${type}`,
+          itemNoun: `${type} registry`,
+          available: candidates,
+          emptyHint: `No enabled ${type} registries to disable.`,
+        });
+      }
+      const name = nameArg;
 
       const registries = getRegistries(type as RegistryType);
       if (!registries[name]) {
@@ -161,14 +255,21 @@ export function registerPackagesCommands(program: Command): void {
     });
 
   registryCmd
-    .command('config <type> <name>')
+    .command('config <type> [name]')
     .description('Configure a registry')
     .option('--api-key <key>', 'Set API key')
     .option('--url <url>', 'Update URL')
-    .action((type: string, name: string, options) => {
+    .action(async (type: string, nameArg: string | undefined, options) => {
       if (type !== 'mcp' && type !== 'skill') {
         console.log(chalk.red(`Invalid type '${type}'. Use 'mcp' or 'skill'.`));
         process.exit(1);
+      }
+
+      let name = nameArg;
+      if (!name) {
+        const picked = await pickRegistryName(type as RegistryType, 'configure');
+        if (!picked) return;
+        name = picked;
       }
 
       const registries = getRegistries(type as RegistryType);

@@ -354,7 +354,21 @@ describe('shims - generateShimScript', () => {
   test('includes project sync hook in shim', () => {
     const script = generateShimScript('claude');
     expect(script).toContain('find_project_agents_dir');
-    expect(script).toContain('agents sync --agent "$AGENT" --version "$VERSION" --project-dir "$PROJECT_AGENTS_DIR"');
+    // Uses `--version=...` (not `--version ...`) to avoid commander's
+    // top-level --version flag eating the subcommand's value.
+    expect(script).toContain('agents sync --agent "$AGENT" --version="$VERSION" --project-dir "$PROJECT_AGENTS_DIR"');
+  });
+
+  test('non-@-capable agents get a refresh-memory shim hook', () => {
+    const script = generateShimScript('codex');
+    expect(script).toContain('agents refresh-memory --agent "$AGENT" --version="$VERSION"');
+  });
+
+  test('@-capable agents do NOT get a refresh-memory shim hook', () => {
+    const claudeScript = generateShimScript('claude');
+    expect(claudeScript).not.toContain('agents refresh-memory');
+    const geminiScript = generateShimScript('gemini');
+    expect(geminiScript).not.toContain('agents refresh-memory');
   });
 
   test('scopes Claude keychain auth to the selected version config dir', () => {

@@ -41,6 +41,7 @@ import {
   parseCommaSeparatedList,
   printWithPager,
   requireInteractiveSelection,
+  requireDestructiveArg,
 } from './utils.js';
 
 export function registerRulesCommands(program: Command): void {
@@ -495,7 +496,7 @@ Examples:
     });
 
   rulesCmd
-    .command('remove <agent>')
+    .command('remove [agent]')
     .description('Delete user-level rule files for an agent or version')
     .addHelpText('after', `
 Examples:
@@ -505,7 +506,19 @@ Examples:
   # Remove rules only from a specific version
   agents rules remove codex@0.116.0
 `)
-    .action((agentArg: string) => {
+    .action((agentArg: string | undefined) => {
+      if (!agentArg) {
+        // Only list agents that actually have a rules file installed — avoids
+        // suggesting agents the user hasn't touched.
+        const candidates = ALL_AGENT_IDS.filter((id) => instructionsExists(id));
+        requireDestructiveArg({
+          argName: 'agent',
+          command: 'agents rules remove',
+          itemNoun: 'agent',
+          available: candidates,
+          emptyHint: 'No rule files installed for any agent.',
+        });
+      }
       const parts = agentArg.split('@');
       const agentName = parts[0];
       const requestedVersion = parts[1] || null;

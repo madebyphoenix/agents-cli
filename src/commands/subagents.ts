@@ -24,7 +24,12 @@ import {
   getVersionHomePath,
 } from '../lib/versions.js';
 import { getSubagentsDir } from '../lib/state.js';
-import { isInteractiveTerminal, isPromptCancelled, requireInteractiveSelection } from './utils.js';
+import {
+  isInteractiveTerminal,
+  isPromptCancelled,
+  requireInteractiveSelection,
+  requireDestructiveArg,
+} from './utils.js';
 
 function formatPath(p: string): string {
   const home = process.env.HOME || '';
@@ -269,9 +274,9 @@ Examples:
       console.log();
     });
 
-  // agents subagents remove <name>
+  // agents subagents remove [name]
   subagentsCmd
-    .command('remove <name>')
+    .command('remove [name]')
     .description('Delete a subagent from central storage and unsync from all agent versions')
     .option('-y, --yes', 'Skip confirmation prompt')
     .addHelpText('after', `
@@ -282,7 +287,17 @@ Examples:
   # Remove without confirmation
   agents subagents remove code-reviewer --yes
 `)
-    .action(async (name, options) => {
+    .action(async (nameArg, options) => {
+      if (!nameArg) {
+        requireDestructiveArg({
+          argName: 'name',
+          command: 'agents subagents remove',
+          itemNoun: 'subagent',
+          available: listInstalledSubagents().map((s) => s.name),
+          emptyHint: 'No subagents installed.',
+        });
+      }
+      const name = nameArg;
       const subagent = getInstalledSubagent(name);
       if (!subagent) {
         console.log(chalk.red(`Subagent '${name}' not found`));
