@@ -21,6 +21,7 @@ vi.mock('../src/lib/state.js', () => {
     get getPermissionsDir() { return () => path.join(AGENTS_DIR, 'permissions'); },
     get getSubagentsDir() { return () => path.join(AGENTS_DIR, 'subagents'); },
     get getPluginsDir() { return () => path.join(AGENTS_DIR, 'plugins'); },
+    get getPromptcutsPath() { return () => path.join(AGENTS_DIR, 'promptcuts.yaml'); },
     get getProjectAgentsDir() { return () => PROJECT_AGENTS_DIR; },
     get ensureAgentsDir() { return () => fs.mkdirSync(AGENTS_DIR, { recursive: true }); },
     get readMeta() { return () => META; },
