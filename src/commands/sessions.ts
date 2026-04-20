@@ -396,8 +396,9 @@ async function pickSessionInteractive(
       message,
       sessions,
       filter: (query: string) => {
-        // No query: show only recent sessions. Typing: search the full pool.
-        if (!query.trim()) return sessions.slice(0, PICKER_RECENT_COUNT);
+        // No query: show the full pool (picker viewport still paginates via pageSize).
+        // Typing: search the full pool.
+        if (!query.trim()) return sessions;
         return filterSessionsByQuery(sessions, query);
       },
       labelFor: (s: SessionMeta, query: string) => formatPickerLabel(s, query),
