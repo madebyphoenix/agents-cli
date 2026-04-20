@@ -49,4 +49,4 @@ export interface SessionMeta {
   _bm25Score?: number;
 }
 
-export type ViewMode = 'transcript' | 'summary' | 'trace' | 'json';
+export type ViewMode = 'transcript' | 'summary' | 'timeline' | 'trace' | 'json';
