@@ -673,6 +673,39 @@ function registerHooksForClaude(
   }
   const hooks = config.hooks as Record<string, unknown[]>;
 
+  // Build set of all command paths the current manifest will register.
+  // Used to garbage-collect stale entries left behind after hook renames.
+  const managedHooksPrefix = path.join(agentsDir, 'hooks') + path.sep;
+  const currentManifestPaths = new Set<string>();
+  for (const hookDef of Object.values(manifest)) {
+    if (hookDef.agents && !hookDef.agents.includes('claude')) continue;
+    if (!hookDef.events || hookDef.events.length === 0) continue;
+    currentManifestPaths.add(path.join(agentsDir, 'hooks', hookDef.script));
+  }
+
+  // Remove stale entries: any hook command under ~/.agents/hooks/ that isn't
+  // in the current manifest is a leftover from a renamed/deleted hook script.
+  for (const eventEntries of Object.values(hooks)) {
+    if (!Array.isArray(eventEntries)) continue;
+    for (const group of eventEntries as Array<{
+      matcher?: string;
+      hooks?: Array<{ type: string; command: string; timeout?: number }>;
+    }>) {
+      if (!group.hooks) continue;
+      group.hooks = group.hooks.filter(
+        (h) => !h.command.startsWith(managedHooksPrefix) || currentManifestPaths.has(h.command)
+      );
+    }
+  }
+
+  // Remove empty matcher groups left after cleanup
+  for (const [event, eventEntries] of Object.entries(hooks)) {
+    if (!Array.isArray(eventEntries)) continue;
+    hooks[event] = (eventEntries as Array<{ hooks?: unknown[] }>).filter(
+      (g) => g.hooks && g.hooks.length > 0
+    );
+  }
+
   for (const [name, hookDef] of Object.entries(manifest)) {
     if (hookDef.agents && !hookDef.agents.includes('claude')) continue;
     if (!hookDef.events || hookDef.events.length === 0) continue;
