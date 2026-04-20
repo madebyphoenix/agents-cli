@@ -419,6 +419,7 @@ async function readClaudeMeta(
   label?: string,
 ): Promise<{ meta: SessionMeta; content: string } | null> {
   const scan = await scanClaudeSession(filePath);
+  const isTeamOrigin = scan.entrypoint === 'sdk-cli';
 
   let meta: SessionMeta;
   if (scan.timestamp) {
@@ -438,6 +439,7 @@ async function readClaudeMeta(
       label,
       messageCount: scan.messageCount,
       tokenCount: scan.tokenCount,
+      isTeamOrigin,
     };
   } else {
     const stat = safeStatSync(filePath);
@@ -452,6 +454,7 @@ async function readClaudeMeta(
       messageCount: scan.messageCount,
       tokenCount: scan.tokenCount,
       topic: scan.topic,
+      isTeamOrigin,
     };
   }
 
@@ -1068,6 +1071,7 @@ async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
     gitBranch,
     version,
     topic,
+    entrypoint,
     messageCount,
     tokenCount: sawTokenCount ? tokenCount : undefined,
     contentText: userTexts.length > 0 ? userTexts.join('\n') : undefined,

@@ -3,7 +3,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { classifyTeamSession, filterTeamSessions } from './team-filter.js';
-import { HEADLESS_PLAN_MODE_PREFIX } from './prompt.js';
 import type { SessionMeta } from './types.js';
 
 function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
@@ -70,19 +69,22 @@ describe('classifyTeamSession', () => {
     expect(origin!.mode).toBe('edit');
   });
 
-  it('classifies orphan session as team when topic starts with HEADLESS prefix (fallback)', () => {
+  it('classifies orphan session as team when isTeamOrigin flag is set (meta.json missing)', () => {
     const session = makeSession({
       id: 'no-meta-exists-for-this-id',
-      topic: `${HEADLESS_PLAN_MODE_PREFIX} Some plan mode header content`,
+      isTeamOrigin: true,
+      topic: 'Rewrite the --help output for a group of commands',
     });
 
     const origin = classifyTeamSession(session);
     expect(origin).not.toBeNull();
+    expect(origin!.handle).toBe('no-meta-');
   });
 
   it('does NOT classify normal interactive session as team', () => {
     const session = makeSession({
       id: 'normal-session-id-no-meta',
+      isTeamOrigin: false,
       topic: 'Fix the login bug',
     });
 
@@ -90,7 +92,7 @@ describe('classifyTeamSession', () => {
     expect(origin).toBeNull();
   });
 
-  it('does NOT classify session as team when meta.json does not exist and no prefix in topic', () => {
+  it('does NOT classify session as team when no meta.json and isTeamOrigin is false', () => {
     const session = makeSession({ id: 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff' });
     expect(classifyTeamSession(session)).toBeNull();
   });

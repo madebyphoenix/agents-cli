@@ -2,7 +2,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { SessionMeta, TeamOrigin } from './types.js';
-import { HEADLESS_PLAN_MODE_PREFIX } from './prompt.js';
 
 const HOME = os.homedir();
 
@@ -14,10 +13,11 @@ function teamsAgentsDir(): string {
 /**
  * Determine whether `session` was spawned by `agents teams`.
  *
- * Two signals checked in order:
- *  1. Exact: `~/.agents/teams/agents/<session-id>/meta.json` exists.
- *  2. Fallback: the stored topic begins with the HEADLESS PLAN MODE prefix
- *     (covers sessions whose meta.json was cleaned up or removed).
+ * Primary signal is `session.isTeamOrigin`, captured at scan time from the
+ * JSONL `entrypoint` field ('sdk-cli' for team spawns, 'cli' for real CLI).
+ * When a team meta.json exists we additionally enrich with handle/mode — but
+ * its absence no longer demotes a session: older team runs whose meta dir
+ * was cleaned up still get recognized via the entrypoint flag.
  *
  * Returns the TeamOrigin metadata when the session is team-origin, or null
  * when it is a normal interactive session.
@@ -38,10 +38,8 @@ export function classifyTeamSession(session: SessionMeta): TeamOrigin | null {
     }
   }
 
-  // Fallback: topic stored before extractSessionTopic was fixed still contains
-  // the raw prefix line as the first line of text.
-  if (session.topic?.startsWith(HEADLESS_PLAN_MODE_PREFIX)) {
-    return {};
+  if (session.isTeamOrigin) {
+    return { handle: session.id.slice(0, 8) };
   }
 
   return null;
