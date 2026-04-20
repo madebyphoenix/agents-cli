@@ -24,7 +24,9 @@ import {
   teamExists,
 } from '../lib/teams/registry.js';
 import { isVersionInstalled } from '../lib/versions.js';
-import { parseTimeFilter } from '../lib/session/discover.js';
+import { discoverSessions, parseTimeFilter, resolveSessionById } from '../lib/session/discover.js';
+import type { SessionMeta } from '../lib/session/types.js';
+import { buildPreview as buildSessionPreview } from './sessions-picker.js';
 import { parseExecEnv } from '../lib/exec.js';
 import { teamPicker, printTeamTable, type TeamRow } from './teams-picker.js';
 import { isPromptCancelled, isInteractiveTerminal } from './utils.js';
@@ -165,14 +167,26 @@ async function resolveTeammateAcrossTeams(
   return { kind: 'ambiguous', candidates };
 }
 
-function printAgentDetail(a: AgentStatusDetail): void {
+// Print a teammate block using the same session preview the sessions picker
+// uses — one canonical renderer across `agents sessions`, teams picker
+// preview, and teams status output.
+//
+// Layout:
+//   alice  claude  COMPLETED · 5.0 minutes
+//     after: bob
+//     <buildSessionPreview output>    (when the session file was found)
+//     ! reported an error             (if flagged)
+//     PR: <url>                       (if set)
+function printAgentDetail(a: AgentStatusDetail, session: SessionMeta | null): void {
   const label = statusColor(a.status)(a.status.toUpperCase());
   const who = fullName(a.agent_type as AgentType, a.version);
   const h = handle(a);
   const secondary = a.name ? chalk.gray(`(${shortId(a.agent_id)})`) : '';
+  const duration = a.duration ? `${chalk.gray(' · ')}${chalk.white(a.duration)}` : '';
   console.log(
-    `  ${chalk.cyan(h.padEnd(10))} ${secondary.padEnd(11)} ${who.padEnd(18)} ${label}  ${chalk.gray(a.duration || '')}`
+    `  ${chalk.cyan(h.padEnd(10))} ${secondary.padEnd(11)} ${who.padEnd(18)} ${label}${duration}`
   );
+
   if (a.after && a.after.length) {
     console.log(`    ${chalk.gray('after   ')} ${a.after.join(', ')}`);
   }
@@ -181,17 +195,35 @@ function printAgentDetail(a: AgentStatusDetail): void {
   if (a.remote_session_id && a.remote_session_id !== a.agent_id) {
     console.log(`    ${chalk.gray('session ')} ${chalk.gray(a.remote_session_id)}`);
   }
-  if (a.files_modified.length) console.log(`    ${chalk.gray('touched ')} ${a.files_modified.join(', ')}`);
-  if (a.files_created.length)  console.log(`    ${chalk.gray('created ')} ${a.files_created.join(', ')}`);
-  if (a.files_read.length)     console.log(`    ${chalk.gray('read    ')} ${a.files_read.join(', ')}`);
-  if (a.files_deleted.length)  console.log(`    ${chalk.gray('deleted ')} ${a.files_deleted.join(', ')}`);
-  for (const cmd of a.bash_commands.slice(-3)) {
-    console.log(`    ${chalk.gray('$')} ${truncate(cmd, 96)}`);
+
+  if (session) {
+    // Hand off to the same renderer the sessions picker uses. Indent so the
+    // block visually belongs to this teammate.
+    const preview = buildSessionPreview(session);
+    for (const line of preview.split('\n')) {
+      console.log(line ? `    ${line}` : '');
+    }
+  } else {
+    // Session file not yet on disk (e.g. teammate is pending, or their
+    // agent type writes sessions elsewhere). Fall back to a compact summary
+    // derived from the live status payload.
+    const activity: string[] = [];
+    if (a.files_modified.length) activity.push(`${a.files_modified.length} modified`);
+    if (a.files_created.length)  activity.push(`${a.files_created.length} created`);
+    if (a.files_read.length)     activity.push(`${a.files_read.length} read`);
+    if (a.tool_count)            activity.push(`${a.tool_count} tools`);
+    if (activity.length) {
+      console.log(`    ${chalk.gray(activity.join(' · '))}`);
+    }
+    const lastMsg = a.last_messages[a.last_messages.length - 1];
+    if (lastMsg) {
+      const firstLine = lastMsg.split(/\r?\n/).find((l) => l.trim()) || '';
+      if (firstLine) console.log(`    ${chalk.gray('> ' + truncate(firstLine, 96))}`);
+    }
   }
-  const lastMsg = a.last_messages[a.last_messages.length - 1];
-  if (lastMsg) console.log(`    ${chalk.gray('>')} ${truncate(lastMsg, 96)}`);
-  if (a.has_errors) console.log(`    ${chalk.red('reported an error')}`);
-  if (a.pr_url) console.log(`    ${chalk.gray('PR')} ${a.pr_url}`);
+
+  if (a.has_errors) console.log(`    ${chalk.red('! reported an error')}`);
+  if (a.pr_url) console.log(`    ${chalk.gray('PR  ')}${a.pr_url}`);
 }
 
 // Render a team's status in the same format the `status` subcommand uses, so
