@@ -139,6 +139,17 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     searchQuery = query;
   }
 
+  const mode = resolveViewMode(options);
+  // --transcript/--trace/--timeline always request a single-session render.
+  const wantsRender = mode === 'transcript' || mode === 'trace' || mode === 'timeline';
+
+  // When the user explicitly asks to render (via mode flag), resolve the
+  // query globally so sessions outside the default cwd/30d window are found.
+  if (wantsRender && searchQuery) {
+    await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project });
+    return;
+  }
+
   // Interactive picker loads a deep pool but shows only recent sessions
   // until the user starts typing. Non-interactive/JSON uses the explicit limit.
   const isInteractive = !options.json && isInteractiveTerminal();
@@ -172,12 +183,17 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
       sessions = sessions.filter(s => s.version === version);
     }
 
-    // Smart routing: if query looks like a session ID, render directly
+    // Smart ID routing: a bare query that resolves to one session renders
+    // directly. If nothing matches in the scoped window and the query looks
+    // like a session ID, widen to global scope (incl. Claude /resume history).
     if (searchQuery) {
       const idMatches = resolveSessionById(sessions, searchQuery);
       if (idMatches.length === 1) {
-        const mode = resolveViewMode(options);
         await renderSession(idMatches[0], mode);
+        return;
+      }
+      if (idMatches.length === 0 && looksLikeSessionId(searchQuery)) {
+        await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project });
         return;
       }
     }
@@ -224,75 +240,8 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
   }
 }
 
-async function listAction(query: string | undefined, options: ListOptions): Promise<void> {
-  const { agent, version } = parseAgentFilter(options.agent);
-
-  let pathFilter: string | undefined;
-  let searchQuery: string | undefined;
-  if (query && isPathLike(query)) {
-    const resolved = resolvePathFilter(query);
-    if (!fs.existsSync(resolved)) {
-      console.log(chalk.yellow(`Path not found: ${resolved}`));
-      console.log(chalk.gray('Did you mean to search? Use quotes: agents sessions list "' + query + '"'));
-      return;
-    }
-    pathFilter = fs.realpathSync(resolved);
-  } else {
-    searchQuery = query;
-  }
-
-  const limit = parseInt(options.limit || '20', 10);
-  const spinner = options.json ? null : ora().start();
-  const tracker = createScanProgressTracker(LOAD_VERBS, 'sessions', spinner);
-
-  try {
-    let sessions = await discoverSessions({
-      agent,
-      all: pathFilter ? true : options.all,
-      cwd: process.cwd(),
-      project: options.project,
-      limit,
-      since: options.since,
-      until: options.until,
-      onProgress: tracker.onProgress,
-    });
-
-    tracker.stop();
-    spinner?.stop();
-
-    if (pathFilter) {
-      sessions = sessions.filter(s =>
-        typeof s.cwd === 'string' && isWithinProject(s.cwd, pathFilter!)
-      );
-    }
-
-    if (version) {
-      sessions = sessions.filter(s => s.version === version);
-    }
-
-    const filtered = searchQuery ? filterSessionsByQuery(sessions, searchQuery) : sessions;
-
-    if (options.json) {
-      const serializable = filtered.map(s => {
-        const { _matchedTerms, _bm25Score, ...rest } = s;
-        return rest;
-      });
-      process.stdout.write(JSON.stringify(serializable, null, 2) + '\n');
-      return;
-    }
-
-    if (filtered.length === 0) {
-      console.log(chalk.gray(formatNoSessionsMessage(options.all, options.project)));
-      return;
-    }
-
-    printSessionTable(filtered);
-  } catch (err: any) {
-    tracker.stop();
-    spinner?.stop();
-    console.error(chalk.red(`Failed to discover sessions: ${err.message}`));
-    process.exit(1);
-  }
+function looksLikeSessionId(query: string): boolean {
+  return /^[0-9a-f-]{6,}$/i.test(query.trim());
 }
 
 function printSessionTable(sessions: SessionMeta[]): void {

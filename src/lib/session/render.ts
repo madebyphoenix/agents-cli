@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import type { SessionEvent } from './types.js';
 import { summarizeToolUse } from './parse.js';
 import { cleanSessionPrompt, extractSessionTopic } from './prompt.js';
+import { renderMarkdown } from '../markdown.js';
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
@@ -790,7 +791,7 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
     const truncated = lastAssistantMessage.length > 3000
       ? lastAssistantMessage.slice(0, 2997) + '...'
       : lastAssistantMessage;
-    lines.push(truncated);
+    lines.push(renderMarkdown(truncated).trimEnd());
     lines.push('');
   } else if (
     filesModifiedAbs.size === 0 &&
