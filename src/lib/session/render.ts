@@ -688,28 +688,54 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
     lines.push('');
   }
 
-  // 4. Timeline — assistant messages as narration, tools clustered under each
-  const meaningful = timeline.filter(e => e.text.length > 0 || e.tools.length > 0);
-  if (meaningful.length > 0) {
-    lines.push(chalk.bold('Timeline'));
-    for (const entry of meaningful) {
-      const when = entry.ts ? formatClockTime(entry.ts) : '        ';
-      lines.push('  ' + chalk.gray.italic(when) + '  ' + entry.text.slice(0, 140));
-      const MAX_TOOLS_PER_ENTRY = 8;
-      for (const t of entry.tools.slice(0, MAX_TOOLS_PER_ENTRY)) {
-        const marker = t.error ? chalk.red('⚠') : ' ';
-        const suffix = t.error ? chalk.gray(' — ' + t.error) : '';
-        lines.push('            ' + marker + ' ' + t.summary + suffix);
+  // 4. Timeline — shown only in timeline mode.
+  if (timelineMode) {
+    const meaningful = timeline.filter(e => {
+      // Skip tool-less entries where the narration is a trivial ack ("Done.", "Gone.")
+      const isMicroNarration = e.text.trim().length < 20 && e.tools.length === 0;
+      return (e.text.length > 0 || e.tools.length > 0) && !isMicroNarration;
+    });
+    if (meaningful.length > 0) {
+      lines.push(chalk.bold('Timeline'));
+      for (const entry of meaningful) {
+        const when = entry.ts ? formatClockTime(entry.ts) : '        ';
+        lines.push('  ' + chalk.gray.italic(when) + '  ' + entry.text.slice(0, 160));
+        // Collapse consecutive same-summary tools into "... × N"
+        const collapsed: Array<{ summary: string; error?: string; count: number }> = [];
+        for (const t of entry.tools) {
+          const last = collapsed[collapsed.length - 1];
+          if (last && last.summary === t.summary && !last.error && !t.error) {
+            last.count++;
+          } else {
+            collapsed.push({ summary: t.summary, error: t.error, count: 1 });
+          }
+        }
+        const MAX_TOOLS = 10;
+        const head = collapsed.slice(0, MAX_TOOLS - 1);
+        const hidden = collapsed.length > MAX_TOOLS ? collapsed.length - (MAX_TOOLS - 1) - 1 : 0;
+        const tail = hidden > 0 ? collapsed.slice(-1) : [];
+        for (const t of head) {
+          const marker = t.error ? chalk.red('⚠') : ' ';
+          const countSfx = t.count > 1 ? chalk.gray(` × ${t.count}`) : '';
+          const errSfx = t.error ? chalk.gray(' — ' + t.error) : '';
+          lines.push('            ' + marker + ' ' + t.summary + countSfx + errSfx);
+        }
+        if (hidden > 0) {
+          lines.push(chalk.gray(`              … ${hidden} more`));
+          for (const t of tail) {
+            const marker = t.error ? chalk.red('⚠') : ' ';
+            const countSfx = t.count > 1 ? chalk.gray(` × ${t.count}`) : '';
+            const errSfx = t.error ? chalk.gray(' — ' + t.error) : '';
+            lines.push('            ' + marker + ' ' + t.summary + countSfx + errSfx);
+          }
+        }
       }
-      if (entry.tools.length > MAX_TOOLS_PER_ENTRY) {
-        lines.push(chalk.gray('              + ' + (entry.tools.length - MAX_TOOLS_PER_ENTRY) + ' more'));
-      }
+      lines.push('');
     }
-    lines.push('');
   }
 
-  // 5. Modified files
-  if (filesModifiedAbs.size > 0) {
+  // 5. Modified files (summary mode only — timeline already shows each edit inline)
+  if (!timelineMode && filesModifiedAbs.size > 0) {
     lines.push(chalk.bold('Modified') + chalk.gray(` (${filesModifiedAbs.size})`));
     const groups = groupByParentDir(filesModifiedAbs, cwd);
     renderFileGroup(lines, groups, modifiedAbsMap);
@@ -717,7 +743,7 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
   }
 
   // 5b. External edits (files edited outside the project root — typically /tmp)
-  if (filesModifiedExternal.size > 0) {
+  if (!timelineMode && filesModifiedExternal.size > 0) {
     const externalList = [...filesModifiedExternal].sort();
     const home = process.env.HOME ?? '';
     const display = externalList.slice(0, 3).map(p => home && p.startsWith(home) ? p.replace(home, '~') : p);
@@ -727,7 +753,7 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
   }
 
   // 6. Read files
-  if (filesReadAbs.size > 0) {
+  if (!timelineMode && filesReadAbs.size > 0) {
     if (filesReadAbs.size <= 5) {
       lines.push(chalk.bold('Read') + chalk.gray(` (${filesReadAbs.size})`));
       const groups = groupByParentDir(filesReadAbs, cwd);
@@ -739,10 +765,10 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
   }
 
   // 7. Commands
-  renderCommandsSection(cmdList, lines);
+  if (!timelineMode) renderCommandsSection(cmdList, lines);
 
-  // 8. Errors
-  if (errors.length > 0) {
+  // 8. Errors (summary mode — in timeline mode, errors are already flagged inline)
+  if (!timelineMode && errors.length > 0) {
     const first = errors[0];
     const firstDesc = first.cmd
       ? `${first.tool} "${first.cmd.slice(0, 60)}"`

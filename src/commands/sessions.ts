@@ -30,6 +30,7 @@ interface SessionsOptions extends SessionFilterOptions {
   json?: boolean;
   transcript?: boolean;
   trace?: boolean;
+  timeline?: boolean;
 }
 
 interface ListOptions extends SessionFilterOptions {
@@ -40,6 +41,7 @@ interface ListOptions extends SessionFilterOptions {
 interface ViewOptions {
   transcript?: boolean;
   trace?: boolean;
+  timeline?: boolean;
   json?: boolean;
   project?: string;
   agent?: string;

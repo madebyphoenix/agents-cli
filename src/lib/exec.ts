@@ -344,7 +344,7 @@ export async function execAgent(options: ExecOptions): Promise<number> {
   const timeoutMs = options.timeout ? parseTimeout(options.timeout) : undefined;
 
   // When stdout is piped, separate agent output (stdout) from status (stderr)
-  // so `agents exec claude "..." | agents exec codex "..."` works cleanly.
+  // so `agents run claude "..." | agents run codex "..."` works cleanly.
   // When interactive (TTY), inherit everything for the full experience.
   const piped = !process.stdout.isTTY;
 
