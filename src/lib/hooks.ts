@@ -794,6 +794,28 @@ function registerHooksForCodex(
     }
   }
 
+  // Build set of current manifest command paths for codex to GC stale entries
+  const managedHooksPrefix = path.join(agentsDir, 'hooks') + path.sep;
+  const currentManifestPaths = new Set<string>();
+  for (const hookDef of Object.values(manifest)) {
+    if (hookDef.agents && !hookDef.agents.includes('codex')) continue;
+    if (!hookDef.events || hookDef.events.length === 0) continue;
+    currentManifestPaths.add(path.join(agentsDir, 'hooks', hookDef.script));
+  }
+
+  // Remove stale entries from all event groups
+  for (const eventGroups of Object.values(hooksFile.hooks)) {
+    for (const group of eventGroups) {
+      if (!group.hooks) continue;
+      group.hooks = group.hooks.filter(
+        (h) => !h.command.startsWith(managedHooksPrefix) || currentManifestPaths.has(h.command)
+      );
+    }
+  }
+  for (const [event, eventGroups] of Object.entries(hooksFile.hooks)) {
+    hooksFile.hooks[event] = eventGroups.filter((g) => g.hooks && g.hooks.length > 0);
+  }
+
   for (const [name, hookDef] of Object.entries(manifest)) {
     if (hookDef.agents && !hookDef.agents.includes('codex')) continue;
     if (!hookDef.events || hookDef.events.length === 0) continue;
@@ -838,7 +860,6 @@ function registerHooksForCodex(
         group.hooks = [];
       }
 
-      // Add or update by exact command path — never removes other entries
       const existingIdx = group.hooks.findIndex((h) => h.command === commandPath);
       const hookEntry = { type: 'command', command: commandPath, timeout };
 
@@ -911,6 +932,34 @@ function registerHooksForGemini(
     config.hooks = {};
   }
   const hooks = config.hooks as Record<string, unknown[]>;
+
+  // Build set of current manifest command paths for gemini to GC stale entries
+  const managedHooksPrefix = path.join(agentsDir, 'hooks') + path.sep;
+  const currentManifestPaths = new Set<string>();
+  for (const hookDef of Object.values(manifest)) {
+    if (hookDef.agents && !hookDef.agents.includes('gemini')) continue;
+    if (!hookDef.events || hookDef.events.length === 0) continue;
+    currentManifestPaths.add(path.join(agentsDir, 'hooks', hookDef.script));
+  }
+
+  // Remove stale entries
+  for (const eventEntries of Object.values(hooks)) {
+    if (!Array.isArray(eventEntries)) continue;
+    for (const group of eventEntries as Array<{
+      hooks?: Array<{ type: string; command: string; timeout?: number }>;
+    }>) {
+      if (!group.hooks) continue;
+      group.hooks = group.hooks.filter(
+        (h) => !h.command.startsWith(managedHooksPrefix) || currentManifestPaths.has(h.command)
+      );
+    }
+  }
+  for (const [event, eventEntries] of Object.entries(hooks)) {
+    if (!Array.isArray(eventEntries)) continue;
+    hooks[event] = (eventEntries as Array<{ hooks?: unknown[] }>).filter(
+      (g) => g.hooks && g.hooks.length > 0
+    );
+  }
 
   for (const [name, hookDef] of Object.entries(manifest)) {
     if (hookDef.agents && !hookDef.agents.includes('gemini')) continue;

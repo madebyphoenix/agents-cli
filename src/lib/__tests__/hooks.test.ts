@@ -259,11 +259,11 @@ describe('registerHooksToSettings - returns empty for unsupported agents', () =>
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('returns no-op for agents other than claude/codex', () => {
+  it('returns no-op for agents other than claude/codex/gemini', () => {
     const manifest: Record<string, ManifestHook> = {
       'on-prompt': { script: 'on-prompt.sh', events: ['UserPromptSubmit'] },
     };
-    const result = registerHooksToSettings('gemini', path.join(tmpDir, 'home'), manifest, agentsDir);
+    const result = registerHooksToSettings('opencode', path.join(tmpDir, 'home'), manifest, agentsDir);
     expect(result.registered).toHaveLength(0);
     expect(result.errors).toHaveLength(0);
   });

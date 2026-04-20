@@ -1455,6 +1455,20 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
           fs.chmodSync(destFile, 0o755);
           syncedHooks.push(hook);
         }
+        // Remove orphan hook files that exist in version home but not in central
+        const centralHookNames = new Set(
+          fs.existsSync(getHooksDir())
+            ? fs.readdirSync(getHooksDir()).filter(f => !f.startsWith('.'))
+            : []
+        );
+        if (fs.existsSync(hooksTarget)) {
+          for (const file of fs.readdirSync(hooksTarget).filter(f => !f.startsWith('.'))) {
+            if (!centralHookNames.has(file)) {
+              removePath(path.join(hooksTarget, file));
+            }
+          }
+        }
+
         result.hooks = syncedHooks.length > 0;
         if (syncedHooks.length > 0) {
           recordVersionResources(agent, version, 'hooks', syncedHooks);
