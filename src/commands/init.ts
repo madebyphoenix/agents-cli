@@ -78,6 +78,15 @@ export async function runInit(program: Command, options: { force?: boolean } = {
   console.log();
   await program.parseAsync(['node', 'agents', 'pull', source]);
 
+  // `agents pull` prints its own error but doesn't throw — verify the clone actually
+  // landed before claiming success. Without this check the wizard would celebrate even
+  // when pull failed (e.g. empty repo, bad ref, network error).
+  if (!isGitRepo(agentsDir)) {
+    console.log(chalk.red('\nSetup did not complete — see errors above.'));
+    console.log(chalk.gray('Fix the issue and re-run: agents init --force'));
+    process.exit(1);
+  }
+
   console.log(chalk.bold('\nSetup complete. Try:'));
   console.log(chalk.cyan('  agents view                 ') + chalk.gray(' # see what\'s installed'));
   console.log(chalk.cyan('  agents run <agent> "hello"  ') + chalk.gray(' # run an agent'));

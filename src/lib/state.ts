@@ -80,9 +80,6 @@ export function getRoutinesDir(): string {
   return ROUTINES_DIR;
 }
 
-/** @deprecated Use getRoutinesDir() */
-export const getCronDir = getRoutinesDir;
-
 export function getRunsDir(): string {
   return RUNS_DIR;
 }

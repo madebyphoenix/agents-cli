@@ -360,33 +360,6 @@ export function installMcpServers(
 }
 
 /**
- * @deprecated Use installMcpServers() instead.
- * Apply MCP servers to a version's config file (legacy file-based approach).
- */
-export function applyMcpToVersion(
-  agentId: AgentId,
-  versionHome: string,
-  merge: boolean = true,
-  mcpNames?: string[]
-): { success: boolean; applied: string[]; error?: string } {
-  // This function is deprecated - redirect to installMcpServers
-  // But we need version, so extract it from versionHome
-  const parts = versionHome.split(path.sep);
-  const versionIndex = parts.indexOf('versions');
-  if (versionIndex === -1 || versionIndex + 2 >= parts.length) {
-    return { success: false, applied: [], error: 'Could not extract version from path' };
-  }
-  const version = parts[versionIndex + 2];
-
-  const result = installMcpServers(agentId, version, versionHome, mcpNames);
-  return {
-    success: result.success,
-    applied: result.applied,
-    error: result.errors.length > 0 ? result.errors.join(', ') : undefined,
-  };
-}
-
-/**
  * Write an MCP server config to ~/.agents/mcp/.
  */
 export function writeMcpServerConfig(config: McpYamlConfig): string {
