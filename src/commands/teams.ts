@@ -226,9 +226,32 @@ function printAgentDetail(a: AgentStatusDetail, session: SessionMeta | null): vo
   if (a.pr_url) console.log(`    ${chalk.gray('PR  ')}${a.pr_url}`);
 }
 
+// Resolve each live teammate to its on-disk session (Claude/Codex/Gemini/
+// OpenCode all write parseable session files). `agent_id === remote_session_id`
+// for Claude teammates; non-Claude agents may carry their own session UUID on
+// `remote_session_id`. We try both.
+async function resolveTeammateSessions(
+  agents: AgentStatusDetail[]
+): Promise<Map<string, SessionMeta | null>> {
+  const map = new Map<string, SessionMeta | null>();
+  if (agents.length === 0) return map;
+  // Scan every project dir — team teammates may have run from anywhere.
+  const all = await discoverSessions({ all: true, limit: 5000 });
+  for (const a of agents) {
+    const candidates = [a.remote_session_id, a.agent_id].filter(Boolean) as string[];
+    let found: SessionMeta | null = null;
+    for (const id of candidates) {
+      const hits = resolveSessionById(all, id);
+      if (hits.length) { found = hits[0]; break; }
+    }
+    map.set(a.agent_id, found);
+  }
+  return map;
+}
+
 // Render a team's status in the same format the `status` subcommand uses, so
 // the interactive picker's Enter action drops the user into a familiar view.
-function printTeamStatus(team: string, result: import('../lib/teams/api.js').TaskStatusResult): void {
+async function printTeamStatus(team: string, result: import('../lib/teams/api.js').TaskStatusResult): Promise<void> {
   const { summary, agents } = result;
   console.log(
     chalk.bold(`Team ${chalk.cyan(team)}  `) +
@@ -241,9 +264,10 @@ function printTeamStatus(team: string, result: import('../lib/teams/api.js').Tas
   if (agents.length === 0) {
     console.log(chalk.gray('  (no teammates yet — add one with `agents teams add`)'));
   } else {
+    const sessions = await resolveTeammateSessions(agents);
     for (const a of agents) {
       console.log();
-      printAgentDetail(a);
+      printAgentDetail(a, sessions.get(a.agent_id) ?? null);
     }
   }
   console.log();
