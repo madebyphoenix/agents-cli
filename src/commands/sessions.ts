@@ -579,11 +579,14 @@ function scoreSessionQuery(session: SessionMeta, terms: string[]): number {
  * the project you specified AND elsewhere, producing an ambiguity error
  * even though the user already pointed at the correct scope.
  */
-function applyViewFilters(sessions: SessionMeta[], options: ViewOptions): SessionMeta[] {
+function applyScopeFilters(
+  sessions: SessionMeta[],
+  scope: { agent?: string; project?: string },
+): SessionMeta[] {
   let filtered = sessions;
 
-  if (options.project) {
-    const projectQuery = options.project.toLowerCase();
+  if (scope.project) {
+    const projectQuery = scope.project.toLowerCase();
     filtered = filtered.filter((s) => {
       const project = (s.project || '').toLowerCase();
       const cwd = (s.cwd || '').toLowerCase();
@@ -591,9 +594,9 @@ function applyViewFilters(sessions: SessionMeta[], options: ViewOptions): Sessio
     });
   }
 
-  if (options.agent) {
+  if (scope.agent) {
     // Accept "claude" or "claude@2.1.112". Version suffix narrows further.
-    const [wantAgent, wantVersion] = options.agent.split('@');
+    const [wantAgent, wantVersion] = scope.agent.split('@');
     filtered = filtered.filter((s) => {
       if (s.agent !== wantAgent) return false;
       if (wantVersion && s.version !== wantVersion) return false;
@@ -604,9 +607,11 @@ function applyViewFilters(sessions: SessionMeta[], options: ViewOptions): Sessio
   return filtered;
 }
 
-async function viewAction(idQuery: string, options: ViewOptions): Promise<void> {
-  const mode = resolveViewMode(options);
-
+async function renderOneSession(
+  query: string,
+  mode: ViewMode,
+  scope: { agent?: string; project?: string },
+): Promise<void> {
   const spinner = ora().start();
   const tracker = createScanProgressTracker(FIND_VERBS, 'session', spinner);
 
@@ -619,18 +624,14 @@ async function viewAction(idQuery: string, options: ViewOptions): Promise<void> 
     });
     tracker.stop();
 
-    // Apply --project / --agent narrowing BEFORE any query resolution so an
-    // ambiguous-looking search ("scoped search") collapses to the single
-    // candidate inside the user's declared project / agent scope.
-    const allSessions = applyViewFilters(discovered, options);
+    const allSessions = applyScopeFilters(discovered, scope);
     let session: SessionMeta | undefined;
 
-    const matches = resolveSessionById(allSessions, idQuery);
-    let queryMatches: SessionMeta[] = matches.length > 0 ? matches : filterSessionsByQuery(allSessions, idQuery);
+    const matches = resolveSessionById(allSessions, query);
+    let queryMatches: SessionMeta[] = matches.length > 0 ? matches : filterSessionsByQuery(allSessions, query);
 
-    // Content search fallback when no title/topic/project matches
     if (queryMatches.length === 0) {
-      const contentResults = searchContentIndex(allSessions, idQuery);
+      const contentResults = searchContentIndex(allSessions, query);
       if (contentResults.size > 0) {
         const matchedSessions = Array.from(contentResults.values())
           .sort((a, b) => (b._bm25Score ?? 0) - (a._bm25Score ?? 0));
@@ -644,17 +645,17 @@ async function viewAction(idQuery: string, options: ViewOptions): Promise<void> 
 
     if (queryMatches.length === 0 && !session) {
       spinner.stop();
-      const historyEntry = findClaudeHistoryEntry(idQuery);
+      const historyEntry = findClaudeHistoryEntry(query);
       if (historyEntry) {
         const resumeMatch = resolveClaudeHistoryEntryToTranscript(historyEntry, allSessions);
         if (resumeMatch) {
           session = resumeMatch.session;
         } else {
-          renderClaudeHistoryOnlyId(idQuery, historyEntry, allSessions);
+          renderClaudeHistoryOnlyId(query, historyEntry, allSessions);
           process.exit(1);
         }
       } else {
-        console.error(chalk.red(`No session found matching: ${idQuery}`));
+        console.error(chalk.red(`No session found matching: ${query}`));
         console.error(chalk.gray('Run "agents sessions" to browse sessions.'));
         process.exit(1);
       }
@@ -663,7 +664,7 @@ async function viewAction(idQuery: string, options: ViewOptions): Promise<void> 
     if (!session) {
       if (queryMatches.length > 1) {
         spinner.stop();
-        console.error(chalk.red(`Multiple sessions match "${idQuery}":`));
+        console.error(chalk.red(`Multiple sessions match "${query}":`));
         for (const match of queryMatches.slice(0, 10)) {
           console.error(chalk.cyan(`  ${match.shortId}  ${match.id}  ${(match as any).label ?? match.topic ?? ''}`));
         }
