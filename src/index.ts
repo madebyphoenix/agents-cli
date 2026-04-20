@@ -44,6 +44,7 @@ import { registerModelsCommand } from './commands/models.js';
 import { registerSubagentsCommands } from './commands/subagents.js';
 import { registerPluginsCommands } from './commands/plugins.js';
 import { registerSyncCommand } from './commands/sync.js';
+import { registerRefreshMemoryCommand } from './commands/refresh-memory.js';
 import { registerSessionsCommands } from './commands/sessions.js';
 import { registerDriveCommands } from './commands/drive.js';
 import { registerPtyCommands } from './commands/pty.js';
@@ -344,6 +345,7 @@ program
 registerTeamsCommands(program);
 registerSessionsCommands(program);
 registerSyncCommand(program);
+registerRefreshMemoryCommand(program);
 registerDriveCommands(program);
 registerPtyCommands(program);
 
