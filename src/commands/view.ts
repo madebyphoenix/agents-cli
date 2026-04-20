@@ -41,6 +41,7 @@ import {
 import {
   getShimsDir,
   isShimsInPath,
+  ensureVersionedAliasCurrent,
 } from '../lib/shims.js';
 import { getAgentResources } from '../lib/resources.js';
 import { getAgentsDir, getPromptcutsPath } from '../lib/state.js';
@@ -115,6 +116,25 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
 
   const agentsToShow = filterAgentId ? [filterAgentId] : ALL_AGENT_IDS;
   const showPaths = !!filterAgentId;
+
+  // Auto-heal stale versioned aliases. Pre-v2 aliases (e.g. pre-CLAUDE_CONFIG_DIR
+  // claude shims) silently route login through the default version's symlinked
+  // home, so `agents view` would never reflect the right account. Regenerate on
+  // sight — it's safe, idempotent, and fixes the symptom exactly where the user
+  // notices it.
+  const healedAliases: string[] = [];
+  for (const agentId of agentsToShow) {
+    for (const version of listInstalledVersions(agentId)) {
+      const status = ensureVersionedAliasCurrent(agentId, version);
+      if (status === 'updated' || status === 'created') {
+        healedAliases.push(`${agentId}@${version}`);
+      }
+    }
+  }
+  if (healedAliases.length > 0) {
+    console.log(chalk.gray(`Refreshed stale shims: ${healedAliases.join(', ')}`));
+    console.log();
+  }
 
   console.log(chalk.bold('Installed Agent CLIs\n'));
 

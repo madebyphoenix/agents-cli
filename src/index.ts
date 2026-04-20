@@ -101,14 +101,12 @@ Packages:
 Run agents:
   run <agent|profile> <prompt>    One-shot run (non-interactive). Accepts a profile name (e.g. 'kimi', 'deepseek').
   teams                           Coordinate multiple agents on shared work
+  routines                        Run agents on a cron schedule (scheduler auto-starts)
   sessions                        Browse and replay past runs
 
 Credentials:
   profiles                        Bundles of (host CLI, endpoint, model, auth)
   secrets                         Keychain-backed env bundles injected at spawn
-
-Schedule:
-  routines                        Run agents on a cron schedule (scheduler auto-starts)
 
 Helpers:
   pty                             Drive interactive terminal programs (REPLs, TUIs)
@@ -195,7 +193,7 @@ async function showWhatsNew(fromVersion: string, toVersion: string): Promise<voi
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_CHECK_FILE = path.join(os.homedir(), '.agents', '.update-check');
 
-function readUpdateCache(): { lastCheck: number; latestVersion: string } | null {
+function readUpdateCache(): { lastCheck: number; latestVersion: string; dismissed?: string } | null {
   try {
     return JSON.parse(fs.readFileSync(UPDATE_CHECK_FILE, 'utf-8'));
   } catch {
@@ -230,8 +228,24 @@ async function promptUpgrade(latestVersion: string): Promise<void> {
     choices: [
       { value: 'now', name: 'Upgrade now' },
       { value: 'later', name: 'Later' },
+      { value: 'dismiss', name: `Skip ${latestVersion}` },
     ],
   });
+
+  if (answer === 'dismiss') {
+    try {
+      const dir = path.dirname(UPDATE_CHECK_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const existing = readUpdateCache();
+      fs.writeFileSync(UPDATE_CHECK_FILE, JSON.stringify({
+        ...existing,
+        lastCheck: existing?.lastCheck ?? Date.now(),
+        latestVersion,
+        dismissed: latestVersion,
+      }));
+    } catch { /* best-effort */ }
+    return;
+  }
 
   if (answer === 'now') {
     const { exec, spawnSync } = await import('child_process');
@@ -282,8 +296,10 @@ async function checkForUpdates(): Promise<void> {
     refreshUpdateCacheInBackground();
   }
 
-  // Prompt based on current cache (may be from a previous run's background refresh)
-  if (cache?.latestVersion && cache.latestVersion !== VERSION && compareVersions(cache.latestVersion, VERSION) > 0) {
+  // Prompt based on current cache (may be from a previous run's background refresh).
+  // Skip if the user dismissed this exact version — they'll be prompted again when
+  // a newer version appears.
+  if (cache?.latestVersion && cache.latestVersion !== VERSION && compareVersions(cache.latestVersion, VERSION) > 0 && cache.latestVersion !== cache.dismissed) {
     try {
       await promptUpgrade(cache.latestVersion);
     } catch (err) {
