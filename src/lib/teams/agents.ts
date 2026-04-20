@@ -567,7 +567,7 @@ export class AgentProcess {
             // it. For Claude it's the same uuid we passed via --session-id;
             // for others (Codex thread_id, Gemini/Cursor/OpenCode sessionID)
             // it's their internal id, which lets us cross-reference with
-            // `agents sessions view <id>`.
+            // `agents sessions <id>`.
             if (!this.remoteSessionId && event.session_id) {
               this.remoteSessionId = event.session_id;
             }

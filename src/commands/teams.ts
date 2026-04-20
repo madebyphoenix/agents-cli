@@ -175,7 +175,7 @@ function printAgentDetail(a: AgentStatusDetail): void {
     console.log(`    ${chalk.gray('after   ')} ${a.after.join(', ')}`);
   }
   // If the agent's internal session id differs from ours (non-Claude), show
-  // it as a hint for `agents sessions view <id>`.
+  // it as a hint for `agents sessions <id>`.
   if (a.remote_session_id && a.remote_session_id !== a.agent_id) {
     console.log(`    ${chalk.gray('session ')} ${chalk.gray(a.remote_session_id)}`);
   }

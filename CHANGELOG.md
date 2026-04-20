@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+**Consolidate sessions command**
+
+- Removed `agents sessions list` and `agents sessions view` subcommands; `agents sessions` is now a single smart command
+- Positional query resolves to a session ID (renders directly), a path (`.`, `../`, `/path`) to filter by project, or free text for search
+- `--transcript`, `--trace`, `--timeline`, `--json` flags render the matched session; scope widens to global when a render flag is set or the query looks like a session ID
+- Claude `/resume` history fallback (previously only in `view`) now fires from the top-level command too
+- Picker shows the selected-session preview by default; space hides it
+
 ## 1.12.0
 
 **JSON output for sessions list**
