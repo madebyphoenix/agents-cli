@@ -94,11 +94,10 @@ function formatPickerRow(row: ResourceRow, opts: ResourceViewOptions): string {
   const extra = opts.extraLabel
     ? chalk.gray(padRight(row.extra ?? '-', 10))
     : '';
+  const descRaw = row.description ? truncate(row.description, 40) : '';
+  const desc = padRight(chalk.gray(descRaw), 42);
   const sync = formatSyncSummary(row.targets, opts);
-  const desc = row.description
-    ? chalk.gray(truncate(row.description, 40))
-    : '';
-  return `${name} ${extra}${desc.padEnd(42)} ${sync}`;
+  return `${name} ${extra}${desc} ${sync}`;
 }
 
 /** Table mode (piped output). */
@@ -112,9 +111,10 @@ function printResourceTable(opts: ResourceViewOptions): void {
     const extra = opts.extraLabel
       ? padRight(row.extra ?? '-', 10)
       : '';
-    const desc = row.description ? chalk.gray(truncate(row.description, 40)) : chalk.gray('-');
+    const descRaw = row.description ? truncate(row.description, 40) : '-';
+    const desc = padRight(chalk.gray(descRaw), 42);
     const sync = formatSyncSummary(row.targets, opts);
-    console.log(`${name} ${extra}${desc.padEnd(42)} ${sync}`);
+    console.log(`${name} ${extra}${desc} ${sync}`);
   }
 
   console.log();
@@ -132,15 +132,15 @@ function buildTableHeader(opts: ResourceViewOptions): string {
   const extra = opts.extraLabel
     ? chalk.bold(padRight(opts.extraLabel, 10))
     : '';
-  const desc = chalk.bold(padRight('Description', 40));
+  const desc = padRight(chalk.bold('Description'), 42);
   const sync = chalk.bold('Synced');
-  return `${name} ${extra}${desc.padEnd(42)} ${sync}`;
+  return `${name} ${extra}${desc} ${sync}`;
 }
 
-/** Compact human-friendly sync status (e.g. "all (6)", "4/6", "claude only"). */
+/** Human-readable sync status: "everywhere", "14 of 16 installs", "not installed". */
 function formatSyncSummary(targets: SyncTarget[], opts: ResourceViewOptions): string {
   if (targets.length === 0) {
-    return chalk.gray('no targets');
+    return chalk.gray('no installed versions');
   }
 
   const synced = targets.filter((t) => t.status === 'synced');
@@ -157,15 +157,15 @@ function formatSyncSummary(targets: SyncTarget[], opts: ResourceViewOptions): st
 
   const total = targets.length;
   const presentCount = synced.length + stale.length;
+  const unit = total === 1 ? 'install' : 'installs';
 
   let core: string;
   if (presentCount === 0) {
-    core = chalk.red(`0/${total}`);
+    core = chalk.red('not installed');
   } else if (presentCount === total && stale.length === 0) {
-    core = chalk.green(`all (${total})`);
+    core = chalk.green('everywhere');
   } else {
-    const color = presentCount === total ? chalk.yellow : chalk.yellow;
-    core = color(`${presentCount}/${total}`);
+    core = chalk.yellow(`${presentCount} of ${total} ${unit}`);
   }
 
   const parts = [core];
@@ -177,7 +177,7 @@ function formatSyncSummary(targets: SyncTarget[], opts: ResourceViewOptions): st
   // Hint which agents are missing when the spread is lopsided.
   if (missing.length > 0 && missing.length <= 2) {
     const missLabels = missing.map((t) => `${t.agent}@${t.version}`).join(', ');
-    parts.push(chalk.gray(`missing: ${missLabels}`));
+    parts.push(chalk.gray(`missing on ${missLabels}`));
   }
 
   return parts.join(chalk.gray(' · '));
