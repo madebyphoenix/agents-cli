@@ -107,6 +107,7 @@ function emptyResources(): AvailableResources {
     permissions: [],
     subagents: [],
     plugins: [],
+    promptcuts: false,
   };
 }
 
@@ -303,6 +304,7 @@ describe('getNewResources', () => {
       permissions: ['01-core'],
       subagents: ['researcher'],
       plugins: ['my-plugin'],
+      promptcuts: false,
     };
     const synced = emptyResources();
 
@@ -320,6 +322,7 @@ describe('getNewResources', () => {
       permissions: ['01-core', '02-node'],
       subagents: ['researcher', 'writer'],
       plugins: ['p1', 'p2'],
+      promptcuts: false,
     };
     const synced: AvailableResources = {
       commands: ['debug'],
@@ -330,6 +333,7 @@ describe('getNewResources', () => {
       permissions: ['01-core'],
       subagents: ['researcher'],
       plugins: ['p1'],
+      promptcuts: false,
     };
 
     const diff = getNewResources(available, synced);
@@ -353,6 +357,7 @@ describe('getNewResources', () => {
       permissions: ['f'],
       subagents: ['g'],
       plugins: ['h'],
+      promptcuts: false,
     };
     const diff = getNewResources(resources, resources);
     expect(diff).toEqual(emptyResources());

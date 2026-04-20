@@ -7,7 +7,7 @@ import chalk from 'chalk';
 import * as TOML from 'smol-toml';
 import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
-import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir, getProjectAgentsDir } from './state.js';
+import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir, getProjectAgentsDir, getPromptcutsPath } from './state.js';
 import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig, resolveAgentName, formatAgentError, CODEX_HOOKS_MIN_VERSION } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME } from './permissions.js';
 import { installMcpServers } from './mcp.js';
@@ -41,6 +41,11 @@ export interface ResourceSelection {
 
 /**
  * Available resources in ~/.agents/ for syncing.
+ *
+ * `promptcuts` is a boolean, not a list — there is at most one
+ * ~/.agents/promptcuts.yaml file. It is NOT version-scoped: the
+ * expand-promptcuts hook reads it directly, so no per-version copy
+ * is made and no sync step is needed.
  */
 export interface AvailableResources {
   commands: string[];
@@ -51,6 +56,7 @@ export interface AvailableResources {
   permissions: string[];
   subagents: string[];
   plugins: string[];
+  promptcuts: boolean;
 }
 
 /**
@@ -66,6 +72,7 @@ export function getAvailableResources(cwd: string = process.cwd()): AvailableRes
     permissions: [],
     subagents: [],
     plugins: [],
+    promptcuts: false,
   };
 
   const projectAgentsDir = getProjectAgentsDir(cwd);
@@ -180,6 +187,11 @@ export function getAvailableResources(cwd: string = process.cwd()): AvailableRes
   const allPlugins = discoverPlugins();
   result.plugins = allPlugins.map(p => p.name);
 
+  // Promptcuts — single file at ~/.agents/promptcuts.yaml, not per-agent.
+  // Project-scoped .agents/promptcuts.yaml is intentionally not supported
+  // (user-global shortcuts only — they follow the user, not the repo).
+  result.promptcuts = fs.existsSync(getPromptcutsPath());
+
   return result;
 }
 
@@ -223,6 +235,7 @@ export function getActuallySyncedResources(agent: AgentId, version: string, opti
     permissions: [],
     subagents: [],
     plugins: [],
+    promptcuts: false,
   };
 
   // Commands - check what files exist in version home
@@ -465,6 +478,9 @@ export function getNewResources(
     permissions: available.permissions.filter(p => !actuallySynced.permissions.includes(p)),
     subagents: available.subagents.filter(s => !actuallySynced.subagents.includes(s)),
     plugins: available.plugins.filter(p => !actuallySynced.plugins.includes(p)),
+    // Promptcuts aren't version-scoped — the hook reads ~/.agents/promptcuts.yaml
+    // directly, so there is never a "new" per-version state to reconcile.
+    promptcuts: false,
   };
 }
 
@@ -666,8 +682,10 @@ export async function promptResourceSelection(agent: AgentId): Promise<ResourceS
   const permissionGroups = discoverPermissionGroups();
   const totalPermissionRules = permissionGroups.reduce((sum, g) => sum + g.ruleCount, 0);
 
-  // Build category choices based on what's available
-  type CategoryKey = keyof AvailableResources;
+  // Build category choices based on what's available.
+  // Constrain to ResourceSelection keys — promptcuts is in AvailableResources
+  // for visibility but is never synced per-version, so it has no ResourceSelection entry.
+  type CategoryKey = keyof ResourceSelection;
   const categories: { key: CategoryKey; label: string; available: boolean; displayCount: string }[] = [
     { key: 'commands', label: 'Commands', available: COMMANDS_CAPABLE_AGENTS.includes(agent) && available.commands.length > 0, displayCount: `${available.commands.length} available` },
     { key: 'skills', label: 'Skills', available: available.skills.length > 0, displayCount: `${available.skills.length} available` },

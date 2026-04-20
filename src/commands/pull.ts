@@ -65,6 +65,31 @@ import { parseHookManifest, registerHooksToSettings } from '../lib/hooks.js';
 import { select } from '@inquirer/prompts';
 import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
 
+/**
+ * Old repo layout stored promptcuts under claude/promptcuts.yaml (agent-scoped).
+ * The new layout is ~/.agents/promptcuts.yaml at the repo root — the hook
+ * reads from a fixed path so it survives version upgrades. If the root file
+ * doesn't exist yet but an agent-scoped one does, hoist the first one found.
+ */
+function migratePromptcutsToRoot(agentsDir: string): void {
+  const rootPath = path.join(agentsDir, 'promptcuts.yaml');
+  if (fs.existsSync(rootPath)) return;
+
+  const agentDirs = ['claude', 'codex', 'cursor', 'gemini', 'opencode'];
+  for (const dir of agentDirs) {
+    const legacyPath = path.join(agentsDir, dir, 'promptcuts.yaml');
+    if (fs.existsSync(legacyPath)) {
+      try {
+        fs.renameSync(legacyPath, rootPath);
+        console.log(chalk.gray(`Moved ${dir}/promptcuts.yaml → promptcuts.yaml (repo root)`));
+        return;
+      } catch {
+        // Best-effort migration; hook still works if the user moves it manually.
+      }
+    }
+  }
+}
+
 export function registerPullCommand(program: Command): void {
   program
     .command('pull [source] [agent]')
@@ -244,6 +269,11 @@ Skip CLI installs with --skip-clis when you only want config updates, not versio
             source: parsed.url,
           });
         }
+
+        // One-time migration: promptcuts.yaml moved from agent-scoped
+        // (e.g. claude/promptcuts.yaml) to repo root. We move it so the
+        // hook at ~/.agents/hooks/ can always find it at a fixed path.
+        migratePromptcutsToRoot(agentsDir);
 
         // Read manifest for CLI versions and MCP config
         const manifest = readManifest(agentsDir);

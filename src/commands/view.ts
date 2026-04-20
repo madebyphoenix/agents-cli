@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as yaml from 'yaml';
 
 import {
   AGENTS,
@@ -42,7 +43,7 @@ import {
   isShimsInPath,
 } from '../lib/shims.js';
 import { getAgentResources } from '../lib/resources.js';
-import { getAgentsDir } from '../lib/state.js';
+import { getAgentsDir, getPromptcutsPath } from '../lib/state.js';
 import { isGitRepo, getGitSyncStatus } from '../lib/git.js';
 import { getCentralMemoryFileName } from '../lib/memory.js';
 import { formatPath, isPromptCancelled } from './utils.js';
@@ -573,6 +574,26 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
     }
   }
 
+  // Render the single ~/.agents/promptcuts.yaml (cross-agent, not per-version).
+  // Reads the file to surface the shortcut count — cheap (<1KB typical).
+  function renderPromptcuts(): void {
+    console.log(chalk.bold(`\nPromptcuts\n`));
+    const promptcutsPath = getPromptcutsPath();
+    if (!fs.existsSync(promptcutsPath)) {
+      console.log(`  ${chalk.gray('none')}`);
+      return;
+    }
+    let count = 0;
+    try {
+      const parsed = yaml.parse(fs.readFileSync(promptcutsPath, 'utf-8')) as { shortcuts?: Record<string, unknown> } | null;
+      count = parsed?.shortcuts ? Object.keys(parsed.shortcuts).length : 0;
+    } catch {
+      count = 0;
+    }
+    const label = `${count} shortcut${count === 1 ? '' : 's'}`;
+    console.log(`  ${chalk.green(label).padEnd(24)} ${chalk.gray(formatPath(promptcutsPath, cwd))}`);
+  }
+
   // 1. Agent CLI info
   console.log(chalk.bold('Agent CLIs\n'));
   const accountInfo = await getAccountInfo(agentId, home);
@@ -612,6 +633,7 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
   renderSection('MCP Servers', agentData.mcp);
   renderSection('Rules', agentData.memory);
   renderSection('Hooks', agentData.hooks);
+  renderPromptcuts();
 
   // Show legend at the end if git repo exists
   if (hasGitRepo) {

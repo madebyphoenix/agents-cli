@@ -12,6 +12,7 @@ const HOOKS_DIR = path.join(AGENTS_DIR, 'hooks');
 const SKILLS_DIR = path.join(AGENTS_DIR, 'skills');
 const MEMORY_DIR = path.join(AGENTS_DIR, 'memory');
 const INSTRUCTIONS_FILE = path.join(AGENTS_DIR, 'instructions.md');
+const PROMPTCUTS_FILE = path.join(AGENTS_DIR, 'promptcuts.yaml');
 const MCP_CONFIG_FILE = path.join(AGENTS_DIR, 'mcp.json');
 const PACKAGES_DIR = path.join(AGENTS_DIR, 'packages');
 const ROUTINES_DIR = path.join(AGENTS_DIR, 'routines');
@@ -134,6 +135,15 @@ export function getMemoryDir(): string {
 
 export function getInstructionsPath(): string {
   return INSTRUCTIONS_FILE;
+}
+
+/**
+ * Path to ~/.agents/promptcuts.yaml — the canonical, version-independent
+ * source for prompt shortcuts. The expand-promptcuts hook reads directly
+ * from this file, so it survives agent-version upgrades without any sync.
+ */
+export function getPromptcutsPath(): string {
+  return PROMPTCUTS_FILE;
 }
 
 export function getMcpConfigPath(): string {
