@@ -175,6 +175,7 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
   try {
     let sessions = await discoverSessions({
       agent,
+      version,
       all: pathFilter ? true : options.all,
       cwd: process.cwd(),
       project: options.project,
@@ -192,10 +193,6 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
 
     tracker.stop();
     spinner?.stop();
-
-    if (version) {
-      sessions = sessions.filter(s => s.version === version);
-    }
 
     // Filter out team-spawned sessions by default. Pass --teams to include them.
     const { visible: visibleSessions, hiddenCount } = filterTeamSessions(sessions, !!options.teams);
@@ -280,12 +277,14 @@ function printSessionTable(sessions: SessionMeta[], hiddenCount = 0): void {
     const tag = teamTag(session);
     const label = (session as any).label;
     const topic = tag ? `${tag}${session.topic ?? ''}` : session.topic;
+    const versionStr = session.version || '-';
 
     console.log(
       chalk.white(padRight(session.shortId, 10)) +
-      agentColor(padRight(truncate(session.agent, 9), 10)) +
+      agentColor(padRight(truncate(session.agent, 8), 9)) +
+      chalk.yellow(padRight(truncate(versionStr, 7), 8)) +
       chalk.cyan(padRight(truncate(project, 14), 16)) +
-      renderTopicCell(label, topic, '', 50, 52) +
+      renderTopicCell(label, topic, '', 48, 50) +
       chalk.gray(when)
     );
   }
@@ -444,12 +443,14 @@ function formatPickerLabel(s: SessionMeta, query: string): string {
   const tag = teamTag(s);
   const label = (s as any).label;
   const topic = tag ? `${tag}${s.topic ?? ''}` : s.topic;
+  const versionStr = s.version || '-';
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
-    agentColor(padRight(truncate(s.agent, 9), 10)) +
+    agentColor(padRight(truncate(s.agent, 8), 9)) +
+    chalk.yellow(padRight(truncate(versionStr, 7), 8)) +
     chalk.cyan(padRight(truncate(project, 14), 16)) +
-    renderTopicCell(label, topic, query, 50, 52) +
+    renderTopicCell(label, topic, query, 48, 50) +
     chalk.gray(when)
   );
 }

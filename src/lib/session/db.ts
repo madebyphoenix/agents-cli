@@ -95,6 +95,7 @@ export interface ScanStamp {
 export interface QueryOptions {
   agent?: SessionAgentId;
   agents?: SessionAgentId[];
+  version?: string;
   cwd?: string;
   /** Match any session whose cwd equals this or is a descendant of it. */
   cwdPrefix?: string;
@@ -488,6 +489,11 @@ export function querySessions(options: QueryOptions = {}): SessionMeta[] {
   } else if (options.agents && options.agents.length > 0) {
     where.push(`agent IN (${options.agents.map(() => '?').join(',')})`);
     params.push(...options.agents);
+  }
+
+  if (options.version) {
+    where.push('version = ?');
+    params.push(options.version);
   }
 
   if (options.cwd) {
