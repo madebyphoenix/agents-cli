@@ -137,7 +137,7 @@ agents use claude@1.5.0 -p     # Project-specific (in .agents/agents.yaml)
   [Bash: codex --version 2>&1; ls /Users/user/.agents/versions/codex/ 2>/dev/null]
   [Bash: ~/.agents/skills/linear/scripts/linear create "agents-cli: enable Codex hook sync, version-gate by capability" \   --...]
 
-Created **RUSH-390** — *agents-cli: enable Codex hook sync, version-gate by capability* (High priority).
+Created **PHNX-390** — *agents-cli: enable Codex hook sync, version-gate by capability* (High priority).
 
 The ticket covers:
 1. **Flip the capability** — `src/lib/agents.ts:107` Codex `supportsHooks` and `capabilities.hooks` (currently both `false`).
@@ -152,7 +152,7 @@ You're currently on `codex-cli 0.113.0` — once this lands, switching with `age
 > Did you also write the plan in that ticket or nah?
 
 
-Yes — the full plan is in the ticket body. RUSH-390 includes:
+Yes — the full plan is in the ticket body. PHNX-390 includes:
 
 - **Context** (Codex hooks shape, config locations, event names)
 - **5 numbered changes** with exact file paths + line numbers (`src/lib/agents.ts:107`, `src/lib/hooks.ts:469`, `src/lib/versions.ts`, etc.)
@@ -162,26 +162,26 @@ Yes — the full plan is in the ticket body. RUSH-390 includes:
 
 Whoever picks it up should be able to start coding without re-doing the design pass.
 
-> Cool. Can we queue up this task to be impl via rush cloud? Check rush cloud --help to learn more
+> Cool. Can we queue up this task to be impl via phnx cloud? Check phnx cloud --help to learn more
 
-  [Bash: rush cloud --help 2>&1]
-  [Bash: rush cloud run --help 2>&1]
+  [Bash: phnx cloud --help 2>&1]
+  [Bash: phnx cloud run --help 2>&1]
   [Bash: cd /Users/user/src/github.com/example/agents-cli && git remote -v 2>&1]
-  [Bash: rush cloud run claude example/agents-cli --mode exec --prompt "$(cat <<'EOF' Implement Linear ticket RUSH-390 — "...]
+  [Bash: phnx cloud run claude example/agents-cli --mode exec --prompt "$(cat <<'EOF' Implement Linear ticket PHNX-390 — "...]
   [ERROR: Exit code 1
-Error: not authenticated - run 'rush login' first]
+Error: not authenticated - run 'phnx login' first]
 
-You're not logged into Rush. Run this in the prompt to log in (the `!` prefix executes it in-session):
+You're not logged into Phnx. Run this in the prompt to log in (the `!` prefix executes it in-session):
 
 ```
-! rush login
+! phnx login
 ```
 
-Once you're authed, I'll re-dispatch RUSH-390 to claude on `example/agents-cli` with the same prompt.
+Once you're authed, I'll re-dispatch PHNX-390 to claude on `example/agents-cli` with the same prompt.
 
 > Check now..
 
-  [Bash: rush cloud run claude example/agents-cli --mode exec --prompt "$(cat <<'EOF' Implement Linear ticket RUSH-390 — "...]
+  [Bash: phnx cloud run claude example/agents-cli --mode exec --prompt "$(cat <<'EOF' Implement Linear ticket PHNX-390 — "...]
   [ToolSearch: select:Monitor]
   [Bash: sleep 5 && cat /tmp/claude-0/-Users-user-src-github-com-example/ac83358c-892c-458e-bcb7-d3a95a24a0ea/...]
   [Bash: tail -c 3000 /tmp/claude-0/-Users-user-src-github-com-example/ac83358c-892c-458e-bcb7-d3a95a24a0ea/ta...]
@@ -192,22 +192,22 @@ The cloud agent has cloned `example/agents-cli`, started a session, and is readi
 
 I'll let it cook in the background. You can check progress anytime with the execution ID, or I can poll it for you on request.
 
-> Is it making progress? Is there a way to check it via our rush/cli or visisting agents.427yosemite.com in the browser?
+> Is it making progress? Is there a way to check it via our phnx/cli or visisting agents.427yosemite.com in the browser?
 
-  [Bash: rush --help 2>&1 | head -50; echo "---"; rush cloud --help 2>&1]
+  [Bash: phnx --help 2>&1 | head -50; echo "---"; phnx cloud --help 2>&1]
   [Bash: tail -c 1500 /tmp/claude-0/-Users-user-src-github-com-example/ac83358c-892c-458e-bcb7-d3a95a24a0ea/ta...]
-  [Bash: rush http GET /api/v1/cloud/executions/eipowaj0 2>&1 | head -40; echo "---"; rush http GET /api/v1/cloud/executions 2...]
-  [Bash: rush http GET /api/v1/sandbox/runs/eipowaj0 2>&1 | head -20; echo "---"; rush http GET /api/v1/runs/eipowaj0 2>&1 | h...]
-  [Bash: grep -rn "cloud/run\|cloud_run\|sandbox-service\|/runs/\|/executions/" /Users/user/src/github.com/example/rush/...]
-  [Glob /Users/user/src/github.com/example/rush/**/cloud*.go]
-  [Glob /Users/user/src/github.com/example/rush/**/cloud*.ts]
-  [Bash: grep -rln "cloud run\|cloud/run\|CloudRun\|Factory" /Users/user/src/github.com/example/rush/ 2>/dev/null | head...]
-  [Bash: ls /Users/user/src/github.com/example/rush/ 2>&1 | head -20; echo "---"; ls /Users/user/src/github.com/user...]
-  [Grep cloud|Factory|sandbox /Users/user/src/github.com/example/agents/rush/cli/internal/cli]
-  [Glob /Users/user/src/github.com/example/agents/rush/cli/**/cloud*]
+  [Bash: phnx http GET /api/v1/cloud/executions/eipowaj0 2>&1 | head -40; echo "---"; phnx http GET /api/v1/cloud/executions 2...]
+  [Bash: phnx http GET /api/v1/sandbox/runs/eipowaj0 2>&1 | head -20; echo "---"; phnx http GET /api/v1/runs/eipowaj0 2>&1 | h...]
+  [Bash: grep -rn "cloud/run\|cloud_run\|sandbox-service\|/runs/\|/executions/" /Users/user/src/github.com/example/phnx/...]
+  [Glob /Users/user/src/github.com/example/phnx/**/cloud*.go]
+  [Glob /Users/user/src/github.com/example/phnx/**/cloud*.ts]
+  [Bash: grep -rln "cloud run\|cloud/run\|CloudRun\|Factory" /Users/user/src/github.com/example/phnx/ 2>/dev/null | head...]
+  [Bash: ls /Users/user/src/github.com/example/phnx/ 2>&1 | head -20; echo "---"; ls /Users/user/src/github.com/user...]
+  [Grep cloud|Factory|sandbox /Users/user/src/github.com/example/agents/phnx/cli/internal/cli]
+  [Glob /Users/user/src/github.com/example/agents/phnx/cli/**/cloud*]
   [Bash: grep -n "POST\|GET\|/api\|http\|endpoint\|/v1\|/runs\|/executions" /Users/user/src/github.com/example/agents/ru...]
-  [Bash: rush http GET /api/v1/cloud-runs/eipowaj0 2>&1 | head -40]
-  [Bash: rush http GET /api/v1/cloud-runs 2>&1 | head -80]
+  [Bash: phnx http GET /api/v1/cloud-runs/eipowaj0 2>&1 | head -40]
+  [Bash: phnx http GET /api/v1/cloud-runs 2>&1 | head -80]
   [WebFetch: https://agents.427yosemite.com]
   [Bash: tail -c 800 /tmp/claude-0/-Users-user-src-github-com-example/ac83358c-892c-458e-bcb7-d3a95a24a0ea/tas...]
 
@@ -219,7 +219,7 @@ Yes, making active progress.
 
 1. **Browser** — https://agents.427yosemite.com — there's a Factory Floor dashboard with Task Pools, Queue/Working/Results counters, and Summary/Activity/Files/Logs tabs per task. Best for visual monitoring.
 
-2. **CLI** — no `rush cloud status` or `list` exists. The only other path is the streaming endpoint: `rush http GET /api/v1/cloud-runs/eipowaj0/stream` (which is what the original `rush cloud run` is already streaming into the background task I dispatched).
+2. **CLI** — no `phnx cloud status` or `list` exists. The only other path is the streaming endpoint: `phnx http GET /api/v1/cloud-runs/eipowaj0/stream` (which is what the original `phnx cloud run` is already streaming into the background task I dispatched).
 
 I'll keep the stream running and ping you on completion or if it hits a blocker.
 
@@ -241,24 +241,24 @@ So: **the dashboard exists for pool-level monitoring but I can't confirm it has 
 
 Reliable monitoring is the streaming output I'm already tailing in the background. Sorry for the confident-sounding mislead.
 
-> Is rush.cloud available for purchase?
+> Is phnx.cloud available for purchase?
 
   [ToolSearch: select:mcp__claude_ai_GoDaddy__domains_check_availability,mcp__claude_ai_GoDa...]
   [mcp__claude_ai_GoDaddy__domains_check_availability]
 
-**`rush.cloud` is taken** — not available for fresh registration.
+**`phnx.cloud` is taken** — not available for fresh registration.
 
 GoDaddy returned 40 alternatives but none replace `.cloud` semantically. The closest dev/infra-flavored ones:
 
-- `rush.software` — closest fit, available
-- `rush.online` — generic but available
-- `rush.space` — available
-- `rush.site` — available
+- `phnx.software` — closest fit, available
+- `phnx.online` — generic but available
+- `phnx.space` — available
+- `phnx.site` — available
 
-If you actually want `rush.cloud` specifically, the next step is checking whether the current owner has it listed for resale (often via Sedo, Afternic, or just a "for sale" landing page). Want me to fetch `rush.cloud` directly to see if it's parked with a sale listing, or run a WHOIS lookup for the owner?
+If you actually want `phnx.cloud` specifically, the next step is checking whether the current owner has it listed for resale (often via Sedo, Afternic, or just a "for sale" landing page). Want me to fetch `phnx.cloud` directly to see if it's parked with a sale listing, or run a WHOIS lookup for the owner?
 
 Sources:
-- [GoDaddy domain check](https://www.godaddy.com/domainsearch/find?domainToCheck=rush.cloud)
+- [GoDaddy domain check](https://www.godaddy.com/domainsearch/find?domainToCheck=phnx.cloud)
 
 > What domain do you suggest for promoting our agent cloud? It's imlp at @agents/halo/web . HAlo.cloud was for sale eaerlier.
 
@@ -276,7 +276,7 @@ You said it was already for sale earlier — that's the seller signaling. For an
 |---|---|---|
 | `byhalo.ai` | Matches your `byphoenix.com` family pattern. .ai signals the space. | yes |
 | `halocloud.io` | Descriptive, dev-tool standard TLD. | yes |
-| `gethalo.dev` | Matches your `getrush.ai` family pattern with a dev TLD. | yes |
+| `gethalo.dev` | Matches your `getphnx.ai` family pattern with a dev TLD. | yes |
 
 **What's gone:** every short `halo.*` you'd want — .ai, .io, .app, .so, .dev, .run, .computer, .sh, .fm — plus `halocloud.com`, `gethalo.com`, `gethalo.ai`, `byhalo.com`, `usehalo.com`.
 
@@ -290,7 +290,7 @@ Sources:
 <tool-use-id>toolu_012b4YUF5zjpcWBGTxEQLP4m</tool-use-id>
 <output-file>/tmp/claude-0/-Users-user-src-github-com-example/ac83358c-892c-458e-bcb7-d3a95a24a0ea/tasks/bwq9mw1us.output</output-file>
 <status>completed</status>
-<summary>Background command "Dispatch RUSH-390 to claude on rush cloud" completed (exit code 0)</summary>
+<summary>Background command "Dispatch PHNX-390 to claude on phnx cloud" completed (exit code 0)</summary>
 </task-notification>
 
   [Bash: tail -c 5000 /tmp/claude-0/-Users-user-src-github-com-example/ac83358c-892c-458e-bcb7-d3a95a24a0ea/ta...]
@@ -299,7 +299,7 @@ Background dispatch finished. **PR opened: https://github.com/example/agents-cli
 
 Status: `needs_review`. Cost: $3.40, 11 minutes wall time, 94 turns.
 
-What it shipped (matches the RUSH-390 plan):
+What it shipped (matches the PHNX-390 plan):
 - `src/lib/agents.ts` — Codex `supportsHooks: true`, `CODEX_HOOKS_MIN_VERSION = '0.116.0'` constant, added to `HOOKS_CAPABLE_AGENTS`
 - `src/lib/hooks.ts` — `registerHooksToSettings` now dispatches; new `registerHooksForCodex()` writes `~/.codex/hooks.json` + ensures `[features] codex_hooks = true` via `smol-toml`, with managed-prefix guard intact
 - `src/lib/versions.ts` — version-gates Codex sync, warns + skips when < 0.116.0
@@ -384,7 +384,7 @@ Missing **(1)** top-level `"hooks"` wrapper, and **(2)** the matcher-group wrapp
 3. Update the 12 tests to assert the actual schema.
 4. End-to-end test: install codex@0.116.0, sync a hook, trigger the event, prove the script ran. Paste the proof in the PR.
 
-Want me to push these as PR review comments on #8, or dispatch a follow-up via `rush cloud run` to fix it?
+Want me to push these as PR review comments on #8, or dispatch a follow-up via `phnx cloud run` to fix it?
 
 > Push commetns and then start a new agent to address these. Also, forcet he agent to run all tests and report tthe resutls of agetns. Agent can feel free to install a codex version, then create a new hook, then sync it and see if it works, and must report those resutls. If any bugs, then he shoudl fix those too. Wdut?
 
@@ -392,7 +392,7 @@ Want me to push these as PR review comments on #8, or dispatch a follow-up via `
   [Bash: gh pr view 8 --repo example/agents-cli --json reviewDecision,reviews 2>&1 | head -40]
 
 Review posted — PR #8 status is now `CHANGES_REQUESTED`. Dispatching the fix agent now.
-  [Bash: rush cloud run claude example/agents-cli --mode exec --prompt "$(cat <<'EOF' Address the CHANGES_REQUESTED review...]
+  [Bash: phnx cloud run claude example/agents-cli --mode exec --prompt "$(cat <<'EOF' Address the CHANGES_REQUESTED review...]
 
 Both done.
 
@@ -703,7 +703,7 @@ PR #8 on the `agents-cli` repo: https://github.com/example/agents-cli/pull/8
 
 Branch I'm watching: `feat/codex-hook-sync`
 
-Last commit GitHub sees on it: `749ad1a` ("fix: correct Codex hooks.json schema and remove dead code") — same as before, by `Prix Cloud Agent <bot@getrush.ai>`.
+Last commit GitHub sees on it: `749ad1a` ("fix: correct Codex hooks.json schema and remove dead code") — same as before, by `Prix Cloud Agent <bot@getphnx.ai>`.
 
 Possible mismatch — you may have rebased something else? Quick sanity check on your end:
 
@@ -719,7 +719,7 @@ git status -sb                                         # uncommitted/ahead/behin
 If your local tip differs from `749ad1a`, the rebase happened locally — just needs a `git push --force-with-lease`. If it matches `749ad1a`, the rebase didn't take.
 
 > Clone to tmp dn cehck if that way.. you must rease with remote changes...                                                                                                                                                    
-⏺ Bash(cd /tmp/rush-391-verify                                                                                                                       
+⏺ Bash(cd /tmp/phnx-391-verify                                                                                                                       
       ls node_modules 2>/dev/null | head -3 || echo "no node_modules, installing..."…)                                                             
   ⎿  + simple-git@3.30.0                                                                                                                             
      + smol-toml@1.6.0                        
@@ -728,7 +728,7 @@ If your local tip differs from `749ad1a`, the rebase happened locally — just n
   ⎿  Shell cwd was reset to /Users/user/src/github.com/example/agents-cli                                                                      
   ⎿  Allowed by auto mode classifier          
                                                                                                                                                      
-⏺ Bash(cd /tmp/rush-391-verify                                                                                                                     
+⏺ Bash(cd /tmp/phnx-391-verify                                                                                                                     
       node dist/index.js sessions view 9a13e71a 2>&1 | head -120)                                                                                    
   ⎿  - Parsing claude session...              
                                                                                                                                                      
@@ -760,7 +760,7 @@ fatal: not a git repository (or any of the parent directories): .git]
 Got blocked by the git permission system — it interpreted your "I rebased" as you having already done it.
 
 Let me check whether maybe there's another branch with the rebased state, before bothering you to override.
-  [Bash: gh api repos/example/agents-cli/branches --jq '.[] | select(.name | test("codex|hook|RUSH-390"; "i")) | {name, sh...]
+  [Bash: gh api repos/example/agents-cli/branches --jq '.[] | select(.name | test("codex|hook|PHNX-390"; "i")) | {name, sh...]
   [AskUserQuestion]
   [ERROR: The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.]
 
@@ -775,9 +775,9 @@ Surveyed all branches and open PRs. No other branch/PR touches the codex-hook-sy
 | PR | Branch | Touches our files? |
 |---|---|---|
 | #8 (ours) | `feat/codex-hook-sync` | yes |
-| #9 | `rush-391` (sessions summary work) | no |
+| #9 | `phnx-391` (sessions summary work) | no |
 | #7 | `agent/session-search-p2-p9` | no |
-| #5 | `agent/RUSH-314` (daemon) | no |
+| #5 | `agent/PHNX-314` (daemon) | no |
 | #2 | `fix/remove-trailing-blank-lines` | no |
 
 Last commit on `feat/codex-hook-sync` is still `749ad1a` from **2026-04-19T12:53Z** (~2.5h ago, before your "I rebased" message).
@@ -862,10 +862,10 @@ Concrete actions to take next. Prioritize by impact.
 
 
 ### Situation
-Goal: ship Codex hook sync support to `agents-cli` (RUSH-390). PR #8 is open, code is verified-correct end-to-end (real codex 0.116.0 fired a hook against the PR-branch-generated `hooks.json`), but stuck pre-merge on a rebase + my own CHANGES_REQUESTED review. User says they rebased locally; remote disagrees.
+Goal: ship Codex hook sync support to `agents-cli` (PHNX-390). PR #8 is open, code is verified-correct end-to-end (real codex 0.116.0 fired a hook against the PR-branch-generated `hooks.json`), but stuck pre-merge on a rebase + my own CHANGES_REQUESTED review. User says they rebased locally; remote disagrees.
 
 ### Completed
-- **Linear RUSH-390** created with full implementation plan.
+- **Linear PHNX-390** created with full implementation plan.
 - **PR #8** opened by cloud agent (commit `1bdb936`); schema was wrong (missing top-level `"hooks"` wrapper + matcher-group wrapper).
 - **CHANGES_REQUESTED review** posted to PR #8 (4 blockers, 3 smells).
 - **Fix commit `749ad1a`** pushed by second cloud agent. Verified actual code via `gh api`:

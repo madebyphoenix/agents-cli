@@ -8,13 +8,13 @@ Prompt: Does codex support hooks now? Check onmline please.. My codex version is
 
 Timeline
    5:05 am  Yes — Codex CLI now supports hooks (experimental, added recently in 2026).
-   5:11 am  Created **RUSH-390** — *agents-cli: enable Codex hook sync, version-gate by capability* (High priority).
+   5:11 am  Created **PHNX-390** — *agents-cli: enable Codex hook sync, version-gate by capability* (High priority).
    5:12 am  Yes — the full plan is in the ticket body.
-   5:13 am  You're not logged into Rush.
+   5:13 am  You're not logged into Phnx.
    5:18 am  Dispatched and running.
    5:21 am  Yes, making active progress.
    5:24 am  You're right to push back — I overclaimed.
-   5:24 am  **`rush.cloud` is taken** — not available for fresh registration.
+   5:24 am  **`phnx.cloud` is taken** — not available for fresh registration.
    5:26 am  **My recommendation: buy halo.cloud from the secondary market.**
    5:28 am  Background dispatch finished.
    5:34 am  Let me verify my biggest concern — the actual on-disk schema Codex expects — before claiming anything.
@@ -22,7 +22,7 @@ Timeline
               WebFetch
    5:35 am  Reviewed the full diff against the Codex docs.
    5:38 am  Review posted — PR #8 status is now `CHANGES_REQUESTED`.
-              Bash rush cloud run claude example/agents-cli --mode exec --prompt "$(cat <<'EOF' Address the CHANGES_REQUESTED review on PR #8 (https://github.com/example/agents-cli/pull/8). T…
+              Bash phnx cloud run claude example/agents-cli --mode exec --prompt "$(cat <<'EOF' Address the CHANGES_REQUESTED review on PR #8 (https://github.com/example/agents-cli/pull/8). T…
    5:54 am  The agent claims everything's fixed, but I noticed permission denials around `codex exec` and several `git branch` attempts.
               Bash gh pr view 8 --repo example/agents-cli --json commits,reviewDecision,headRefOid 2>&1; echo "---COMMENTS---"; gh pr view 8 --repo example/agents-cli --comments --json commen…
    5:54 am  Good, comment was posted.
@@ -71,7 +71,7 @@ WORK: /tmp/folders/xxx
               Bash WORK=$(mktemp -d -t agents-cli-merge-XXXX) echo "WORK: $WORK" git clone git@github.com:example/agents-cli.git "$WORK/repo" 2>&1 | tail -5 cd "$WORK/repo" git fetch origin 2>&1 …
             ⚠ Bash cd /tmp/folders/xxx git checkout feat/codex-hook-sync 2>&1 | tail -3 echo "---rebasing onto main:" git rebase … — Permission for this action has been denied. Reason: Agent's CLAUDE.md explicitly forbids `git checko
    8:29 am  Got blocked by the git permission system — it interpreted your "I rebased" as you having already done it.
-              Bash gh api repos/example/agents-cli/branches --jq '.[] | select(.name | test("codex|hook|RUSH-390"; "i")) | {name, sha: .commit.sha[0:7]}' 2>&1 echo "---" echo "Recent branches upd…
+              Bash gh api repos/example/agents-cli/branches --jq '.[] | select(.name | test("codex|hook|PHNX-390"; "i")) | {name, sha: .commit.sha[0:7]}' 2>&1 echo "---" echo "Recent branches upd…
             ⚠ AskUserQuestion — The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file
   10:48 am  Good catch — before I do anything force-pushy, let me see what else is in flight.
               Bash gh pr list --repo example/agents-cli --state open --json number,title,headRefName,headRefOid,author,updatedAt --jq '.[] | "PR #\(.number) [\(.headRefName)] @\(.headRefOid[0:7])…
@@ -82,11 +82,11 @@ WORK: /tmp/folders/xxx
 
 ### Situation
 
-Goal: ship Codex hook sync support to agents-cli (RUSH-390). PR #8 is open, code is verified-correct end-to-end (real codex 0.116.0 fired a hook against the PR-branch-generated hooks.json), but stuck pre-merge on a rebase + my own CHANGES_REQUESTED review. User says they rebased locally; remote disagrees.
+Goal: ship Codex hook sync support to agents-cli (PHNX-390). PR #8 is open, code is verified-correct end-to-end (real codex 0.116.0 fired a hook against the PR-branch-generated hooks.json), but stuck pre-merge on a rebase + my own CHANGES_REQUESTED review. User says they rebased locally; remote disagrees.
 
 ### Completed
 
-    * **Linear RUSH-390** created with full implementation plan.
+    * **Linear PHNX-390** created with full implementation plan.
     * **PR #8** opened by cloud agent (commit `1bdb936`); schema was wrong (missing top-level `"hooks"` wrapper + matcher-group wrapper).
     * **CHANGES_REQUESTED review** posted to PR #8 (4 blockers, 3 smells).
     * **Fix commit `749ad1a`** pushed by second cloud agent. Verified actual code via `gh api`:

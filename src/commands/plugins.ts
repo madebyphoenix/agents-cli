@@ -1,10 +1,12 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import { checkbox } from '@inquirer/prompts';
 
 import { AGENTS, PLUGINS_CAPABLE_AGENTS, agentLabel } from '../lib/agents.js';
 import type { AgentId } from '../lib/types.js';
-import { discoverPlugins, getPlugin, pluginSupportsAgent } from '../lib/plugins.js';
+import { discoverPlugins, getPlugin, pluginSupportsAgent, removePluginFromVersion } from '../lib/plugins.js';
 import {
   listInstalledVersions,
   syncResourcesToVersion,
@@ -193,6 +195,64 @@ export function registerPluginsCommands(program: Command): void {
             console.log(chalk.gray(`${name} already synced to ${agentLabel(agentId)}@${version}`));
           }
         }
+      }
+    });
+
+  // agents plugins remove <name>
+  pluginsCmd
+    .command('remove <name>')
+    .description('Remove plugin from all agent versions and delete its source')
+    .option('--keep-source', 'Unsync from versions but keep ~/.agents/plugins/<name>')
+    .action((name: string, options: { keepSource?: boolean }) => {
+      const pluginsDir = path.join(process.env.HOME || '', '.agents', 'plugins');
+      const pluginRoot = path.join(pluginsDir, name);
+
+      // Use discovered plugin when present; fall back to name+root if source is already gone
+      const plugin = getPlugin(name);
+      const resolvedRoot = plugin?.root || pluginRoot;
+
+      if (!plugin && !fs.existsSync(pluginRoot)) {
+        console.log(chalk.red(`Plugin '${name}' not found`));
+        process.exit(1);
+      }
+
+      let totalSkills = 0;
+      let totalHooks = 0;
+      let totalPerms = 0;
+      let versionsTouched = 0;
+
+      for (const agentId of PLUGINS_CAPABLE_AGENTS) {
+        const versions = listInstalledVersions(agentId);
+        for (const version of versions) {
+          const versionHome = getVersionHomePath(agentId, version);
+          const r = removePluginFromVersion(name, resolvedRoot, agentId, versionHome);
+          if (r.skills.length > 0 || r.hooks.length > 0 || r.permissions > 0) {
+            versionsTouched += 1;
+            totalSkills += r.skills.length;
+            totalHooks += r.hooks.length;
+            totalPerms += r.permissions;
+            console.log(
+              chalk.gray(
+                `  ${agentLabel(agentId)}@${version}: ${r.skills.length} skill(s), ${r.hooks.length} hook(s), ${r.permissions} perm(s)`
+              )
+            );
+          }
+        }
+      }
+
+      console.log(
+        chalk.green(
+          `Unsynced ${name} from ${versionsTouched} version(s) — ${totalSkills} skills, ${totalHooks} hooks, ${totalPerms} permissions`
+        )
+      );
+
+      if (!options.keepSource) {
+        if (fs.existsSync(pluginRoot)) {
+          fs.rmSync(pluginRoot, { recursive: true, force: true });
+          console.log(chalk.green(`Deleted ${formatPath(pluginRoot)}`));
+        }
+      } else {
+        console.log(chalk.gray(`Kept source at ${formatPath(pluginRoot)}`));
       }
     });
 }

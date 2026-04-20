@@ -20,9 +20,9 @@ Commands (90)
     gh api × 7
     git remote
   HTTP (11)
-    rush cloud × 5
-    rush http × 4
-    rush --help
+    phnx cloud × 5
+    phnx http × 4
+    phnx --help
   Search (15) — grep, find
   Probes (13) — ls, which, tail, cat
   Wait (3) — sleep
@@ -35,17 +35,17 @@ Commands (90)
     set -e WORK=$(mktemp -d -t e2e-codex-hooks-XXXXXX) echo "WORKDIR: $WORK"  # Clo…
 
 Errors: 10 failures — first: Bash: Exit code 1
-Error: not authenticated - run 'rush login' firs
+Error: not authenticated - run 'phnx login' firs
 
 ────────────────────────────────────────────────────────────
 
 ### Situation
 
-Goal: ship Codex hook sync support to agents-cli (RUSH-390). PR #8 is open, code is verified-correct end-to-end (real codex 0.116.0 fired a hook against the PR-branch-generated hooks.json), but stuck pre-merge on a rebase + my own CHANGES_REQUESTED review. User says they rebased locally; remote disagrees.
+Goal: ship Codex hook sync support to agents-cli (PHNX-390). PR #8 is open, code is verified-correct end-to-end (real codex 0.116.0 fired a hook against the PR-branch-generated hooks.json), but stuck pre-merge on a rebase + my own CHANGES_REQUESTED review. User says they rebased locally; remote disagrees.
 
 ### Completed
 
-    * **Linear RUSH-390** created with full implementation plan.
+    * **Linear PHNX-390** created with full implementation plan.
     * **PR #8** opened by cloud agent (commit `1bdb936`); schema was wrong (missing top-level `"hooks"` wrapper + matcher-group wrapper).
     * **CHANGES_REQUESTED review** posted to PR #8 (4 blockers, 3 smells).
     * **Fix commit `749ad1a`** pushed by second cloud agent. Verified actual code via `gh api`:
