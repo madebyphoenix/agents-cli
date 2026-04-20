@@ -3,6 +3,9 @@ const WHOLE_MESSAGE_SKIP_PATTERNS = [
   /<collaboration_mode>/i,
   /^# AGENTS\.md instructions for\b/im,
   /<local-command-caveat>/i,
+  // Slash-command invocations (e.g. /continue, /done) — actual user intent
+  // lives in the next user message, not in these wrapper tags.
+  /<command-(message|name|args)>/i,
 ];
 
 const NOISE_LINE_PATTERNS = [
@@ -16,11 +19,27 @@ const NOISE_LINE_PATTERNS = [
 
 const LOCAL_COMMAND_PREFIX = '<local-command-caveat>';
 
+// Wrappers added to team-spawned prompts in src/lib/teams/agents.ts.
+// Stripped before topic extraction so the picker shows what the user actually typed.
+const HEADLESS_PLAN_MODE_PREFIX = 'You are running in HEADLESS PLAN MODE.';
+const TEAM_PROMPT_SUFFIX_MARKER = "When you're done, provide a brief summary of:";
+
+function stripTeamWrappers(raw: string): string {
+  let text = raw;
+  if (text.trimStart().startsWith(HEADLESS_PLAN_MODE_PREFIX)) {
+    const blankLine = text.indexOf('\n\n');
+    if (blankLine !== -1) text = text.slice(blankLine + 2);
+  }
+  const suffixIdx = text.indexOf(TEAM_PROMPT_SUFFIX_MARKER);
+  if (suffixIdx !== -1) text = text.slice(0, suffixIdx);
+  return text.trim();
+}
+
 export function cleanSessionPrompt(raw: string): string {
   let text = raw.replace(/\r/g, '').trim();
   if (!text) return '';
 
-  text = text.replace(/<\/?[a-z_]+>/gi, '');
+  text = text.replace(/<\/?[a-z_][a-z0-9_-]*>/gi, '');
 
   const meaningful = text
     .split('\n')
@@ -37,7 +56,10 @@ export function extractSessionTopic(raw: string): string | undefined {
     return undefined;
   }
 
-  const cleaned = cleanSessionPrompt(raw);
+  const unwrapped = stripTeamWrappers(raw);
+  if (!unwrapped) return undefined;
+
+  const cleaned = cleanSessionPrompt(unwrapped);
   if (!cleaned) return undefined;
   if (WHOLE_MESSAGE_SKIP_PATTERNS.some(pattern => pattern.test(cleaned))) {
     return undefined;
