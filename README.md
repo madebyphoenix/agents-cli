@@ -73,6 +73,37 @@ Supports plan (read-only) and edit modes, effort levels that map to the right mo
 
 ---
 
+## Keep secrets out of plaintext env files
+
+`agents secrets` stores sensitive values (API keys, tokens, even a test credit card number) in the macOS Keychain and injects them into agents at run time. Bundle files on disk contain only references — safe to `agents push` to a shared repo.
+
+```bash
+agents secrets add prod-stripe --description "Stripe prod + test card"
+agents secrets set prod-stripe STRIPE_SECRET_KEY          # prompts, stores in keychain
+agents secrets set prod-stripe TEST_CARD_NUMBER           # prompts, stores in keychain
+agents secrets set prod-stripe STRIPE_API_VERSION --value "2024-06-20"
+agents secrets set prod-stripe GITHUB_TOKEN --env GH_TOKEN   # read from parent shell
+agents secrets set prod-stripe GCP_CREDS --file ~/.config/gcloud/creds.json
+
+agents run claude "charge a test card" --secrets prod-stripe
+```
+
+The resulting `~/.agents/secrets/prod-stripe.yml` holds only refs:
+
+```yaml
+name: prod-stripe
+vars:
+  STRIPE_SECRET_KEY: keychain:STRIPE_SECRET_KEY
+  TEST_CARD_NUMBER:  keychain:TEST_CARD_NUMBER
+  STRIPE_API_VERSION: { value: "2024-06-20" }
+  GITHUB_TOKEN: env:GH_TOKEN
+  GCP_CREDS: file:~/.config/gcloud/creds.json
+```
+
+Merge order on `agents run` is **profile env < `--secrets <bundle>` < `--env K=V`** — a profile carries provider auth, bundles carry user-defined values, `--env` is the per-invocation override. Resolution happens right before `spawn`; a missing keychain item aborts the run before the child starts.
+
+---
+
 ## Put agents on a team
 
 `agents run` runs one agent synchronously. **Teams** run many agents on the same task, in the background, with coordination.

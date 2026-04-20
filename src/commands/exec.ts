@@ -13,6 +13,7 @@ import {
 } from '../lib/exec.js';
 import type { AgentId } from '../lib/types.js';
 import { profileExists, resolveProfileForRun } from '../lib/profiles.js';
+import { readBundle, resolveBundleEnv } from '../lib/secrets-bundles.js';
 
 const VALID_AGENTS = Object.keys(AGENT_COMMANDS);
 
@@ -23,6 +24,7 @@ interface ExecCommandActionOptions {
   cwd?: string;
   addDir: string[];
   env: string[];
+  secrets: string[];
   json?: boolean;
   headless?: boolean;
   sessionId?: string;
@@ -45,6 +47,12 @@ export function registerRunCommand(program: Command): void {
     .option(
       '--env <key=value>',
       'Pass environment variable to the agent (repeatable, e.g., --env DEBUG=1 --env API_KEY=xyz)',
+      (val: string, prev: string[]) => [...prev, val],
+      []
+    )
+    .option(
+      '--secrets <bundle>',
+      'Inject a secrets bundle (repeatable). Values resolve from macOS Keychain at run time. See `agents secrets`.',
       (val: string, prev: string[]) => [...prev, val],
       []
     )
@@ -83,6 +91,9 @@ Examples:
 
   # Auto-fallback to codex then gemini if claude hits a rate limit
   agents run claude "refactor auth module" --mode edit --fallback codex,gemini
+
+  # Inject a named secrets bundle (keychain-backed)
+  agents run claude "charge a test card" --secrets prod-stripe
 
   # Pin fallback versions: primary claude@2.0.65, fallback codex@0.116.0 then gemini
   agents run claude@2.0.65 "deep refactor" --fallback codex@0.116.0,gemini
@@ -141,14 +152,27 @@ the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
         process.exit(1);
       }
 
-      // Merge order: profile env is the base (resolved at exec time from
-      // keychain), then user --env flags override. This lets users tweak a
-      // single variable (e.g. --env ANTHROPIC_MODEL=...) without losing the
-      // profile's endpoint + auth.
-      const env: Record<string, string> | undefined =
-        profileEnv || userEnv
-          ? { ...(profileEnv ?? {}), ...(userEnv ?? {}) }
-          : undefined;
+      // Resolve --secrets bundles in flag order. Later bundles override earlier
+      // ones. Any resolution failure (missing keychain item, blocked exec ref)
+      // aborts before spawn so the agent never sees a partial env.
+      let secretsEnv: Record<string, string> = {};
+      for (const bundleName of options.secrets) {
+        try {
+          const bundle = readBundle(bundleName);
+          secretsEnv = { ...secretsEnv, ...resolveBundleEnv(bundle) };
+        } catch (err) {
+          console.error(chalk.red((err as Error).message));
+          process.exit(1);
+        }
+      }
+
+      // Merge order (later wins): profile env < secrets bundles < --env K=V.
+      // Profile carries provider auth; secrets bundles carry user-defined
+      // values; --env is the per-invocation override.
+      const hasOverrides = profileEnv || options.secrets.length > 0 || userEnv;
+      const env: Record<string, string> | undefined = hasOverrides
+        ? { ...(profileEnv ?? {}), ...secretsEnv, ...(userEnv ?? {}) }
+        : undefined;
 
       const execOptions: ExecOptions = {
         agent,

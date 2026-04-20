@@ -50,6 +50,7 @@ import { registerDriveCommands } from './commands/drive.js';
 import { registerPtyCommands } from './commands/pty.js';
 import { registerTeamsCommands } from './commands/teams.js';
 import { registerProfilesCommands } from './commands/profiles.js';
+import { registerSecretsCommands } from './commands/secrets.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -346,6 +347,7 @@ program
 
 registerTeamsCommands(program);
 registerProfilesCommands(program);
+registerSecretsCommands(program);
 registerSessionsCommands(program);
 registerSyncCommand(program);
 registerRefreshMemoryCommand(program);
