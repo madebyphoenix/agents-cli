@@ -214,26 +214,73 @@ export function buildTeamPreview(row: TeamRow): string {
   return lines.join('\n');
 }
 
+export function printTeamTable(rows: TeamRow[]): void {
+  if (rows.length === 0) return;
+  const nameWidth = Math.max(12, ...rows.map((r) => r.team.task_name.length));
+  const compositionWidth = Math.max(
+    8,
+    ...rows.map((r) => formatComposition(r.agents).length)
+  );
+  for (const row of rows) {
+    console.log(formatTeamRow(row, nameWidth, compositionWidth));
+  }
+  console.log(chalk.gray(`\n${rows.length} team${rows.length === 1 ? '' : 's'}.`));
+}
+
+// Build a searchable blob from every field that would help a user find a team:
+// name, description, each teammate's agent type, version, and handle. Lowercased
+// once so the per-keystroke filter is a straight `includes` per term.
+function searchHaystack(row: TeamRow): string {
+  const parts: string[] = [row.team.task_name];
+  if (row.description) parts.push(row.description);
+  for (const a of row.agents) {
+    parts.push(a.agent_type);
+    if (a.version) parts.push(a.version);
+    if (a.name) parts.push(a.name);
+    // Include each teammate's live status so "failed", "working", "stopped"
+    // are searchable.
+    parts.push(a.status);
+  }
+  // Also include team-level status words exposed in the row ("done",
+  // "working", "pending", "failed", "stopped", "empty") so the search matches
+  // what the user sees on screen.
+  const t = row.team;
+  if (t.agent_count === 0) parts.push('empty');
+  if (t.pending) parts.push('pending');
+  if (t.running) parts.push('working', 'running');
+  if (t.completed) parts.push('done', 'completed');
+  if (t.failed) parts.push('failed');
+  if (t.stopped) parts.push('stopped');
+  return parts.join(' ').toLowerCase();
+}
+
 export async function teamPicker(rows: TeamRow[], initialSearch?: string): Promise<PickedTeam | null> {
   const nameWidth = Math.max(12, ...rows.map((r) => r.team.task_name.length));
+  const compositionWidth = Math.max(
+    8,
+    ...rows.map((r) => formatComposition(r.agents).length)
+  );
+
+  // Precompute haystacks so the filter stays O(terms × rows) per keystroke.
+  const haystacks = new Map<TeamRow, string>();
+  for (const r of rows) haystacks.set(r, searchHaystack(r));
 
   const picked = await itemPicker<TeamRow>({
     message: 'Select a team:',
     items: rows,
     filter: (query: string) => {
-      if (!query.trim()) return rows;
-      const q = query.toLowerCase();
+      const trimmed = query.trim().toLowerCase();
+      if (!trimmed) return rows;
+      // Multi-term AND: every whitespace-split term must match somewhere. This
+      // lets "claude done" surface claude-only teams that finished, and
+      // "alice working" surface teams where alice is still running.
+      const terms = trimmed.split(/\s+/).filter(Boolean);
       return rows.filter((r) => {
-        if (r.team.task_name.toLowerCase().includes(q)) return true;
-        if (r.description && r.description.toLowerCase().includes(q)) return true;
-        return r.agents.some(
-          (a) =>
-            (a.name || '').toLowerCase().includes(q) ||
-            a.agent_type.toLowerCase().includes(q)
-        );
+        const hay = haystacks.get(r) || '';
+        return terms.every((t) => hay.includes(t));
       });
     },
-    labelFor: (row) => formatTeamRow(row, nameWidth),
+    labelFor: (row) => formatTeamRow(row, nameWidth, compositionWidth),
     buildPreview: buildTeamPreview,
     shortIdFor: (row) => row.team.task_name,
     pageSize: 10,

@@ -26,7 +26,7 @@ import {
 import { isVersionInstalled } from '../lib/versions.js';
 import { parseTimeFilter } from '../lib/session/discover.js';
 import { parseExecEnv } from '../lib/exec.js';
-import { teamPicker, formatTeamRow, type TeamRow } from './teams-picker.js';
+import { teamPicker, printTeamTable, type TeamRow } from './teams-picker.js';
 import { isPromptCancelled, isInteractiveTerminal } from './utils.js';
 
 const AGENT_NAMES: Record<AgentType, string> = {
@@ -431,12 +431,9 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
         return;
       }
 
-      // Non-interactive fallback: plain table.
-      const nameWidth = Math.max(12, ...rows.map((r) => r.team.task_name.length));
-      console.log(chalk.bold(`${'TEAM'.padEnd(nameWidth)}  MEMBERS      STATUS                                    UPDATED`));
-      for (const row of rows) {
-        console.log(formatTeamRow(row, nameWidth));
-      }
+      // Non-interactive fallback: rows flow without a header, matching the
+      // shape of `agents sessions` when piped.
+      printTeamTable(rows);
     });
 
   // create
