@@ -27,6 +27,7 @@
     "postinstall": "node scripts/postinstall.js",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
+    "pretest": "./scripts/rebuild-sqlite.sh",
     "test": "vitest run",
     "test:watch": "vitest"
   },
