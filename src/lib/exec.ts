@@ -3,10 +3,10 @@ import * as path from 'path';
 import type { AgentId } from './types.js';
 import { parseTimeout } from './routines.js';
 import { getVersionHomePath, isVersionInstalled, resolveVersion } from './versions.js';
-import { resolveModel } from './models.js';
+import { resolveModel, buildReasoningFlags } from './models.js';
 
 export type ExecMode = 'plan' | 'edit' | 'full';
-export type ExecEffort = 'fast' | 'default' | 'detailed';
+export type ExecEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
 
 export interface ExecOptions {
   agent: AgentId;
@@ -75,64 +75,6 @@ export function buildExecEnv(options: ExecOptions): NodeJS.ProcessEnv {
   };
 }
 
-// Model mapping per agent per effort level
-export const EFFORT_MODELS: Record<AgentId, Record<ExecEffort, string>> = {
-  claude: {
-    fast: 'claude-haiku-4-5-20251001',
-    default: 'claude-sonnet-4-5',
-    detailed: 'claude-opus-4-5',
-  },
-  codex: {
-    fast: 'gpt-4o-mini',
-    default: 'gpt-5.2-codex',
-    detailed: 'gpt-5.1-codex-max',
-  },
-  gemini: {
-    fast: 'gemini-3-flash-preview',
-    default: 'gemini-3-flash-preview',
-    detailed: 'gemini-3-pro-preview',
-  },
-  cursor: {
-    fast: 'composer-1',
-    default: 'composer-1',
-    detailed: 'composer-1',
-  },
-  opencode: {
-    fast: 'zai-coding-plan/glm-4.7-flash',
-    default: 'zai-coding-plan/glm-4.7',
-    detailed: 'zai-coding-plan/glm-4.7',
-  },
-  openclaw: {
-    fast: 'claude-haiku-4-5-20251001',
-    default: 'claude-sonnet-4-5',
-    detailed: 'claude-opus-4-5',
-  },
-  copilot: {
-    fast: 'gpt-4o-mini',
-    default: 'gpt-4o',
-    detailed: 'claude-sonnet-4-5',
-  },
-  amp: {
-    fast: 'claude-haiku-4-5-20251001',
-    default: 'claude-sonnet-4-5',
-    detailed: 'claude-opus-4-5',
-  },
-  kiro: {
-    fast: 'claude-haiku-4-5-20251001',
-    default: 'claude-sonnet-4-5',
-    detailed: 'claude-opus-4-5',
-  },
-  goose: {
-    fast: 'gpt-4o-mini',
-    default: 'gpt-4o',
-    detailed: 'claude-sonnet-4-5',
-  },
-  roo: {
-    fast: 'claude-haiku-4-5-20251001',
-    default: 'claude-sonnet-4-5',
-    detailed: 'claude-opus-4-5',
-  },
-};
 
 // Command templates per agent
 export interface AgentCommandTemplate {
@@ -278,6 +220,21 @@ export function buildExecCommand(options: ExecOptions): string[] {
     cmd[0] = `${cmd[0]}@${options.version}`;
   }
 
+  // Add reasoning effort flags (before mode flags for codex -c positioning)
+  // For codex, -c must come before 'exec' subcommand, so we insert at position 1
+  if (options.effort !== 'auto') {
+    const reasoningFlags = buildReasoningFlags(options.agent, options.effort);
+    if (reasoningFlags.length > 0) {
+      if (options.agent === 'codex') {
+        // Insert after 'codex' (or 'codex@version') but before 'exec'
+        cmd.splice(1, 0, ...reasoningFlags);
+      } else {
+        // For other agents, append after base
+        cmd.push(...reasoningFlags);
+      }
+    }
+  }
+
   // Add mode flags
   const modeFlags = template.modeFlags[options.mode];
   cmd.push(...modeFlags);
@@ -292,18 +249,17 @@ export function buildExecCommand(options: ExecOptions): string[] {
     cmd.push('--session-id', options.sessionId);
   }
 
-  // Add model (from explicit option or effort mapping)
-  const model = options.model || EFFORT_MODELS[options.agent][options.effort];
-  if (model && template.modelFlag) {
+  // Add model (only if explicitly provided by user)
+  if (options.model && template.modelFlag) {
     const effectiveVersion = options.version || resolveVersion(options.agent, options.cwd || process.cwd());
     if (effectiveVersion) {
-      const resolved = resolveModel(options.agent, effectiveVersion, model);
+      const resolved = resolveModel(options.agent, effectiveVersion, options.model);
       if (resolved.warning) {
         process.stderr.write(`[agents] ${resolved.warning}\n`);
       }
       cmd.push(template.modelFlag, resolved.forwarded);
     } else {
-      cmd.push(template.modelFlag, model);
+      cmd.push(template.modelFlag, options.model);
     }
   }
 

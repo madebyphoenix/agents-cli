@@ -36,7 +36,7 @@ export function registerRunCommand(program: Command): void {
     .command('run <agent> <prompt>')
     .description('Execute an agent non-interactively from scripts, scheduled jobs, or automation pipelines. Returns when the agent finishes.')
     .option('-m, --mode <mode>', 'How much the agent can do: plan (read-only), edit (can write files), full (writes + all permissions)', 'plan')
-    .option('-e, --effort <effort>', 'Model tier to use: fast (haiku), default (sonnet), detailed (opus)', 'default')
+    .option('-e, --effort <effort>', 'Reasoning effort: low | medium | high | xhigh | max | auto (claude and codex only)', 'auto')
     .option('--model <model>', 'Override the model directly (e.g., claude-opus-4-6)')
     .option(
       '--env <key=value>',
@@ -58,14 +58,14 @@ export function registerRunCommand(program: Command): void {
     .option('--timeout <duration>', 'Kill the agent after this duration (e.g., 30m, 1h, 2h30m)')
     .addHelpText('after', `
 Examples:
-  # Quick read-only analysis (plan mode, fast model)
-  agents run claude "summarize recent git commits" --mode plan --effort fast
+  # Quick read-only analysis (plan mode, low reasoning effort)
+  agents run claude "summarize recent git commits" --mode plan --effort low
 
-  # Edit files with default model (sonnet)
+  # Edit files with the agent's default effort
   agents run codex@0.116.0 "fix linting errors in src/" --mode edit
 
-  # Full autonomy with opus model for complex task
-  agents run claude "refactor auth to use JWT" --mode full --effort detailed
+  # Full autonomy with maximum reasoning for a complex task
+  agents run claude "refactor auth to use JWT" --mode full --effort max
 
   # Resume a previous conversation to continue work
   agents run claude "now add rate limiting" --session-id a1b2c3d4 --mode edit
@@ -93,8 +93,8 @@ the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
       }
 
       const effort = options.effort as ExecEffort;
-      if (!['fast', 'default', 'detailed'].includes(effort)) {
-        console.error(chalk.red(`Invalid effort: ${effort}. Use 'fast', 'default', or 'detailed'`));
+      if (!['low', 'medium', 'high', 'xhigh', 'max', 'auto'].includes(effort)) {
+        console.error(chalk.red(`Invalid effort: ${effort}. Use 'low', 'medium', 'high', 'xhigh', 'max', or 'auto'`));
         process.exit(1);
       }
 

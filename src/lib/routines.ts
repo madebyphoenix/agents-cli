@@ -17,7 +17,7 @@ export interface JobConfig {
   schedule: string;
   agent: AgentId;
   mode: 'plan' | 'edit' | 'full';
-  effort: 'fast' | 'default' | 'detailed';
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
   timeout: string;
   enabled: boolean;
   prompt: string;
@@ -43,7 +43,7 @@ export interface RunMeta {
 
 const JOB_DEFAULTS: Partial<JobConfig> = {
   mode: 'plan',
-  effort: 'default',
+  effort: 'auto',
   timeout: '30m',
   enabled: true,
 };
@@ -97,7 +97,7 @@ export function writeJob(config: JobConfig): void {
 
   const output: Record<string, unknown> = { ...config };
   if (output.mode === 'plan') delete output.mode;
-  if (output.effort === 'default') delete output.effort;
+  if (output.effort === 'auto') delete output.effort;
   if (output.timeout === '30m') delete output.timeout;
   if (output.enabled === true) delete output.enabled;
   if (output.runOnce === false || output.runOnce === undefined) delete output.runOnce;
@@ -149,8 +149,8 @@ export function validateJob(config: Partial<JobConfig>): string[] {
   if (config.mode && !['plan', 'edit', 'full'].includes(config.mode)) {
     errors.push('mode must be plan, edit, or full');
   }
-  if (config.effort && !['fast', 'default', 'detailed'].includes(config.effort)) {
-    errors.push('effort must be fast, default, or detailed');
+  if (config.effort && !['low', 'medium', 'high', 'xhigh', 'max', 'auto'].includes(config.effort)) {
+    errors.push('effort must be low, medium, high, xhigh, max, or auto');
   }
   if (!config.prompt || typeof config.prompt !== 'string') {
     errors.push('prompt is required');

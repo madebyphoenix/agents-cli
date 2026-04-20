@@ -152,7 +152,7 @@ Examples:
     .option('-a, --agent <agent>', 'Which agent runs this routine: claude, codex, gemini, cursor, or opencode')
     .option('-p, --prompt <prompt>', 'Task instruction for the agent')
     .option('-m, --mode <mode>', 'Execution mode: plan (read-only) or edit (can write files)', 'plan')
-    .option('-e, --effort <effort>', 'Model tier: fast, default, or detailed', 'default')
+    .option('-e, --effort <effort>', 'Reasoning effort: low | medium | high | xhigh | max | auto', 'auto')
     .option('-t, --timeout <timeout>', 'Kill the agent if it runs longer than this (e.g., 30m, 2h)', '30m')
     .option('--timezone <tz>', 'Interpret schedule in this timezone (e.g., America/Los_Angeles)')
     .option('--at <time>', 'One-shot mode: run once at this time (e.g., "14:30" or "2026-02-24 09:00"), then disable')
@@ -269,7 +269,7 @@ Examples:
 
         const config: JobConfig = {
           mode: 'plan',
-          effort: 'default',
+          effort: 'auto',
           timeout: '30m',
           enabled: true,
           ...parsed,
