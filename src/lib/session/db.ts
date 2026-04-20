@@ -8,7 +8,7 @@ const HOME = os.homedir();
 const SESSIONS_DIR = path.join(HOME, '.agents', 'sessions');
 const DB_PATH = path.join(SESSIONS_DIR, 'sessions.db');
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 // BM25 column weights for session_text: label > topic > project > content.
 // Higher weights make matches in that column rank higher.

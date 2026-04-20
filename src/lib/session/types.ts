@@ -52,6 +52,12 @@ export interface SessionMeta {
   label?: string;
   /** Set when this session was spawned by `agents teams`. */
   teamOrigin?: TeamOrigin;
+  /**
+   * True when the session was spawned programmatically (SDK entrypoint) rather
+   * than by a human at the Claude CLI. Captured at scan time from the JSONL
+   * `entrypoint` field ('sdk-cli' for team spawns, 'cli' for real sessions).
+   */
+  isTeamOrigin?: boolean;
   /** Terms that matched the current search query */
   _matchedTerms?: string[];
   /** BM25 relevance score from the most recent content-index search */
