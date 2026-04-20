@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   file_path TEXT NOT NULL,
   file_mtime_ms INTEGER,
   file_size INTEGER,
-  scanned_at INTEGER
+  scanned_at INTEGER,
+  is_team_origin INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_timestamp ON sessions(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_cwd ON sessions(cwd);
@@ -83,6 +84,7 @@ export interface SessionRow {
   file_mtime_ms: number | null;
   file_size: number | null;
   scanned_at: number | null;
+  is_team_origin: number;
 }
 
 export interface ScanStamp {
@@ -134,6 +136,16 @@ function migrateSchema(db: Database.Database, fromVersion: number): void {
     // v2 → v3: topic extraction now strips team-spawn wrapper prompts
     // (HEADLESS PLAN MODE prefix + summary suffix). Force a rescan so cached
     // topics like "You are running in HEADLESS PLAN MODE..." get re-extracted.
+    db.exec(`DELETE FROM scan_ledger;`);
+  }
+  if (fromVersion < 4) {
+    // v3 → v4: team-origin is now captured structurally from the JSONL
+    // `entrypoint` field at scan time. Add the column and force a rescan so
+    // every existing Claude session gets its flag populated.
+    const cols = db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>;
+    if (!cols.some(c => c.name === 'is_team_origin')) {
+      db.exec(`ALTER TABLE sessions ADD COLUMN is_team_origin INTEGER DEFAULT 0`);
+    }
     db.exec(`DELETE FROM scan_ledger;`);
   }
 }
@@ -255,11 +267,11 @@ const upsertSessionStmt = (db: Database.Database) => db.prepare(`
   INSERT INTO sessions (
     id, short_id, agent, version, account, timestamp,
     project, cwd, git_branch, topic, label, message_count, token_count,
-    file_path, file_mtime_ms, file_size, scanned_at
+    file_path, file_mtime_ms, file_size, scanned_at, is_team_origin
   ) VALUES (
     @id, @short_id, @agent, @version, @account, @timestamp,
     @project, @cwd, @git_branch, @topic, @label, @message_count, @token_count,
-    @file_path, @file_mtime_ms, @file_size, @scanned_at
+    @file_path, @file_mtime_ms, @file_size, @scanned_at, @is_team_origin
   )
   ON CONFLICT(id) DO UPDATE SET
     short_id = excluded.short_id,
@@ -277,7 +289,8 @@ const upsertSessionStmt = (db: Database.Database) => db.prepare(`
     file_path = excluded.file_path,
     file_mtime_ms = excluded.file_mtime_ms,
     file_size = excluded.file_size,
-    scanned_at = excluded.scanned_at
+    scanned_at = excluded.scanned_at,
+    is_team_origin = excluded.is_team_origin
 `);
 
 const deleteTextStmt = (db: Database.Database) =>
@@ -327,6 +340,7 @@ export function upsertSession(meta: SessionMeta, content: string, scan?: ScanSta
     file_mtime_ms: scan?.fileMtimeMs ?? null,
     file_size: scan?.fileSize ?? null,
     scanned_at: Date.now(),
+    is_team_origin: meta.isTeamOrigin ? 1 : 0,
   };
 
   const txn = db.transaction(() => {
@@ -379,6 +393,7 @@ export function upsertSessionsBatch(
         file_mtime_ms: scan?.fileMtimeMs ?? null,
         file_size: scan?.fileSize ?? null,
         scanned_at: now,
+        is_team_origin: meta.isTeamOrigin ? 1 : 0,
       });
       delText.run(meta.id);
       insText.run(
@@ -452,6 +467,7 @@ function rowToMeta(row: SessionRow): SessionMeta {
     account: row.account ?? undefined,
     topic: row.topic ?? undefined,
     label: row.label ?? undefined,
+    isTeamOrigin: row.is_team_origin === 1,
   };
 }
 

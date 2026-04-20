@@ -58,6 +58,11 @@ interface ClaudeSessionScan {
   topic?: string;
   messageCount: number;
   tokenCount?: number;
+  /**
+   * Value of the JSONL `entrypoint` field on the first event that carries it.
+   * 'cli' for real interactive sessions, 'sdk-cli' for team-spawned ones.
+   */
+  entrypoint?: string;
   /** Concatenated user message text, ready to hand to FTS5. */
   contentText?: string;
 }
@@ -992,6 +997,7 @@ async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
   let gitBranch: string | undefined;
   let version: string | undefined;
   let topic: string | undefined;
+  let entrypoint: string | undefined;
   let messageCount = 0;
   let tokenCount = 0;
   let sawTokenCount = false;
@@ -1007,6 +1013,12 @@ async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
         parsed = JSON.parse(line);
       } catch {
         continue;
+      }
+
+      // entrypoint ships on the first envelope event (attachment/user/assistant)
+      // and is the clean structural signal for "was this a team spawn?"
+      if (!entrypoint && typeof parsed.entrypoint === 'string') {
+        entrypoint = parsed.entrypoint;
       }
 
       if (!timestamp && (parsed.type === 'user' || parsed.type === 'assistant') && parsed.timestamp) {
