@@ -14,6 +14,7 @@ import {
   computeSummaryStats,
   renderSummaryHeader,
   renderSummary,
+  filterByRole,
 } from '../render.js';
 import type { SessionEvent } from '../types.js';
 
@@ -601,5 +602,56 @@ describe('renderSummary', () => {
     const out = renderSummary(events, '/project');
     expect(out).toContain('src/lib/render.ts');
     expect(out).not.toContain('/project/src/lib/render.ts');
+  });
+});
+
+// ── filterByRole ──────────────────────────────────────────────────────────────
+
+describe('filterByRole', () => {
+  const fixture: SessionEvent[] = [
+    { type: 'message', agent: 'claude', timestamp: 't1', role: 'user', content: 'hello' },
+    { type: 'message', agent: 'claude', timestamp: 't2', role: 'assistant', content: 'hi' },
+    { type: 'thinking', agent: 'claude', timestamp: 't3', content: 'reasoning' },
+    { type: 'tool_use', agent: 'claude', timestamp: 't4', tool: 'Read', args: {} },
+    { type: 'tool_result', agent: 'claude', timestamp: 't5', content: 'file content' },
+    { type: 'error', agent: 'claude', timestamp: 't6', content: 'oops' },
+    { type: 'init', agent: 'claude', timestamp: 't7' },
+  ];
+
+  it('user — returns only user messages', () => {
+    const result = filterByRole(fixture, 'user');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ type: 'message', role: 'user' });
+  });
+
+  it('assistant — returns only assistant messages', () => {
+    const result = filterByRole(fixture, 'assistant');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ type: 'message', role: 'assistant' });
+  });
+
+  it('thinking — returns only thinking events', () => {
+    const result = filterByRole(fixture, 'thinking');
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('thinking');
+  });
+
+  it('tools — returns tool_use and tool_result events', () => {
+    const result = filterByRole(fixture, 'tools');
+    expect(result).toHaveLength(2);
+    expect(result.map(e => e.type)).toEqual(['tool_use', 'tool_result']);
+  });
+
+  it('returns empty array when no events match the role', () => {
+    const events: SessionEvent[] = [
+      { type: 'init', agent: 'claude', timestamp: 't1' },
+    ];
+    expect(filterByRole(events, 'user')).toHaveLength(0);
+    expect(filterByRole(events, 'thinking')).toHaveLength(0);
+  });
+
+  it('throws for invalid role value', () => {
+    expect(() => filterByRole(fixture, 'foo')).toThrow('Invalid --role "foo"');
+    expect(() => filterByRole(fixture, 'foo')).toThrow('user, assistant, thinking, tools');
   });
 });

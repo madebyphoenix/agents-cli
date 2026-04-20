@@ -4,6 +4,18 @@ import { summarizeToolUse } from './parse.js';
 import { cleanSessionPrompt, extractSessionTopic } from './prompt.js';
 import { renderMarkdown } from '../markdown.js';
 
+// ── Role filter ───────────────────────────────────────────────────────────────
+
+export function filterByRole(events: SessionEvent[], role: string): SessionEvent[] {
+  switch (role) {
+    case 'user': return events.filter(e => e.type === 'message' && e.role === 'user');
+    case 'assistant': return events.filter(e => e.type === 'message' && e.role === 'assistant');
+    case 'thinking': return events.filter(e => e.type === 'thinking');
+    case 'tools': return events.filter(e => e.type === 'tool_use' || e.type === 'tool_result');
+    default: throw new Error(`Invalid --role "${role}". Valid values: user, assistant, thinking, tools`);
+  }
+}
+
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
 /**

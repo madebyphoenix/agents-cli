@@ -10,7 +10,7 @@ import { SESSION_AGENTS } from '../lib/session/types.js';
 import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter, type ScanProgress } from '../lib/session/discover.js';
 import { filterTeamSessions } from '../lib/session/team-filter.js';
 import { parseSession } from '../lib/session/parse.js';
-import { renderTranscript, renderSummary, renderSummaryHeader, computeSummaryStats, renderTrace, renderJson } from '../lib/session/render.js';
+import { renderTranscript, renderSummary, renderSummaryHeader, computeSummaryStats, renderTrace, renderJson, filterByRole } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
 import { colorAgent } from '../lib/agents.js';
 import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
@@ -33,6 +33,7 @@ interface SessionsOptions extends SessionFilterOptions {
   transcript?: boolean;
   trace?: boolean;
   timeline?: boolean;
+  role?: string;
 }
 
 interface ClaudeHistoryEntry {
@@ -142,13 +143,20 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
   }
 
   const mode = resolveViewMode(options);
+
+  const VALID_ROLES = ['user', 'assistant', 'thinking', 'tools'];
+  if (options.role && !VALID_ROLES.includes(options.role)) {
+    console.error(chalk.red(`Invalid --role "${options.role}". Valid values: ${VALID_ROLES.join(', ')}`));
+    process.exit(1);
+  }
+
   // --transcript/--trace/--timeline always request a single-session render.
   const wantsRender = mode === 'transcript' || mode === 'trace' || mode === 'timeline';
 
   // When the user explicitly asks to render (via mode flag), resolve the
   // query globally so sessions outside the default cwd/30d window are found.
   if (wantsRender && searchQuery) {
-    await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project });
+    await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project }, options.role);
     return;
   }
 
@@ -195,11 +203,11 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     if (searchQuery) {
       const idMatches = resolveSessionById(sessions, searchQuery);
       if (idMatches.length === 1) {
-        await renderSession(idMatches[0], mode);
+        await renderSession(idMatches[0], mode, options.role);
         return;
       }
       if (idMatches.length === 0 && looksLikeSessionId(searchQuery)) {
-        await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project });
+        await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project }, options.role);
         return;
       }
     }
@@ -293,7 +301,7 @@ function resolveViewMode(options: { transcript?: boolean; trace?: boolean; timel
   return 'summary';
 }
 
-async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void> {
+async function renderSession(session: SessionMeta, mode: ViewMode, role?: string): Promise<void> {
   // OpenCode stores sessions in SQLite; filePath is "db_path#session_id"
   const realPath = session.filePath.split('#')[0];
   if (!fs.existsSync(realPath)) {
@@ -307,7 +315,8 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
   }
 
   const spinner = ora(`Parsing ${session.agent} session...`).start();
-  const events = parseSession(session.filePath, session.agent);
+  let events = parseSession(session.filePath, session.agent);
+  if (role) events = filterByRole(events, role);
   spinner.stop();
 
   const agentColor = colorAgent(session.agent);
@@ -642,6 +651,7 @@ async function renderOneSession(
   query: string,
   mode: ViewMode,
   scope: { agent?: string; project?: string },
+  role?: string,
 ): Promise<void> {
   const spinner = ora().start();
   const tracker = createScanProgressTracker(FIND_VERBS, 'session', spinner);
@@ -711,7 +721,7 @@ async function renderOneSession(
     }
 
     spinner.stop();
-    await renderSession(session, mode);
+    await renderSession(session, mode, role);
   } catch (err: any) {
     if (isPromptCancelled(err)) return;
     tracker.stop();
@@ -737,6 +747,7 @@ export function registerSessionsCommands(program: Command): void {
     .option('--trace', 'Render reasoning trace as markdown (requires query)')
     .option('--timeline', 'Render chronological timeline of narration + tool clusters (requires query)')
     .option('--json', 'Output as JSON (session list, or event array when query resolves to one session)')
+    .option('--role <role>', 'Filter events by role: user, assistant, thinking, tools')
     .action(async (query: string | undefined, options: SessionsOptions) => {
       await sessionsAction(query, options);
     });
