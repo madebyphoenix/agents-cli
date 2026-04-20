@@ -4,6 +4,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { spawnSync } from 'child_process';
+import { buildResumeCommand } from '../sessions.js';
+import type { SessionMeta } from '../../lib/session/types.js';
 
 const repoRoot = process.cwd();
 const cliEntry = path.join(repoRoot, 'src', 'index.ts');
@@ -813,5 +815,70 @@ describe('agents sessions (render-mode)', () => {
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
+  });
+});
+
+describe('buildResumeCommand cross-version handoff', () => {
+  const baseSession = (overrides: Partial<SessionMeta> = {}): SessionMeta => ({
+    id: 'abc12345-def6-7890-1234-567890abcdef',
+    shortId: 'abc12345',
+    agent: 'claude',
+    timestamp: '2026-04-19T12:00:00.000Z',
+    filePath: '/fake/path.jsonl',
+    ...overrides,
+  });
+
+  it('uses native --resume when session version matches active version', () => {
+    const session = baseSession({ version: '2.1.113' });
+    expect(buildResumeCommand(session, '2.1.113')).toEqual([
+      'claude', '--resume', session.id,
+    ]);
+  });
+
+  it('uses /continue <id> when Claude session version differs from active version', () => {
+    const session = baseSession({ version: '2.0.65' });
+    expect(buildResumeCommand(session, '2.1.113')).toEqual([
+      'claude', `/continue ${session.id}`,
+    ]);
+  });
+
+  it('uses /continue <id> when Codex session version differs from active version', () => {
+    const session = baseSession({ agent: 'codex', version: '0.115.0' });
+    expect(buildResumeCommand(session, '0.116.0')).toEqual([
+      'codex', `/continue ${session.id}`,
+    ]);
+  });
+
+  it('uses native codex resume when versions match', () => {
+    const session = baseSession({ agent: 'codex', version: '0.116.0' });
+    expect(buildResumeCommand(session, '0.116.0')).toEqual([
+      'codex', 'resume', session.id,
+    ]);
+  });
+
+  it('falls back to native resume when session has no recorded version', () => {
+    const session = baseSession({ version: undefined });
+    expect(buildResumeCommand(session, '2.1.113')).toEqual([
+      'claude', '--resume', session.id,
+    ]);
+  });
+
+  it('falls back to native resume when active version is unknown', () => {
+    const session = baseSession({ version: '2.0.65' });
+    expect(buildResumeCommand(session, undefined)).toEqual([
+      'claude', '--resume', session.id,
+    ]);
+  });
+
+  it('returns null for agents without resume support regardless of version', () => {
+    expect(buildResumeCommand(baseSession({ agent: 'gemini', version: '1.0.0' }), '2.0.0')).toBeNull();
+    expect(buildResumeCommand(baseSession({ agent: 'openclaw', version: '1.0.0' }), '2.0.0')).toBeNull();
+  });
+
+  it('opencode ignores version mismatch (shared SQLite DB, not isolated homes)', () => {
+    const session = baseSession({ agent: 'opencode', version: '0.5.0' });
+    expect(buildResumeCommand(session, '0.6.0')).toEqual([
+      'opencode', '--session', session.id,
+    ]);
   });
 });

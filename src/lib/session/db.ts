@@ -478,8 +478,7 @@ function rowToMeta(row: SessionRow): SessionMeta {
   };
 }
 
-export function querySessions(options: QueryOptions = {}): SessionMeta[] {
-  const db = getDB();
+function buildSessionWhere(options: QueryOptions): { clause: string; params: any[] } {
   const where: string[] = [];
   const params: any[] = [];
 
@@ -501,6 +500,11 @@ export function querySessions(options: QueryOptions = {}): SessionMeta[] {
     params.push(options.cwd);
   }
 
+  if (options.cwdPrefix) {
+    where.push('(cwd = ? OR cwd LIKE ?)');
+    params.push(options.cwdPrefix, options.cwdPrefix + '/%');
+  }
+
   if (options.project) {
     where.push('LOWER(IFNULL(project, \'\')) LIKE ?');
     params.push(`%${options.project.toLowerCase()}%`);
@@ -517,11 +521,32 @@ export function querySessions(options: QueryOptions = {}): SessionMeta[] {
     params.push(new Date(options.untilMs).toISOString());
   }
 
-  const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  if (options.excludeTeamOrigin) {
+    where.push('IFNULL(is_team_origin, 0) = 0');
+  }
+  if (options.onlyTeamOrigin) {
+    where.push('IFNULL(is_team_origin, 0) = 1');
+  }
+
+  const clause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  return { clause, params };
+}
+
+export function querySessions(options: QueryOptions = {}): SessionMeta[] {
+  const db = getDB();
+  const { clause, params } = buildSessionWhere(options);
   const limitClause = options.limit ? `LIMIT ${Math.max(1, Math.floor(options.limit))}` : '';
-  const sql = `SELECT * FROM sessions ${whereClause} ORDER BY timestamp DESC ${limitClause}`;
+  const sql = `SELECT * FROM sessions ${clause} ORDER BY timestamp DESC ${limitClause}`;
   const rows = db.prepare(sql).all(...params) as SessionRow[];
   return rows.map(rowToMeta);
+}
+
+export function countSessions(options: QueryOptions = {}): number {
+  const db = getDB();
+  const { clause, params } = buildSessionWhere(options);
+  const sql = `SELECT COUNT(*) AS n FROM sessions ${clause}`;
+  const row = db.prepare(sql).get(...params) as { n: number } | undefined;
+  return row ? row.n : 0;
 }
 
 export function getAllFilePaths(): Set<string> {

@@ -8,7 +8,7 @@ import ora from 'ora';
 import type { AgentId } from '../lib/types.js';
 import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types.js';
 import { SESSION_AGENTS } from '../lib/session/types.js';
-import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter, type ScanProgress } from '../lib/session/discover.js';
+import { discoverSessions, countSessionsInScope, resolveSessionById, searchContentIndex, parseTimeFilter, type DiscoverOptions, type ScanProgress } from '../lib/session/discover.js';
 import { filterTeamSessions } from '../lib/session/team-filter.js';
 import { parseSession } from '../lib/session/parse.js';
 import { renderConversationMarkdown, renderSummary, renderSummaryHeader, computeSummaryStats, renderJson, filterEvents, parseRoleList, type FilterOptions } from '../lib/session/render.js';
@@ -173,30 +173,43 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
   const tracker = createScanProgressTracker(LOAD_VERBS, 'sessions', spinner);
 
   try {
-    let sessions = await discoverSessions({
+    // Team-origin filter is pushed down to SQL so the LIMIT applies AFTER it.
+    // Without this, a dev dir with heavy SDK spawn activity (Task subagents,
+    // `agents run`, team agents) can fill the top-N window entirely with
+    // hidden rows and make real CLI sessions appear to vanish.
+    const scope: DiscoverOptions = {
       agent,
       version,
-      all: pathFilter ? true : options.all,
+      all: pathFilter ? undefined : options.all,
       cwd: process.cwd(),
+      cwdPrefix: pathFilter,
       project: options.project,
-      limit,
       since,
       until: options.until,
+    };
+
+    let sessions = await discoverSessions({
+      ...scope,
+      limit,
+      excludeTeamOrigin: !options.teams,
       onProgress: tracker.onProgress,
     });
-
-    if (pathFilter) {
-      sessions = sessions.filter(s =>
-        typeof s.cwd === 'string' && isWithinProject(s.cwd, pathFilter!)
-      );
-    }
 
     tracker.stop();
     spinner?.stop();
 
-    // Filter out team-spawned sessions by default. Pass --teams to include them.
-    const { visible: visibleSessions, hiddenCount } = filterTeamSessions(sessions, !!options.teams);
+    // Version filter is pushed down to SQL via scope.version above; no
+    // post-filter needed. Defensive: the team-origin SQL filter covers the
+    // ~100% case, but classifyTeamSession also recognizes sessions with a
+    // meta.json in ~/.agents/teams/agents whose is_team_origin flag was
+    // never set (legacy rows). Keep the in-memory pass so those are still
+    // enriched/hidden.
+    const { visible: visibleSessions } = filterTeamSessions(sessions, !!options.teams);
     sessions = visibleSessions;
+
+    const hiddenCount = options.teams
+      ? 0
+      : countSessionsInScope({ ...scope, onlyTeamOrigin: true });
 
     // Smart ID routing: a bare query that resolves to one session renders
     // directly. If nothing matches in the scoped window and the query looks

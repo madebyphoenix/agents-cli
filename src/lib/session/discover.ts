@@ -18,8 +18,10 @@ import {
   syncLabels,
   upsertSessionsBatch,
   querySessions,
+  countSessions,
   ftsSearch,
   type ScanStamp,
+  type QueryOptions,
 } from './db.js';
 
 const HOME = os.homedir();
@@ -36,11 +38,17 @@ export interface DiscoverOptions {
   project?: string;
   all?: boolean;
   cwd?: string;
+  /** Match any session whose cwd equals this or is a descendant. Overrides `cwd`. */
+  cwdPrefix?: string;
   limit?: number;
   /** Filter sessions newer than this (ISO timestamp or "7d", "30d", "90d") */
   since?: string;
   /** Filter sessions older than this (ISO timestamp) */
   until?: string;
+  /** Drop team-spawned sessions at the DB level, before LIMIT. */
+  excludeTeamOrigin?: boolean;
+  /** Keep only team-spawned sessions (used for hidden-count queries). */
+  onlyTeamOrigin?: boolean;
   /** Called as each agent makes parsing progress. Totals count only files that need re-parsing (cache misses). */
   onProgress?: (progress: ScanProgress) => void;
 }
@@ -112,28 +120,50 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
     }),
   );
 
+  const sessions = querySessions(buildQueryOptions(options, agents, { includeLimit: true }));
+  return sessions;
+}
+
+/**
+ * Count sessions in scope without running an incremental scan. Assumes the DB
+ * is already fresh (typically true because `discoverSessions` ran first this
+ * turn). Uses the exact same filter shape as the discover query.
+ */
+export function countSessionsInScope(options: DiscoverOptions): number {
+  const agents = options.agent ? [options.agent] : SESSION_AGENTS;
+  return countSessions(buildQueryOptions(options, agents, { includeLimit: false }));
+}
+
+function buildQueryOptions(
+  options: DiscoverOptions | undefined,
+  agents: SessionAgentId[],
+  opts: { includeLimit: boolean },
+): QueryOptions {
   const projectQuery = options?.project?.trim();
   const sinceMs = options?.since ? parseTimeFilter(options.since) : undefined;
   const untilMs = options?.until ? new Date(options.until).getTime() : undefined;
 
-  // If no explicit --all or --project, we limit to the current cwd.
   let cwdFilter: string | undefined;
-  if (!options?.all && !projectQuery) {
+  let cwdPrefixFilter: string | undefined;
+  if (options?.cwdPrefix) {
+    cwdPrefixFilter = normalizeCwd(options.cwdPrefix);
+  } else if (!options?.all && !projectQuery) {
     cwdFilter = normalizeCwd(options?.cwd || process.cwd());
   }
 
-  const sessions = querySessions({
+  return {
     agent: options?.agent,
     agents: options?.agent ? undefined : agents,
     version: options?.version,
     cwd: cwdFilter,
+    cwdPrefix: cwdPrefixFilter,
     project: projectQuery,
     sinceMs,
     untilMs: Number.isFinite(untilMs as number) ? untilMs : undefined,
-    limit: options?.limit ?? 50,
-  });
-
-  return sessions;
+    limit: opts.includeLimit ? (options?.limit ?? 50) : undefined,
+    excludeTeamOrigin: options?.excludeTeamOrigin,
+    onlyTeamOrigin: options?.onlyTeamOrigin,
+  };
 }
 
 function normalizeCwd(cwd?: string): string {
