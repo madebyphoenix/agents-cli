@@ -26,6 +26,7 @@ const VERSION = packageJson.version;
 import { registerPullCommand } from './commands/pull.js';
 import { registerPushCommand } from './commands/push.js';
 import { registerForkCommand } from './commands/fork.js';
+import { registerInitCommand, runInit } from './commands/init.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerViewCommand } from './commands/view.js';
 import { registerCommandsCommands } from './commands/commands.js';
@@ -69,10 +70,10 @@ Install, configure, and sync AI coding agents from one place.
 Works with Claude, Codex, Gemini, Cursor, OpenCode, and OpenClaw.
 
 Quick start:
-  agents add claude@latest        Install an agent CLI
-  agents use claude@2.1.79        Switch to a specific version
+  agents init                     First-time setup (interactive)
   agents view                     See what's installed
-  agents pull gh:you/.agents      Set up all agents from a shared config repo
+  agents run <agent> "prompt"     Run an agent non-interactively
+  agents sessions                 Browse past sessions across all agents
 
 Agent versions:
   add <agent>[@version]           Install an agent CLI (e.g. agents add codex)
@@ -403,6 +404,7 @@ program
 registerPullCommand(program);
 registerPushCommand(program);
 registerForkCommand(program);
+registerInitCommand(program);
 
 applyGlobalHelpConventions(program);
 
@@ -459,5 +461,26 @@ program.on('command:*', (operands) => {
 
 // Run update check on EVERY invocation before parsing
 await checkForUpdates();
+
+// First-run experience: no args + no config yet + TTY -> launch interactive init.
+// Skipped when stdin/stdout isn't a terminal (CI, pipes) or when user passes any args.
+const passedArgs = process.argv.slice(2);
+const metaFilePath = path.join(os.homedir(), '.agents', 'agents.yaml');
+const firstRun =
+  passedArgs.length === 0 &&
+  !fs.existsSync(metaFilePath) &&
+  process.stdin.isTTY &&
+  process.stdout.isTTY;
+
+if (firstRun) {
+  try {
+    await runInit(program);
+  } catch (err) {
+    if (!(err instanceof Error && err.name === 'ExitPromptError')) {
+      throw err;
+    }
+  }
+  process.exit(0);
+}
 
 await program.parseAsync();

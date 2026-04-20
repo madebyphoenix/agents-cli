@@ -41,26 +41,23 @@ interface PickerConfig {
 
 const previewCache = new Map<string, string>();
 
-function buildPreview(session: SessionMeta): string {
+export function buildPreview(session: SessionMeta): string {
   const cached = previewCache.get(session.id);
   if (cached) return cached;
 
-  let body: string;
+  let events: SessionEvent[] = [];
+  let parseError: string | undefined;
   try {
-    const events = parseSession(session.filePath, session.agent);
-    body = formatCompactPreview(events);
+    events = parseSession(session.filePath, session.agent);
   } catch (err: any) {
-    body = chalk.red(`Failed to parse session: ${err.message}`);
+    parseError = err.message;
   }
 
-  const agentLabel = displayAgent(session.agent) + (session.version ? ` v${session.version}` : '');
-  const headerParts = ['preview', agentLabel];
-  if (session.account) headerParts.push(session.account);
-  headerParts.push(session.id);
-  const header = chalk.gray(headerParts.join(' · '));
-
-  const stats = formatStatsRow(session);
-  const output = [header, body, stats].filter(Boolean).join('\n');
+  const header = formatHeader(session, events);
+  const body = parseError
+    ? '  ' + chalk.red(`Failed to parse session: ${parseError}`)
+    : formatCompactPreview(events, session);
+  const output = [header, '', body].filter(Boolean).join('\n');
   previewCache.set(session.id, output);
   return output;
 }
@@ -69,17 +66,84 @@ function displayAgent(agent: string): string {
   return agent.charAt(0).toUpperCase() + agent.slice(1);
 }
 
-function formatStatsRow(session: SessionMeta): string {
-  const parts: string[] = [];
-  if (session.messageCount !== undefined) {
-    parts.push(`${session.messageCount} msg${session.messageCount === 1 ? '' : 's'}`);
+const DOT = chalk.gray(' · ');
+
+function formatHeader(session: SessionMeta, events: SessionEvent[]): string {
+  const model = extractModel(events);
+  const { startedAgo, duration } = extractTiming(events);
+  const totalMessages = session.messageCount ?? countMessages(events);
+  const totalTokens = session.tokenCount;
+
+  // Line 1: Agent v version · model · account
+  const line1: string[] = [];
+  line1.push(chalk.gray(`${displayAgent(session.agent)}${session.version ? ` v${session.version}` : ''}`));
+  if (model) line1.push(chalk.bold.white(model));
+  if (session.account) line1.push(chalk.gray(session.account));
+
+  // Line 2: cwd · branch · started X ago · lasted Y
+  const line2: string[] = [];
+  if (session.cwd) {
+    const label = relativeToCwd(session.cwd);
+    line2.push(chalk.bold.white(linkPath(session.cwd, label)));
   }
-  if (session.tokenCount !== undefined) {
-    parts.push(`${formatTokens(session.tokenCount)} tokens`);
+  if (session.gitBranch) line2.push(chalk.cyan(session.gitBranch));
+  if (startedAgo) line2.push(chalk.gray('started ') + chalk.white(startedAgo + ' ago'));
+  if (duration) line2.push(chalk.gray('lasted ') + chalk.white(duration));
+
+  // Line 3: N msgs · T tokens · id
+  const line3: string[] = [];
+  if (totalMessages !== undefined) {
+    line3.push(chalk.bold.white(String(totalMessages)) + chalk.gray(` msg${totalMessages === 1 ? '' : 's'}`));
   }
-  if (session.gitBranch) parts.push(session.gitBranch);
-  if (parts.length === 0) return '';
-  return '  ' + chalk.gray(parts.join(' · '));
+  if (totalTokens !== undefined) {
+    line3.push(chalk.bold.white(formatTokens(totalTokens)) + chalk.gray(' tokens'));
+  }
+  const idLabel = chalk.gray(`id ${session.id}`);
+  line3.push(session.filePath ? linkPath(session.filePath, idLabel) : idLabel);
+
+  return [
+    line1.join(DOT),
+    line2.join(DOT),
+    line3.join(DOT),
+  ].join('\n');
+}
+
+function extractModel(events: SessionEvent[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const m = events[i].model;
+    if (events[i].type === 'usage' && m) return m;
+  }
+  for (const e of events) {
+    if (e.type === 'init' && e.model) return e.model;
+  }
+  return undefined;
+}
+
+function extractTiming(events: SessionEvent[]): { startedAgo?: string; duration?: string } {
+  if (events.length === 0) return {};
+  const firstMs = Date.parse(events[0].timestamp);
+  const lastMs = Date.parse(events[events.length - 1].timestamp);
+  if (Number.isNaN(firstMs)) return {};
+  const ago = humanDuration(Math.max(0, Date.now() - firstMs));
+  const dur = Number.isNaN(lastMs) ? undefined : humanDuration(Math.max(0, lastMs - firstMs));
+  return { startedAgo: ago, duration: dur };
+}
+
+function humanDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  if (h < 24) return mm ? `${h}h ${mm}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  const hh = h % 24;
+  return hh ? `${d}d ${hh}h` : `${d}d`;
+}
+
+function countMessages(events: SessionEvent[]): number {
+  return events.filter(e => e.type === 'message').length;
 }
 
 function formatTokens(n: number): string {
@@ -111,21 +175,9 @@ function stripTags(text: string): string {
   return cleaned;
 }
 
-/** Clean a message for preview display — strip tags, noise lines, markdown cruft. */
-function cleanForPreview(text: string): string {
-  let cleaned = stripTags(text);
-  // Strip markdown headers
-  cleaned = cleaned.replace(/^#{1,6}\s+/gm, '');
-  // Strip code fence markers
-  cleaned = cleaned.replace(/^```\w*$/gm, '');
-  // Strip bold/italic markers
-  cleaned = cleaned.replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1');
-  // Collapse whitespace
-  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
-  return cleaned.trim();
-}
+const LAST_RESPONSE_MAX_LINES = 15;
 
-function formatCompactPreview(events: ReturnType<typeof parseSession>): string {
+function formatCompactPreview(events: ReturnType<typeof parseSession>, session: SessionMeta): string {
   let firstUser = '';
   let lastAssistant = '';
   const filesModified = new Set<string>();
@@ -136,7 +188,6 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>): string {
   for (const event of events) {
     if (event.type === 'message') {
       if (event.role === 'user' && !firstUser && event.content) {
-        // Skip system/environment messages entirely
         if (!SYSTEM_MESSAGE_PATTERNS.some(p => p.test(event.content!))) {
           firstUser = event.content;
         }
@@ -152,7 +203,6 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>): string {
       } else if (['Read', 'read_file', 'view_file', 'cat_file', 'get_file'].includes(tool) && p) {
         filesRead.add(p);
       }
-      // Detect plan files
       if (!planFile && p && /\/plans\/[^/]+\.md$/.test(p)) {
         planFile = p;
       }
@@ -161,11 +211,12 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>): string {
   }
 
   const lines: string[] = [];
+  const termWidth = process.stdout.columns || 80;
 
   if (firstUser) {
     const cleaned = cleanSessionPrompt(firstUser);
     const first = (cleaned || firstUser).split('\n').find(l => l.trim()) || '';
-    lines.push(chalk.cyan('Prompt: ') + truncate(first.trim(), 120));
+    lines.push(chalk.cyan('Prompt: ') + chalk.white(truncate(first.trim(), termWidth - 12)));
   }
 
   const activity: string[] = [];
@@ -178,20 +229,15 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>): string {
 
   if (planFile) {
     const basename = planFile.split('/').pop() || planFile;
-    lines.push(chalk.cyan('Plan: ') + chalk.white(basename));
+    lines.push(chalk.cyan('Plan: ') + chalk.white(linkPath(planFile, basename)));
   }
 
   if (lastAssistant) {
-    const cleaned = cleanForPreview(lastAssistant);
-    const meaningful = cleaned.split('\n')
-      .map(l => l.trim())
-      .filter(Boolean)
-      .slice(0, 5);
-    if (meaningful.length > 0) {
+    const rendered = renderLastResponse(lastAssistant);
+    if (rendered.length > 0) {
+      lines.push('');
       lines.push(chalk.cyan('Last response:'));
-      for (const line of meaningful) {
-        lines.push(chalk.white('  ' + truncate(line, 100)));
-      }
+      for (const l of rendered) lines.push('  ' + l);
     }
   }
 
@@ -200,6 +246,29 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>): string {
   }
 
   return lines.map(l => '  ' + l).join('\n');
+}
+
+function renderLastResponse(content: string): string[] {
+  const cleaned = stripTags(content).trim();
+  if (!cleaned) return [];
+
+  let rendered: string;
+  try {
+    rendered = renderMarkdown(cleaned);
+  } catch {
+    rendered = cleaned;
+  }
+
+  const all = rendered.replace(/\s+$/, '').split('\n');
+  // Drop leading/trailing empty lines
+  while (all.length && !all[0].trim()) all.shift();
+  while (all.length && !all[all.length - 1].trim()) all.pop();
+
+  if (all.length <= LAST_RESPONSE_MAX_LINES) return all;
+  const shown = all.slice(0, LAST_RESPONSE_MAX_LINES);
+  const more = all.length - LAST_RESPONSE_MAX_LINES;
+  shown.push(chalk.gray(`… (${more} more line${more === 1 ? '' : 's'})`));
+  return shown;
 }
 
 function truncate(s: string, max: number): string {
