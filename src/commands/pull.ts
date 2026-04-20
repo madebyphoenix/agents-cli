@@ -23,7 +23,7 @@ import {
   updateMeta,
 } from '../lib/state.js';
 import type { AgentId } from '../lib/types.js';
-import { DEFAULT_SYSTEM_REPO } from '../lib/types.js';
+import { DEFAULT_SYSTEM_REPO, LEGACY_SYSTEM_REPO, systemRepoSlug } from '../lib/types.js';
 import {
   isGitRepo,
   cloneIntoExisting,
@@ -33,7 +33,10 @@ import {
   getGitHubUsername,
   checkGitHubRepoExists,
   hasUpstreamRemote,
+  getUpstreamUrl,
 } from '../lib/git.js';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   installVersion,
   listInstalledVersions,
@@ -105,6 +108,19 @@ export function registerPullCommand(program: Command): void {
           console.log(chalk.gray('\nIf you forked from the system repo, run: agents fork'));
           console.log(chalk.gray('This will set up the upstream remote automatically.'));
           return;
+        }
+
+        // Migration nudge: one-time notice if upstream still points at the legacy personal repo.
+        const legacySlug = systemRepoSlug(LEGACY_SYSTEM_REPO).toLowerCase();
+        const currentSlug = systemRepoSlug(DEFAULT_SYSTEM_REPO);
+        const nudgeMarker = path.join(agentsDir, '.migration-nudge-shown');
+        const upstreamUrl = await getUpstreamUrl(agentsDir);
+        if (upstreamUrl && upstreamUrl.toLowerCase().includes(legacySlug) && !fs.existsSync(nudgeMarker)) {
+          console.log(chalk.yellow(`\nYour upstream points at a personal repo (${legacySlug}).`));
+          console.log(chalk.yellow(`The curated upstream is now ${currentSlug}.`));
+          console.log(chalk.gray('To switch:'));
+          console.log(chalk.cyan(`  cd ~/.agents && git remote set-url upstream git@github.com:${currentSlug}.git\n`));
+          try { fs.writeFileSync(nudgeMarker, new Date().toISOString() + '\n'); } catch { /* best-effort */ }
         }
 
         const spinner = ora('Pulling from upstream...').start();

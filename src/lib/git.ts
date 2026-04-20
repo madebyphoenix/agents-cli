@@ -630,6 +630,20 @@ export async function hasUpstreamRemote(dir: string): Promise<boolean> {
 }
 
 /**
+ * Get the upstream remote fetch URL, or null if none configured.
+ */
+export async function getUpstreamUrl(dir: string): Promise<string | null> {
+  try {
+    const git = simpleGit(dir);
+    const remotes = await git.getRemotes(true);
+    const upstream = remotes.find(r => r.name === 'upstream');
+    return upstream?.refs?.fetch ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Add or update the upstream remote.
  */
 export async function setUpstreamRemote(dir: string, url: string): Promise<void> {

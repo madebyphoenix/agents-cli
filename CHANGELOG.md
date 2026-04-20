@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+**Default upstream moved to `phnx-labs/.agents`**
+
+- `DEFAULT_SYSTEM_REPO` now resolves to `gh:phnx-labs/.agents` — a curated, org-owned upstream. `agents pull` (no args) and `agents fork` target the new repo on fresh machines.
+- Existing users whose upstream still points at `muqsitnawaz/.agents` see a one-time nudge on `agents pull --upstream` with the command to switch. Nothing else breaks; legacy remotes continue to work.
+
 **Consolidate sessions command**
 
 - Removed `agents sessions list` and `agents sessions view` subcommands; `agents sessions` is now a single smart command
