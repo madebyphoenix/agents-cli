@@ -41,16 +41,25 @@ describe('unwrapCommand', () => {
     expect(unwrapCommand('cd /tmp && ls')).toBe('ls');
   });
 
-  it('unwraps bun run prefix', () => {
-    expect(unwrapCommand('bun run build')).toBe('build');
+  it('keeps bun run intact (two-level bucketKey handles it)', () => {
+    expect(unwrapCommand('bun run build')).toBe('bun run build');
   });
 
   it('unwraps npx prefix', () => {
     expect(unwrapCommand('npx tsc --noEmit')).toBe('tsc --noEmit');
   });
 
-  it('unwraps nested: ssh + sudo + bun run', () => {
-    expect(unwrapCommand('ssh host "sudo bun run build"')).toBe('build');
+  it('unwraps shell env prefix', () => {
+    expect(unwrapCommand('BENCH_MODE=full npx tsx bench/x.ts')).toBe('tsx bench/x.ts');
+    expect(unwrapCommand('FOO=bar BAR=baz cargo build')).toBe('cargo build');
+  });
+
+  it('unwraps ssh with env-prefixed inner command', () => {
+    expect(unwrapCommand('ssh host "PATH=/opt/bin:$PATH openclaw browser profiles"')).toBe('openclaw browser profiles');
+  });
+
+  it('unwraps nested: ssh + sudo', () => {
+    expect(unwrapCommand('ssh host "sudo tsc --noEmit"')).toBe('tsc --noEmit');
   });
 
   it('unwraps time prefix', () => {
@@ -514,17 +523,53 @@ describe('renderSummary', () => {
     expect(out).toContain('Bash');
   });
 
-  it('shows reasoning interleaved with tool clusters', () => {
+  it('renders a timeline with assistant narration and clustered tools', () => {
     const events: SessionEvent[] = [
-      makeEvent({ type: 'thinking', content: 'I need to read the file first. Then edit it.' }),
+      makeEvent({ type: 'message', role: 'user', content: 'Fix the bug' }),
+      makeEvent({ type: 'message', role: 'assistant', content: 'Let me read the file first. Then edit it.' }),
       makeEvent({ type: 'tool_use', tool: 'Read', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
       makeEvent({ type: 'tool_use', tool: 'Edit', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
     ];
     const out = renderSummary(events, '/project');
-    expect(out).toContain('Reasoning');
-    expect(out).toContain('I need to read the file first');
-    expect(out).toContain('ran:');
+    expect(out).toContain('Timeline');
+    expect(out).toContain('Let me read the file first.');
     expect(out).toContain('Read src/a.ts');
+    expect(out).toContain('Edit src/a.ts');
+  });
+
+  it('timeline flags failed tools with warning marker', () => {
+    const events: SessionEvent[] = [
+      makeEvent({ type: 'message', role: 'assistant', content: 'Running the build now.' }),
+      makeEvent({ type: 'tool_use', tool: 'Bash', args: { command: 'bun run build' }, command: 'bun run build' }),
+      makeEvent({ type: 'error', tool: 'Bash', content: 'tsc error on line 45' }),
+    ];
+    const out = renderSummary(events);
+    expect(out).toContain('Running the build now.');
+    expect(out).toContain('⚠');
+    expect(out).toContain('tsc error on line 45');
+  });
+
+  it('separates external edits (outside cwd) from in-project Modified', () => {
+    const events: SessionEvent[] = [
+      makeEvent({ type: 'tool_use', tool: 'Edit', args: { file_path: '/project/src/a.ts' }, path: '/project/src/a.ts' }),
+      makeEvent({ type: 'tool_use', tool: 'Edit', args: { file_path: '/tmp/scratch.md' }, path: '/tmp/scratch.md' }),
+    ];
+    const out = renderSummary(events, '/project');
+    expect(out).toContain('Modified');
+    expect(out).toContain('src/a.ts');
+    expect(out).toContain('External edits');
+    expect(out).toContain('/tmp/scratch.md');
+  });
+
+  it('surfaces TaskCreate descriptions in Plan section', () => {
+    const events: SessionEvent[] = [
+      makeEvent({ type: 'tool_use', tool: 'TaskCreate', args: { description: 'Build benchmark harness', prompt: '...' } }),
+      makeEvent({ type: 'tool_use', tool: 'TaskCreate', args: { description: 'Migrate to FTS5 index' } }),
+    ];
+    const out = renderSummary(events);
+    expect(out).toContain('Plan');
+    expect(out).toContain('Build benchmark harness');
+    expect(out).toContain('Migrate to FTS5 index');
   });
 
   it('uses cwd-relative paths in Modified section', () => {

@@ -47,9 +47,12 @@ export function unwrapCommand(cmd: string): string {
   if (ssh) return unwrapCommand(ssh[1]);
   const lead = cmd.match(/^(?:sudo|env\s+\S+=\S+|time)\s+(.+)/);
   if (lead) return unwrapCommand(lead[1]);
+  // Strip shell-style leading env assignments: `PATH=/x CMD ...`, `FOO=bar BAR=baz CMD ...`
+  const shellEnv = cmd.match(/^(?:[A-Z_][A-Z0-9_]*=\S+\s+)+(\S.*)$/);
+  if (shellEnv) return unwrapCommand(shellEnv[1]);
   const cd = cmd.match(/^cd\s+\S+\s*&&\s*(.+)/);
   if (cd) return unwrapCommand(cd[1]);
-  const npx = cmd.match(/^(?:npx|bun\s+run|bun\s+x)\s+(.+)/);
+  const npx = cmd.match(/^npx\s+(.+)/);
   if (npx) return unwrapCommand(npx[1]);
   return cmd;
 }
@@ -76,14 +79,15 @@ const CATEGORIES: Array<{
   match: (first: string) => boolean;
   signal: 'high' | 'mid' | 'low';
 }> = [
-  { name: 'Probes',     match: t => ['ls','cat','head','tail','wc','stat','file','which','tree','pwd'].includes(t), signal: 'low'  },
-  { name: 'Search',     match: t => ['grep','rg','ag','fd','find'].includes(t),                                      signal: 'low'  },
-  { name: 'Build/test', match: t => ['make','cargo','pytest','go','bun','npm','pnpm','yarn'].includes(t),            signal: 'high' },
-  { name: 'Install',    match: t => ['brew','pip','apt','apk'].includes(t),                                          signal: 'high' },
-  { name: 'VCS',        match: t => ['git','gh'].includes(t),                                                        signal: 'mid'  },
-  { name: 'HTTP',       match: t => ['curl','wget','rush','http'].includes(t),                                       signal: 'mid'  },
-  { name: 'Remote',     match: t => ['ssh','scp','rsync'].includes(t),                                               signal: 'mid'  },
-  { name: 'Wait',       match: t => ['sleep','wait'].includes(t),                                                    signal: 'low'  },
+  { name: 'Probes',     match: t => ['ls','cat','head','tail','wc','stat','file','which','tree','pwd'].includes(t),                          signal: 'low'  },
+  { name: 'Search',     match: t => ['grep','rg','ag','fd','find'].includes(t),                                                               signal: 'low'  },
+  { name: 'Build/test', match: t => ['make','cargo','pytest','go','bun','npm','pnpm','yarn','tsc','vitest','tsx','node','python','python3','jest'].includes(t), signal: 'high' },
+  { name: 'Install',    match: t => ['brew','pip','apt','apk'].includes(t),                                                                    signal: 'high' },
+  { name: 'VCS',        match: t => ['git','gh'].includes(t),                                                                                  signal: 'mid'  },
+  { name: 'HTTP',       match: t => ['curl','wget','rush','http'].includes(t),                                                                 signal: 'mid'  },
+  { name: 'Remote',     match: t => ['ssh','scp','rsync'].includes(t),                                                                         signal: 'mid'  },
+  { name: 'Shell',      match: t => ['rm','mv','cp','mkdir','touch','echo','printf','chmod','ln','awk','sed','tee','xargs','for'].includes(t), signal: 'low'  },
+  { name: 'Wait',       match: t => ['sleep','wait'].includes(t),                                                                              signal: 'low'  },
 ];
 
 const TWO_LEVEL_TOKENS = new Set([
@@ -106,7 +110,13 @@ export function bucketKey(cmd: string): string {
 }
 
 function categoryOf(cmd: string): { name: string; signal: 'high' | 'mid' | 'low' } | null {
-  const first = cmd.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+  const rawFirst = cmd.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+  // Remote wrappers: classify as Remote regardless of inner command.
+  if (['ssh', 'scp', 'rsync'].includes(rawFirst)) {
+    return CATEGORIES.find(c => c.name === 'Remote') ?? null;
+  }
+  const unwrapped = unwrapCommand(cmd);
+  const first = unwrapped.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
   return CATEGORIES.find(c => c.match(first)) ?? null;
 }
 
@@ -204,6 +214,18 @@ export function computeSummaryStats(events: SessionEvent[]): SessionStats {
     firstTs: firstTs === Infinity ? 0 : firstTs,
     lastTs: lastTs === -Infinity ? 0 : lastTs,
   };
+}
+
+/**
+ * Format a unix-ms timestamp as "HH:MM am/pm" in local time.
+ */
+export function formatClockTime(ms: number): string {
+  const d = new Date(ms);
+  let h = d.getHours();
+  const m = d.getMinutes();
+  const suffix = h >= 12 ? 'pm' : 'am';
+  h = h % 12 || 12;
+  return `${String(h).padStart(2, ' ')}:${String(m).padStart(2, '0')} ${suffix}`;
 }
 
 function shortenModel(model: string): string {
@@ -480,17 +502,19 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
   const attachments: Array<{ mediaType: string }> = [];
   let lastAssistantMessage = '';
 
-  // File paths (absolute) for grouping
+  // File paths (absolute) for grouping — split by whether they're inside cwd
   const filesModifiedAbs = new Set<string>();
   const filesReadAbs = new Set<string>();
+  const filesModifiedExternal = new Set<string>();
 
   // Commands with timestamps
   const cmdList: Array<{ cmd: string; ts: number }> = [];
 
-  // Reasoning + tool clusters
-  interface ThoughtCluster { thinking?: string; tools: string[] }
-  const clusters: ThoughtCluster[] = [];
-  let currentCluster: ThoughtCluster | null = null;
+  // Timeline: one entry per assistant text message, with tools/errors that followed
+  interface TimelineTool { summary: string; error?: string }
+  interface TimelineEntry { ts: number; text: string; tools: TimelineTool[] }
+  const timeline: TimelineEntry[] = [];
+  let currentEntry: TimelineEntry | null = null;
 
   // Plan items
   const todoItems: string[] = [];
@@ -502,21 +526,12 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
   // Errors
   const errors: Array<{ tool: string; cmd?: string; content?: string }> = [];
 
-  const flushCluster = (): void => {
-    if (currentCluster && (currentCluster.tools.length > 0 || currentCluster.thinking)) {
-      clusters.push(currentCluster);
-      currentCluster = null;
-    }
-  };
+  const isInsideCwd = (p: string): boolean => !!(cwd && p.startsWith(cwd + '/'));
 
   for (const event of events) {
     const ts = new Date(event.timestamp).getTime() || 0;
 
-    if (event.type === 'thinking') {
-      flushCluster();
-      currentCluster = { thinking: event.content || '', tools: [] };
-
-    } else if (event.type === 'tool_use') {
+    if (event.type === 'tool_use') {
       if (event._local) continue;
 
       const tool = event.tool || '';
@@ -526,7 +541,7 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
       if (['Read', 'read_file', 'view_file', 'cat_file', 'get_file'].includes(tool)) {
         if (p) filesReadAbs.add(p);
       } else if (['Write', 'Edit', 'write_file', 'edit_file', 'create_file', 'replace', 'patch'].includes(tool)) {
-        if (p) filesModifiedAbs.add(p);
+        if (p) (isInsideCwd(p) || !cwd ? filesModifiedAbs : filesModifiedExternal).add(p);
       }
 
       if (event.command) {
@@ -534,18 +549,22 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
         if (cmd) cmdList.push({ cmd, ts });
       }
 
-      // Collect plan items
+      // Plan items: TodoWrite items + TaskCreate descriptions (project's task tracker)
       if (tool === 'TodoWrite' && Array.isArray(args.todos)) {
         for (const item of args.todos) {
           const text = item.content || item.text || String(item);
           if (text && !todoItems.includes(text)) todoItems.push(text);
         }
       }
+      if (tool === 'TaskCreate' && (args.description || args.prompt)) {
+        const text = String(args.description || args.prompt || '').slice(0, 140);
+        if (text && !todoItems.includes(text)) todoItems.push(text);
+      }
       if (tool === 'ExitPlanMode') {
         exitPlanContent = args.result || args.plan || args.content || null;
       }
 
-      // Collect subagent spawns
+      // Subagent spawns
       if ((tool === 'Agent' || tool === 'Task') && (args.description || args.prompt)) {
         subagents.push({
           description: String(args.description || args.prompt || '').slice(0, 120),
@@ -553,8 +572,10 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
         });
       }
 
-      if (!currentCluster) currentCluster = { tools: [] };
-      currentCluster.tools.push(toolSummaryShort(event, cwd));
+      // Attach to current timeline entry
+      if (currentEntry) {
+        currentEntry.tools.push({ summary: toolSummaryShort(event, cwd) });
+      }
 
     } else if (event.type === 'error') {
       errors.push({
@@ -562,13 +583,15 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
         cmd: event.args?.command ? String(event.args.command).slice(0, 80) : undefined,
         content: event.content?.slice(0, 120),
       });
-      // Still add to current cluster
-      if (!currentCluster) currentCluster = { tools: [] };
+      // Attach to the last tool in the current entry (it's the one that failed)
+      if (currentEntry && currentEntry.tools.length > 0) {
+        const lastTool = currentEntry.tools[currentEntry.tools.length - 1];
+        lastTool.error = (event.content ?? event.tool ?? 'error').slice(0, 100);
+      }
 
     } else if (event.type === 'message') {
       if (event.role === 'user') {
-        // User message flushes current cluster (end of assistant turn)
-        flushCluster();
+        currentEntry = null;
         if (!firstUserMessage) {
           const content = event.content || '';
           if (!/^\s*<local-command-caveat>/i.test(content)) {
@@ -578,16 +601,19 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
         }
       } else if (event.role === 'assistant' && event.content) {
         lastAssistantMessage = event.content;
+        const firstSentence = event.content.split(/(?<=[.!?])\s+|\n/)[0]?.trim() || event.content.slice(0, 100);
+        currentEntry = { ts, text: firstSentence, tools: [] };
+        timeline.push(currentEntry);
       }
 
     } else if (event.type === 'attachment') {
       attachments.push({ mediaType: event.mediaType || 'image/png' });
     }
   }
-  flushCluster();
 
   // Dedupe: files in Modified should not appear in Read
   for (const p of filesModifiedAbs) filesReadAbs.delete(p);
+  for (const p of filesModifiedExternal) filesReadAbs.delete(p);
 
   // Build abs→rel mapping for linkPath
   const buildAbsMap = (absSet: Set<string>): Map<string, string> => {
@@ -653,17 +679,21 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
     lines.push('');
   }
 
-  // 4. Reasoning + actions (interleaved)
-  const meaningfulClusters = clusters.filter(c => c.thinking || c.tools.length > 0);
-  if (meaningfulClusters.length > 0) {
-    lines.push(chalk.bold('Reasoning'));
-    for (const cluster of meaningfulClusters) {
-      if (cluster.thinking) {
-        const firstSentence = cluster.thinking.split(/[.!?\n]/)[0]?.trim() ?? cluster.thinking.slice(0, 100);
-        lines.push('  · ' + chalk.italic(firstSentence.slice(0, 120)));
+  // 4. Timeline — assistant messages as narration, tools clustered under each
+  const meaningful = timeline.filter(e => e.text.length > 0 || e.tools.length > 0);
+  if (meaningful.length > 0) {
+    lines.push(chalk.bold('Timeline'));
+    for (const entry of meaningful) {
+      const when = entry.ts ? formatClockTime(entry.ts) : '        ';
+      lines.push('  ' + chalk.gray.italic(when) + '  ' + entry.text.slice(0, 140));
+      const MAX_TOOLS_PER_ENTRY = 8;
+      for (const t of entry.tools.slice(0, MAX_TOOLS_PER_ENTRY)) {
+        const marker = t.error ? chalk.red('⚠') : ' ';
+        const suffix = t.error ? chalk.gray(' — ' + t.error) : '';
+        lines.push('            ' + marker + ' ' + t.summary + suffix);
       }
-      if (cluster.tools.length > 0) {
-        lines.push('    ran: ' + cluster.tools.join(', '));
+      if (entry.tools.length > MAX_TOOLS_PER_ENTRY) {
+        lines.push(chalk.gray('              + ' + (entry.tools.length - MAX_TOOLS_PER_ENTRY) + ' more'));
       }
     }
     lines.push('');
@@ -674,6 +704,16 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
     lines.push(chalk.bold('Modified') + chalk.gray(` (${filesModifiedAbs.size})`));
     const groups = groupByParentDir(filesModifiedAbs, cwd);
     renderFileGroup(lines, groups, modifiedAbsMap);
+    lines.push('');
+  }
+
+  // 5b. External edits (files edited outside the project root — typically /tmp)
+  if (filesModifiedExternal.size > 0) {
+    const externalList = [...filesModifiedExternal].sort();
+    const home = process.env.HOME ?? '';
+    const display = externalList.slice(0, 3).map(p => home && p.startsWith(home) ? p.replace(home, '~') : p);
+    const more = externalList.length > 3 ? chalk.gray(` +${externalList.length - 3} more`) : '';
+    lines.push(chalk.gray(`External edits (${filesModifiedExternal.size}): ${display.join(', ')}${more}`));
     lines.push('');
   }
 
@@ -721,7 +761,7 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
     filesModifiedAbs.size === 0 &&
     filesReadAbs.size === 0 &&
     cmdList.length === 0 &&
-    clusters.length === 0
+    timeline.length === 0
   ) {
     lines.push(chalk.gray('No activity recorded in this session.'));
     lines.push('');

@@ -41,6 +41,8 @@ interface ViewOptions {
   transcript?: boolean;
   trace?: boolean;
   json?: boolean;
+  project?: string;
+  agent?: string;
 }
 
 interface ClaudeHistoryEntry {
@@ -306,38 +308,17 @@ async function listAction(query: string | undefined, options: ListOptions): Prom
 }
 
 function printSessionTable(sessions: SessionMeta[]): void {
-  console.log(
-    chalk.gray(
-      padRight('ID', 10) +
-      padRight('Account', 20) +
-      padRight('Agent', 18) +
-      padRight('Project', 16) +
-      padRight('When', 14) +
-      padRight('Msgs', 8) +
-      padRight('Tokens', 10) +
-      'Topic'
-    )
-  );
-
   for (const session of sessions) {
     const agentColor = colorAgent(session.agent);
     const when = formatRelativeTime(session.timestamp);
     const project = session.project || '-';
-    const account = session.account || '';
-    const agentLabel = session.version
-      ? `${session.agent}@${session.version}`
-      : session.agent;
-    const topic = (session as any).label ?? session.topic ?? '';
 
     console.log(
       chalk.white(padRight(session.shortId, 10)) +
-      chalk.gray(padRight(truncate(account, 18), 20)) +
-      agentColor(padRight(truncate(agentLabel, 16), 18)) +
+      agentColor(padRight(truncate(session.agent, 9), 10)) +
       chalk.cyan(padRight(truncate(project, 14), 16)) +
-      chalk.gray(padRight(when, 14)) +
-      chalk.gray(padRight(formatCompactMetric(session.messageCount), 8)) +
-      chalk.gray(padRight(formatCompactMetric(session.tokenCount), 10)) +
-      chalk.white(truncate(topic, 40))
+      renderTopicCell((session as any).label, session.topic, '', 50, 52) +
+      chalk.gray(when)
     );
   }
 
@@ -390,53 +371,79 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
     console.log(chalk.gray('─'.repeat(60)));
 
     process.stdout.write(renderSummary(events, session.cwd));
-  } else {
-    console.log(
-      agentColor(session.agent) +
-      (session.version ? chalk.yellow(` ${session.version}`) : '') +
-      (session.project ? chalk.cyan(` ${session.project}`) : '') +
-      chalk.gray(` ${formatRelativeTime(session.timestamp)}`) +
-      (session.account ? chalk.gray(` (${session.account})`) : '')
-    );
-    console.log(chalk.gray('─'.repeat(60)));
-
-    let output: string;
-    switch (mode) {
-      case 'transcript': output = renderTranscript(events); break;
-      case 'trace': output = renderMarkdown(renderTrace(events)); break;
-      case 'json': output = renderJson(events); break;
-      default: output = '';
-    }
-    process.stdout.write(output);
+    return;
   }
+
+  console.log(
+    agentColor(session.agent) +
+    (session.version ? chalk.yellow(` ${session.version}`) : '') +
+    (session.project ? chalk.cyan(` ${session.project}`) : '') +
+    chalk.gray(` ${formatRelativeTime(session.timestamp)}`) +
+    (session.account ? chalk.gray(` (${session.account})`) : '')
+  );
+  console.log(chalk.gray('─'.repeat(60)));
+
+  let output: string;
+  switch (mode) {
+    case 'transcript': output = renderTranscript(events); break;
+    case 'trace': output = renderMarkdown(renderTrace(events)); break;
+    case 'json': output = renderJson(events); break;
+    default: output = '';
+  }
+  process.stdout.write(output);
 }
 
-function highlightTerms(text: string, query: string): string {
-  if (!query.trim()) return chalk.white(text);
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  for (const term of terms) {
-    const idx = text.toLowerCase().indexOf(term);
-    if (idx !== -1) {
-      const before = text.slice(0, idx);
-      const match = text.slice(idx, idx + term.length);
-      const after = text.slice(idx + term.length);
-      return chalk.white(before) + chalk.bold.white(match) + chalk.white(after);
+function renderTopicCell(
+  label: string | undefined | null,
+  topic: string | undefined | null,
+  query: string,
+  visibleWidth: number,
+  paddedWidth: number,
+): string {
+  const lbl = (label ?? '').trim();
+  const tpc = (topic ?? '').trim();
+  const sep = ' · ';
+  const raw = lbl && tpc ? `${lbl}${sep}${tpc}` : (lbl || tpc);
+  const visible = truncate(raw, visibleWidth);
+  const padding = ' '.repeat(Math.max(0, paddedWidth - visible.length));
+  const labelEnd = lbl ? Math.min(lbl.length, visible.length) : 0;
+
+  let matchStart = -1, matchEnd = -1;
+  const q = query.trim().toLowerCase();
+  if (q) {
+    const lower = visible.toLowerCase();
+    for (const term of q.split(/\s+/).filter(Boolean)) {
+      const idx = lower.indexOf(term);
+      if (idx !== -1) { matchStart = idx; matchEnd = idx + term.length; break; }
     }
   }
-  return chalk.white(text);
+
+  const cuts = new Set<number>([0, labelEnd, visible.length]);
+  if (matchStart >= 0) { cuts.add(matchStart); cuts.add(matchEnd); }
+  const boundaries = [...cuts].sort((a, b) => a - b);
+
+  let out = '';
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const s = boundaries[i], e = boundaries[i + 1];
+    if (s >= e) continue;
+    const text = visible.slice(s, e);
+    const isLabel = s < labelEnd;
+    const isMatch = matchStart >= 0 && s >= matchStart && e <= matchEnd;
+    out += (isMatch || isLabel) ? chalk.bold.white(text) : chalk.white(text);
+  }
+  return out + padding;
 }
 
 function formatPickerLabel(s: SessionMeta, query: string): string {
   const agentColor = colorAgent(s.agent);
   const when = formatRelativeTime(s.timestamp);
   const project = s.project || '-';
-  const displayText = padRight(truncate((s as any).label ?? s.topic ?? '', 50), 52);
 
   return (
     chalk.white(padRight(s.shortId, 10)) +
     agentColor(padRight(truncate(s.agent, 9), 10)) +
     chalk.cyan(padRight(truncate(project, 14), 16)) +
-    highlightTerms(displayText, query) +
+    renderTopicCell((s as any).label, s.topic, query, 50, 52) +
     chalk.gray(when)
   );
 }
@@ -628,6 +635,37 @@ function scoreSessionQuery(session: SessionMeta, terms: string[]): number {
   return score;
 }
 
+/**
+ * Narrow a session list by --project and --agent before search resolution.
+ * Without this, a query like "scoped search" could match sessions in BOTH
+ * the project you specified AND elsewhere, producing an ambiguity error
+ * even though the user already pointed at the correct scope.
+ */
+function applyViewFilters(sessions: SessionMeta[], options: ViewOptions): SessionMeta[] {
+  let filtered = sessions;
+
+  if (options.project) {
+    const projectQuery = options.project.toLowerCase();
+    filtered = filtered.filter((s) => {
+      const project = (s.project || '').toLowerCase();
+      const cwd = (s.cwd || '').toLowerCase();
+      return project.includes(projectQuery) || cwd.includes(projectQuery);
+    });
+  }
+
+  if (options.agent) {
+    // Accept "claude" or "claude@2.1.112". Version suffix narrows further.
+    const [wantAgent, wantVersion] = options.agent.split('@');
+    filtered = filtered.filter((s) => {
+      if (s.agent !== wantAgent) return false;
+      if (wantVersion && s.version !== wantVersion) return false;
+      return true;
+    });
+  }
+
+  return filtered;
+}
+
 async function viewAction(idQuery: string, options: ViewOptions): Promise<void> {
   const mode = resolveViewMode(options);
 
@@ -635,13 +673,18 @@ async function viewAction(idQuery: string, options: ViewOptions): Promise<void> 
   const tracker = createScanProgressTracker(FIND_VERBS, 'session', spinner);
 
   try {
-    const allSessions = await discoverSessions({
+    const discovered = await discoverSessions({
       all: true,
       cwd: process.cwd(),
       limit: 5000,
       onProgress: tracker.onProgress,
     });
     tracker.stop();
+
+    // Apply --project / --agent narrowing BEFORE any query resolution so an
+    // ambiguous-looking search ("scoped search") collapses to the single
+    // candidate inside the user's declared project / agent scope.
+    const allSessions = applyViewFilters(discovered, options);
     let session: SessionMeta | undefined;
 
     const matches = resolveSessionById(allSessions, idQuery);
@@ -750,8 +793,18 @@ export function registerSessionsCommands(program: Command): void {
     .option('--transcript', 'Show full conversation transcript')
     .option('--trace', 'Show reasoning trace as markdown')
     .option('--json', 'Output normalized events as JSON')
-    .action(async (id: string, options: ViewOptions) => {
-      await viewAction(id, options);
+    .option('-a, --agent <agent>', 'Narrow the search to one agent, e.g. claude or claude@2.1.112')
+    .option('--project <name>', 'Narrow the search to sessions in a specific project directory')
+    .action(async (id: string, options: ViewOptions, command) => {
+      // When the same flag is declared on both the parent (`sessions`) and
+      // the child (`view`), Commander routes it to the first one that
+      // declared it — the parent. Merge parent opts so --project / --agent /
+      // --transcript etc. reach viewAction regardless of which level parsed
+      // them.
+      const parentOptions = typeof command?.parent?.opts === 'function'
+        ? command.parent.opts()
+        : {};
+      await viewAction(id, { ...parentOptions, ...options });
     });
 }
 
@@ -967,25 +1020,6 @@ function sessionDistance(session: SessionMeta, historyEntry: ClaudeHistoryEntry)
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
-function padRight(s: string, width: number): string {
-  return s.length >= width ? s + ' ' : s + ' '.repeat(width - s.length);
-}
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max - 1) + '.' : s;
-}
-
-function formatCompactMetric(value?: number): string {
-  if (value === undefined) return '-';
-  if (value < 1000) return String(value);
-  if (value < 1_000_000) {
-    const compact = value / 1000;
-    return compact >= 100 ? `${Math.round(compact)}k` : `${compact.toFixed(1).replace(/\.0$/, '')}k`;
-  }
-  const compact = value / 1_000_000;
-  return compact >= 100 ? `${Math.round(compact)}m` : `${compact.toFixed(1).replace(/\.0$/, '')}m`;
-}
-
 function formatAbsoluteTime(isoTimestamp: string): string {
   const d = new Date(isoTimestamp);
   if (isNaN(d.getTime())) return isoTimestamp;
@@ -993,6 +1027,14 @@ function formatAbsoluteTime(isoTimestamp: string): string {
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   return `${months[d.getMonth()]} ${d.getDate()} ${hh}:${mm}`;
+}
+
+function padRight(s: string, width: number): string {
+  return s.length >= width ? s + ' ' : s + ' '.repeat(width - s.length);
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + '.' : s;
 }
 
 function formatRelativeTime(isoTimestamp: string): string {
