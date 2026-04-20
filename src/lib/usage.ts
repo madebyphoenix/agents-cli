@@ -491,7 +491,7 @@ function normalizeClaudeWindow(
   };
 }
 
-async function loadClaudeOauth(home?: string): Promise<ClaudeOauthCredentials | null> {
+export async function loadClaudeOauth(home?: string): Promise<ClaudeOauthCredentials | null> {
   if (process.platform !== 'darwin') {
     return null;
   }
@@ -614,15 +614,20 @@ function deserializeClaudeUsageSnapshot(
 ): UsageSnapshot | null {
   const capturedAt = parseDateValue(snapshot.capturedAt);
   const windows = snapshot.windows
-    .map((window) => ({
-      key: window.key,
-      label: window.label,
-      shortLabel: window.shortLabel,
-      usedPercent: window.usedPercent,
-      resetsAt: parseDateValue(window.resetsAt),
-      windowMinutes: window.windowMinutes,
-    }))
-    .filter((window) => isCachedUsageWindowFresh(window, capturedAt, now));
+    .map((window) => {
+      const w = {
+        key: window.key,
+        label: window.label,
+        shortLabel: window.shortLabel,
+        usedPercent: window.usedPercent,
+        resetsAt: parseDateValue(window.resetsAt),
+        windowMinutes: window.windowMinutes,
+      };
+      if (!isCachedUsageWindowFresh(w, capturedAt, now)) {
+        w.usedPercent = 0;
+      }
+      return w;
+    });
 
   if (windows.length === 0) {
     return null;

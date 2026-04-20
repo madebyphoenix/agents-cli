@@ -9,6 +9,7 @@ import type { AgentConfig, AgentId } from './types.js';
 import { walkForFiles } from './session/discover.js';
 import { getVersionsDir, getShimsDir } from './state.js';
 import { resolveVersion, getVersionHomePath, getBinaryPath } from './versions.js';
+import { loadClaudeOauth } from './usage.js';
 
 export interface CliState {
   installed: boolean;
@@ -500,8 +501,15 @@ export async function getAccountInfo(
         const usageKey = buildIdentityKey(agentId, [['org', organizationId]]);
 
         let plan: string | null = null;
-        if (oa?.billingType === 'stripe_subscription') plan = 'Pro';
-        else if (oa?.billingType) plan = oa.billingType;
+        const keychainOauth = await loadClaudeOauth(home);
+        if (keychainOauth?.subscriptionType) {
+          plan = keychainOauth.subscriptionType.charAt(0).toUpperCase()
+            + keychainOauth.subscriptionType.slice(1);
+        } else if (oa?.billingType === 'stripe_subscription') {
+          plan = 'Pro';
+        } else if (oa?.billingType) {
+          plan = oa.billingType;
+        }
 
         let usageStatus: AccountInfo['usageStatus'] = null;
         const reason = data.cachedExtraUsageDisabledReason;
