@@ -254,6 +254,7 @@ When to use:
     .option('-a, --agents <list>', 'Targets: claude, codex@0.116.0, or gemini@default')
     .option('--names <list>', 'Permission set names from ~/.agents/permissions/ (comma-separated)')
     .option('--all', 'Apply to all installed versions instead of just defaults')
+    .option('--replace', 'Replace managed permission block instead of merging (drops rules no longer in the set)')
     .option('-y, --yes', 'Skip all prompts and confirmations')
     .addHelpText('after', `
 Examples:
@@ -268,6 +269,9 @@ Examples:
 
   # Apply to all installed versions non-interactively
   agents permissions add --names default --all --yes
+
+  # Replace (don't merge) — drop rules no longer in the central set
+  agents permissions add --names default --agents claude@default --replace --yes
 `)
     .action(async (source: string | undefined, options) => {
       try {
@@ -370,7 +374,7 @@ Examples:
             for (const [agentId, versions] of versionSelections) {
               for (const version of versions) {
                 const versionHome = getVersionHomePath(agentId, version);
-                const applyResult = applyPermissionsToVersion(agentId, installed.set, versionHome, true);
+                const applyResult = applyPermissionsToVersion(agentId, installed.set, versionHome, !options.replace);
                 if (applyResult.success) {
                   console.log(chalk.green(`  Applied ${setName} to ${agentLabel(agentId)}@${version}`));
                   recordVersionResources(agentId, version, 'permissions', [setName]);
@@ -531,7 +535,7 @@ Examples:
             for (const [agentId, versions] of versionSelections) {
               for (const version of versions) {
                 const versionHome = getVersionHomePath(agentId, version);
-                const applyResult = applyPermissionsToVersion(agentId, merged, versionHome, true);
+                const applyResult = applyPermissionsToVersion(agentId, merged, versionHome, !options.replace);
                 if (applyResult.success) {
                   console.log(chalk.green(`  Applied to ${agentLabel(agentId)}@${version}`));
                   recordVersionResources(agentId, version, 'permissions', [merged.name || 'default']);
@@ -647,7 +651,7 @@ Examples:
               for (const [agentId, versions] of versionSelections) {
                 for (const version of versions) {
                   const versionHome = getVersionHomePath(agentId, version);
-                  const applyResult = applyPermissionsToVersion(agentId, perm.set, versionHome, true);
+                  const applyResult = applyPermissionsToVersion(agentId, perm.set, versionHome, !options.replace);
                   if (applyResult.success) {
                     console.log(chalk.green(`  Applied ${perm.name} to ${agentLabel(agentId)}@${version}`));
                     recordVersionResources(agentId, version, 'permissions', [perm.name]);

@@ -722,6 +722,86 @@ describe('applyPermissionsToVersion', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('does not support permissions');
   });
+
+  it('merge=true keeps existing Claude rules not present in new set', () => {
+    const versionHome = join(testDir, 'claude-merge-keeps');
+    const claudeDir = join(versionHome, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+
+    writeFileSync(join(claudeDir, 'settings.json'), JSON.stringify({
+      permissions: {
+        allow: ['Bash(git push --force:*)'],
+        deny: [],
+      },
+    }, null, 2));
+
+    const narrowed: PermissionSet = {
+      name: 'test',
+      allow: ['Read(**)'],
+      deny: [],
+    };
+
+    applyPermissionsToVersion('claude', narrowed, versionHome, true);
+
+    const settings = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
+    expect(settings.permissions.allow).toContain('Bash(git push --force:*)');
+    expect(settings.permissions.allow).toContain('Read(**)');
+  });
+
+  it('merge=false drops Claude rules removed from the central set', () => {
+    const versionHome = join(testDir, 'claude-replace-drops');
+    const claudeDir = join(versionHome, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+
+    writeFileSync(join(claudeDir, 'settings.json'), JSON.stringify({
+      permissions: {
+        allow: ['Bash(git push --force:*)'],
+        deny: ['Bash(rm -rf *)'],
+      },
+      otherSetting: 'preserved',
+    }, null, 2));
+
+    const narrowed: PermissionSet = {
+      name: 'test',
+      allow: ['Read(**)'],
+      deny: [],
+    };
+
+    applyPermissionsToVersion('claude', narrowed, versionHome, false);
+
+    const settings = JSON.parse(readFileSync(join(claudeDir, 'settings.json'), 'utf-8'));
+    expect(settings.permissions.allow).not.toContain('Bash(git push --force:*)');
+    expect(settings.permissions.allow).toContain('Read(**)');
+    expect(settings.permissions.deny).not.toContain('Bash(rm -rf *)');
+    expect(settings.otherSetting).toBe('preserved');
+  });
+
+  it('merge=false drops OpenCode rules removed from the central set', () => {
+    const versionHome = join(testDir, 'opencode-replace-drops');
+    const opencodeDir = join(versionHome, '.opencode');
+    mkdirSync(opencodeDir, { recursive: true });
+
+    writeFileSync(join(opencodeDir, 'opencode.jsonc'), JSON.stringify({
+      permission: {
+        bash: {
+          'git push --force': 'allow',
+          'rm *': 'deny',
+        },
+      },
+    }, null, 2));
+
+    const narrowed: PermissionSet = {
+      name: 'test',
+      allow: ['Bash(npm *)'],
+      deny: [],
+    };
+
+    applyPermissionsToVersion('opencode', narrowed, versionHome, false);
+
+    const config = JSON.parse(readFileSync(join(opencodeDir, 'opencode.jsonc'), 'utf-8'));
+    expect(config.permission.bash['git push --force']).toBeUndefined();
+    expect(config.permission.bash['npm *']).toBe('allow');
+  });
 });
 
 describe('convertDenyToCodexRules', () => {
