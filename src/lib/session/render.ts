@@ -217,18 +217,6 @@ export function computeSummaryStats(events: SessionEvent[]): SessionStats {
   };
 }
 
-/**
- * Format a unix-ms timestamp as "HH:MM am/pm" in local time.
- */
-export function formatClockTime(ms: number): string {
-  const d = new Date(ms);
-  let h = d.getHours();
-  const m = d.getMinutes();
-  const suffix = h >= 12 ? 'pm' : 'am';
-  h = h % 12 || 12;
-  return `${String(h).padStart(2, ' ')}:${String(m).padStart(2, '0')} ${suffix}`;
-}
-
 function shortenModel(model: string): string {
   return model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
 }
@@ -292,47 +280,6 @@ function extractReferences(text: string): string[] {
   for (const m of text.matchAll(/(?:^|\s)(\/[\w/.-]{3,})/gm)) refs.add(m[1]);
   for (const m of text.matchAll(/~\/[\w/.-]+/g)) refs.add(m[0]);
   return Array.from(refs);
-}
-
-// ── Tool summary (short form for reasoning section) ───────────────────────────
-
-function toolSummaryShort(event: SessionEvent, cwd?: string, verbose = false): string {
-  const tool = event.tool || '';
-  const args = event.args || {};
-  const p = event.path || args.file_path || args.path || '';
-  const cmdWidth = verbose ? 180 : 50;
-  const patternWidth = verbose ? 80 : 30;
-  const descWidth = verbose ? 120 : 50;
-
-  switch (tool) {
-    case 'Read':
-    case 'Write':
-    case 'Edit': {
-      const label = p ? relativeToCwd(p, cwd) : '';
-      return label ? `${tool} ${label}` : tool;
-    }
-    case 'Bash': {
-      const cmd = String(args.command || '').replace(/\n/g, ' ').trim();
-      return cmd ? `Bash ${cmd.slice(0, cmdWidth)}${cmd.length > cmdWidth ? '…' : ''}` : 'Bash';
-    }
-    case 'Grep':
-      return `Grep "${String(args.pattern || '').slice(0, patternWidth)}"`;
-    case 'Glob':
-      return `Glob ${args.pattern || ''}`;
-    case 'Agent':
-    case 'Task':
-      return `${tool}: ${String(args.description || args.prompt || '').slice(0, descWidth)}`;
-    case 'TodoWrite':
-      return 'TodoWrite';
-    case 'ExitPlanMode':
-      return 'ExitPlanMode';
-    default: {
-      for (const k of ['file_path', 'path', 'pattern', 'command', 'description']) {
-        if (args[k]) return `${tool}: ${String(args[k]).slice(0, descWidth)}`;
-      }
-      return tool;
-    }
-  }
 }
 
 // ── Command section renderer ──────────────────────────────────────────────────
@@ -667,62 +614,16 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
     lines.push('');
   }
 
-  // 4. Timeline — shown only in timeline mode.
-  if (timelineMode) {
-    const meaningful = timeline.filter(e => {
-      // Skip tool-less entries where the narration is a trivial ack ("Done.", "Gone.")
-      const isMicroNarration = e.text.trim().length < 20 && e.tools.length === 0;
-      return (e.text.length > 0 || e.tools.length > 0) && !isMicroNarration;
-    });
-    if (meaningful.length > 0) {
-      lines.push(chalk.bold('Timeline'));
-      for (const entry of meaningful) {
-        const when = entry.ts ? formatClockTime(entry.ts) : '        ';
-        lines.push('  ' + chalk.gray.italic(when) + '  ' + entry.text.slice(0, 160));
-        // Collapse consecutive same-summary tools into "... × N"
-        const collapsed: Array<{ summary: string; error?: string; count: number }> = [];
-        for (const t of entry.tools) {
-          const last = collapsed[collapsed.length - 1];
-          if (last && last.summary === t.summary && !last.error && !t.error) {
-            last.count++;
-          } else {
-            collapsed.push({ summary: t.summary, error: t.error, count: 1 });
-          }
-        }
-        const MAX_TOOLS = 10;
-        const head = collapsed.slice(0, MAX_TOOLS - 1);
-        const hidden = collapsed.length > MAX_TOOLS ? collapsed.length - (MAX_TOOLS - 1) - 1 : 0;
-        const tail = hidden > 0 ? collapsed.slice(-1) : [];
-        for (const t of head) {
-          const marker = t.error ? chalk.red('⚠') : ' ';
-          const countSfx = t.count > 1 ? chalk.gray(` × ${t.count}`) : '';
-          const errSfx = t.error ? chalk.gray(' — ' + t.error) : '';
-          lines.push('            ' + marker + ' ' + t.summary + countSfx + errSfx);
-        }
-        if (hidden > 0) {
-          lines.push(chalk.gray(`              … ${hidden} more`));
-          for (const t of tail) {
-            const marker = t.error ? chalk.red('⚠') : ' ';
-            const countSfx = t.count > 1 ? chalk.gray(` × ${t.count}`) : '';
-            const errSfx = t.error ? chalk.gray(' — ' + t.error) : '';
-            lines.push('            ' + marker + ' ' + t.summary + countSfx + errSfx);
-          }
-        }
-      }
-      lines.push('');
-    }
-  }
-
-  // 5. Modified files (summary mode only — timeline already shows each edit inline)
-  if (!timelineMode && filesModifiedAbs.size > 0) {
+  // 4. Modified files
+  if (filesModifiedAbs.size > 0) {
     lines.push(chalk.bold('Modified') + chalk.gray(` (${filesModifiedAbs.size})`));
     const groups = groupByParentDir(filesModifiedAbs, cwd);
     renderFileGroup(lines, groups, modifiedAbsMap);
     lines.push('');
   }
 
-  // 5b. External edits (files edited outside the project root — typically /tmp)
-  if (!timelineMode && filesModifiedExternal.size > 0) {
+  // 4b. External edits (files edited outside the project root — typically /tmp)
+  if (filesModifiedExternal.size > 0) {
     const externalList = [...filesModifiedExternal].sort();
     const home = process.env.HOME ?? '';
     const display = externalList.slice(0, 3).map(p => home && p.startsWith(home) ? p.replace(home, '~') : p);
@@ -731,8 +632,8 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
     lines.push('');
   }
 
-  // 6. Read files
-  if (!timelineMode && filesReadAbs.size > 0) {
+  // 5. Read files
+  if (filesReadAbs.size > 0) {
     if (filesReadAbs.size <= 5) {
       lines.push(chalk.bold('Read') + chalk.gray(` (${filesReadAbs.size})`));
       const groups = groupByParentDir(filesReadAbs, cwd);
@@ -743,11 +644,11 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
     lines.push('');
   }
 
-  // 7. Commands
-  if (!timelineMode) renderCommandsSection(cmdList, lines);
+  // 6. Commands
+  renderCommandsSection(cmdList, lines);
 
-  // 8. Errors (summary mode — in timeline mode, errors are already flagged inline)
-  if (!timelineMode && errors.length > 0) {
+  // 7. Errors
+  if (errors.length > 0) {
     const first = errors[0];
     const firstDesc = first.cmd
       ? `${first.tool} "${first.cmd.slice(0, 60)}"`
@@ -775,7 +676,7 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
     filesModifiedAbs.size === 0 &&
     filesReadAbs.size === 0 &&
     cmdList.length === 0 &&
-    timeline.length === 0
+    assistantCount === 0
   ) {
     lines.push(chalk.gray('No activity recorded in this session.'));
     lines.push('');

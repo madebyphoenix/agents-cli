@@ -10,7 +10,7 @@ import { SESSION_AGENTS } from '../lib/session/types.js';
 import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter, type ScanProgress } from '../lib/session/discover.js';
 import { filterTeamSessions } from '../lib/session/team-filter.js';
 import { parseSession } from '../lib/session/parse.js';
-import { renderTranscript, renderSummary, renderSummaryHeader, computeSummaryStats, renderTrace, renderJson, filterByRole, VALID_ROLE_VALUES } from '../lib/session/render.js';
+import { renderConversationMarkdown, renderSummary, renderSummaryHeader, computeSummaryStats, renderJson, filterEvents, parseRoleList, type FilterOptions } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
 import { colorAgent } from '../lib/agents.js';
 import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
@@ -30,10 +30,11 @@ interface SessionFilterOptions {
 interface SessionsOptions extends SessionFilterOptions {
   limit?: string;
   json?: boolean;
-  transcript?: boolean;
-  trace?: boolean;
-  timeline?: boolean;
-  role?: string;
+  markdown?: boolean;
+  include?: string;
+  exclude?: string;
+  first?: string;
+  last?: string;
 }
 
 interface ClaudeHistoryEntry {
