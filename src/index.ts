@@ -51,6 +51,7 @@ import { registerPtyCommands } from './commands/pty.js';
 import { registerTeamsCommands } from './commands/teams.js';
 import { registerProfilesCommands } from './commands/profiles.js';
 import { registerSecretsCommands } from './commands/secrets.js';
+import { registerCloudCommands } from './commands/cloud.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -75,7 +76,7 @@ Works with Claude, Codex, Gemini, Cursor, OpenCode, and OpenClaw.
 Quick start:
   agents init                     First-time setup (interactive)
   agents view                     See what's installed
-  agents run <agent> "prompt"     Run an agent non-interactively
+  agents run <agent> ["prompt"]   Run an agent (interactive without prompt, headless with)
   agents sessions                 Browse past sessions across all agents
 
 Agent versions:
@@ -99,7 +100,8 @@ Packages:
   install <pkg>                   Install from registry (mcp:name, skill:user/repo)
 
 Run agents:
-  run <agent|profile> <prompt>    One-shot run (non-interactive). Accepts a profile name (e.g. 'kimi', 'deepseek').
+  run <agent|profile> [prompt]    Run an agent. Omit prompt for interactive mode.
+  cloud                           Dispatch tasks to cloud providers (Rush, Codex, Factory)
   teams                           Coordinate multiple agents on shared work
   routines                        Run agents on a cron schedule (scheduler auto-starts)
   sessions                        Browse and replay past runs
@@ -372,6 +374,7 @@ registerSessionsCommands(program);
 registerSyncCommand(program);
 registerRefreshMemoryCommand(program);
 registerDriveCommands(program);
+registerCloudCommands(program);
 registerPtyCommands(program);
 
 // Deprecated 'jobs' and 'cron' aliases for 'routines'
