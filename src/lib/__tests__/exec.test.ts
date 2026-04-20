@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   buildExecCommand,
   buildExecEnv,
+  buildFallbackPrompt,
+  detectRateLimit,
   AGENT_COMMANDS,
   parseExecEnv,
   type ExecOptions,
@@ -477,5 +479,62 @@ describe('buildExecCommand', () => {
         'fix the bug',
       ]);
     });
+  });
+});
+
+describe('detectRateLimit', () => {
+  it.each([
+    ['Anthropic 5-hour limit', 'Your 5-hour limit has been reached. Resets in 2h.'],
+    ['generic rate-limit phrasing', 'Error: rate limit exceeded for claude-opus'],
+    ['hyphenated rate-limit phrasing', 'rate-limit hit'],
+    ['HTTP 429 code in error body', 'Request failed with status 429'],
+    ['Google quota exceeded', 'RESOURCE_EXHAUSTED: quota exceeded for requests'],
+    ['OpenAI usage limit', 'You have exceeded your usage limit for this month'],
+    ['429 too many requests', '429: Too Many Requests'],
+    ['Anthropic overloaded', 'API Error: Overloaded'],
+    ['api_overloaded snake case', 'error_type: api_overloaded'],
+  ])('matches %s', (_label, text) => {
+    expect(detectRateLimit(text)).toBe(true);
+  });
+
+  it.each([
+    ['normal success output', 'Task completed successfully.'],
+    ['unrelated error', 'TypeError: Cannot read property foo of undefined'],
+    ['auth error', 'Authentication failed: invalid API key'],
+    ['file not found', 'ENOENT: no such file or directory'],
+    ['empty stderr', ''],
+  ])('does not match %s', (_label, text) => {
+    expect(detectRateLimit(text)).toBe(false);
+  });
+});
+
+describe('buildFallbackPrompt', () => {
+  const uuid = 'f47ac10b-58cc-4372-a567-0e02b2c3d479';
+
+  it('returns /continue <id> when next agent is Claude and we have a session ID', () => {
+    expect(buildFallbackPrompt('claude', uuid, 'claude', 'original task')).toBe(
+      `/continue ${uuid}`
+    );
+  });
+
+  it('uses plain-text handoff for non-Claude next agent even with session ID', () => {
+    const prompt = buildFallbackPrompt('claude', uuid, 'codex', 'refactor auth');
+    expect(prompt).toContain('previous claude session was interrupted by a rate limit');
+    expect(prompt).toContain(`agents sessions ${uuid}`);
+    expect(prompt).toContain('Original request: refactor auth');
+  });
+
+  it('falls back to context note without session reference when no session ID is known', () => {
+    const prompt = buildFallbackPrompt('codex', undefined, 'gemini', 'write tests');
+    expect(prompt).toContain('previous codex session was interrupted by a rate limit');
+    expect(prompt).not.toContain('agents sessions');
+    expect(prompt).toContain('Original request: write tests');
+  });
+
+  it('/continue branch requires a session ID (not just Claude as next)', () => {
+    // No session ID + Claude-as-next must fall through to the plain-text form.
+    const prompt = buildFallbackPrompt('codex', undefined, 'claude', 'deploy');
+    expect(prompt).not.toMatch(/^\/continue/);
+    expect(prompt).toContain('Original request: deploy');
   });
 });

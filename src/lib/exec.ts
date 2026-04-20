@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import * as path from 'path';
 import type { AgentId } from './types.js';
 import { parseTimeout } from './routines.js';
@@ -294,26 +295,60 @@ export function buildExecCommand(options: ExecOptions): string[] {
 }
 
 export async function execAgent(options: ExecOptions): Promise<number> {
+  const { exitCode } = await spawnAgent(options);
+  return exitCode;
+}
+
+interface SpawnResult {
+  exitCode: number;
+  stderr: string;
+}
+
+/**
+ * Spawn an agent process and return its exit code plus a tee'd copy of stderr.
+ *
+ * Stderr is always piped so the caller can inspect it (e.g., for rate-limit
+ * detection) while also forwarding every chunk to process.stderr in real time —
+ * the user sees the same output they would with stdio: 'inherit'. Stdout keeps
+ * the original behavior: 'pipe' when downstream output is piped (so `agents
+ * run ... | ...` composes cleanly), otherwise 'inherit' so TTY output is
+ * unbuffered.
+ */
+async function spawnAgent(options: ExecOptions): Promise<SpawnResult> {
   const cmd = buildExecCommand(options);
   const [executable, ...args] = cmd;
 
   const timeoutMs = options.timeout ? parseTimeout(options.timeout) : undefined;
-
-  // When stdout is piped, separate agent output (stdout) from status (stderr)
-  // so `agents run claude "..." | agents run codex "..."` works cleanly.
-  // When interactive (TTY), inherit everything for the full experience.
   const piped = !process.stdout.isTTY;
 
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       cwd: options.cwd || process.cwd(),
-      stdio: piped ? ['inherit', 'pipe', 'inherit'] : 'inherit',
+      stdio: [
+        'inherit',
+        piped ? 'pipe' : 'inherit',
+        'pipe',
+      ],
       env: buildExecEnv(options),
       shell: false,
     });
 
     if (piped && child.stdout) {
       child.stdout.pipe(process.stdout);
+    }
+
+    let stderrBuffer = '';
+    const STDERR_BUFFER_CAP = 64 * 1024;
+    if (child.stderr) {
+      child.stderr.on('data', (chunk: Buffer) => {
+        process.stderr.write(chunk);
+        if (stderrBuffer.length < STDERR_BUFFER_CAP) {
+          stderrBuffer += chunk.toString('utf-8');
+          if (stderrBuffer.length > STDERR_BUFFER_CAP) {
+            stderrBuffer = stderrBuffer.slice(-STDERR_BUFFER_CAP);
+          }
+        }
+      });
     }
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -330,7 +365,152 @@ export async function execAgent(options: ExecOptions): Promise<number> {
     });
     child.on('close', (code) => {
       if (timer) clearTimeout(timer);
-      resolve(code ?? 0);
+      resolve({ exitCode: code ?? 0, stderr: stderrBuffer });
     });
   });
+}
+
+/**
+ * Patterns that indicate a rate/usage limit. Matching is intentionally broad
+ * because providers phrase these differently — Anthropic uses "5-hour limit"
+ * and "rate limit", OpenAI surfaces 429s, Google says "quota exceeded".
+ * False positives here just trigger a fallback attempt; false negatives leave
+ * the original error unhandled, which is worse.
+ */
+export const RATE_LIMIT_PATTERNS: RegExp[] = [
+  /rate[\s-]?limit/i,
+  /usage[\s-]?limit/i,
+  /quota\s*(exceeded|reached|limit)/i,
+  /\b429\b/,
+  /5[\s-]?hour[\s-]?limit/i,
+  /too many requests/i,
+  /api[\s_-]?overloaded/i,
+  /\boverloaded\b/i,
+];
+
+export function detectRateLimit(text: string): boolean {
+  return RATE_LIMIT_PATTERNS.some(pattern => pattern.test(text));
+}
+
+export interface FallbackEntry {
+  agent: AgentId;
+  /** Optional pinned version (e.g. '0.116.0'). When set, takes precedence over the active default. */
+  version?: string;
+}
+
+export interface FallbackOptions extends ExecOptions {
+  /** Ordered list of agents to try if the primary (options.agent) hits a rate limit. */
+  fallback: FallbackEntry[];
+}
+
+/**
+ * Build the prompt handed to the fallback agent when the primary was stopped
+ * mid-task by a rate limit.
+ *
+ * When the prior agent was Claude we pin its session ID via `--session-id` so
+ * `prevSessionId` is always defined; for other primaries we pass undefined and
+ * get a simpler retry-with-context prompt. Claude understands `/continue <id>`
+ * via its shipped skill — other agents fall through to an explicit instruction
+ * that points at the version-agnostic `agents sessions <id>` reader.
+ */
+export function buildFallbackPrompt(
+  prevAgent: AgentId,
+  prevSessionId: string | undefined,
+  nextAgent: AgentId,
+  originalPrompt: string,
+): string {
+  if (nextAgent === 'claude' && prevSessionId) {
+    return `/continue ${prevSessionId}`;
+  }
+  const lines: string[] = [
+    `The previous ${prevAgent} session was interrupted by a rate limit.`,
+  ];
+  if (prevSessionId) {
+    lines.push(
+      ``,
+      `Prior session ID: ${prevSessionId}`,
+      `Read the transcript by running: agents sessions ${prevSessionId}`,
+    );
+  }
+  lines.push(
+    ``,
+    `Original request: ${originalPrompt}`,
+    ``,
+    `Continue from where the prior agent left off.`,
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Run an agent and, on rate-limit failure, cascade through the fallback chain.
+ *
+ * The primary agent gets the original prompt. Subsequent agents get a
+ * `/continue <id>`-style handoff (see buildFallbackPrompt) when we can pin a
+ * session ID — which today means Claude as primary (supports `--session-id`).
+ * For other primaries, fallbacks run with the original prompt plus a
+ * retry-with-context note, since we can't deterministically resolve their
+ * auto-generated session IDs.
+ *
+ * Only rate-limit failures cascade. Other errors (missing flag, auth failure,
+ * compile error) bubble up from the primary so the caller sees the real cause
+ * instead of an opaque "all agents failed" message.
+ */
+export async function runWithFallback(options: FallbackOptions): Promise<number> {
+  const chain: FallbackEntry[] = [
+    { agent: options.agent, version: options.version },
+    ...options.fallback,
+  ];
+  let prevAgent: AgentId | undefined;
+  let prevSessionId: string | undefined;
+
+  for (let i = 0; i < chain.length; i++) {
+    const { agent, version } = chain[i];
+    const pinnedSessionId = agent === 'claude' ? randomUUID() : undefined;
+
+    const prompt = prevAgent
+      ? buildFallbackPrompt(prevAgent, prevSessionId, agent, options.prompt)
+      : options.prompt;
+
+    const execOpts: ExecOptions = {
+      ...options,
+      agent,
+      version,
+      prompt,
+      sessionId: pinnedSessionId ?? (i === 0 ? options.sessionId : undefined),
+    };
+
+    const label = version ? `${agent}@${version}` : agent;
+    const banner = i === 0
+      ? `[agents] running ${label}`
+      : `[agents] fallback → ${label}`;
+    process.stderr.write(`${banner}${pinnedSessionId ? ` (session ${pinnedSessionId.slice(0, 8)})` : ''}\n`);
+
+    let result: SpawnResult;
+    try {
+      result = await spawnAgent(execOpts);
+    } catch (err: any) {
+      if (err.code === 'ENOENT' && i > 0) {
+        process.stderr.write(`[agents] ${label} not installed, skipping\n`);
+        continue;
+      }
+      throw err;
+    }
+
+    if (result.exitCode === 0) return 0;
+
+    const isLast = i === chain.length - 1;
+    if (isLast) return result.exitCode;
+
+    if (!detectRateLimit(result.stderr)) {
+      return result.exitCode;
+    }
+
+    const next = chain[i + 1];
+    const nextLabel = next.version ? `${next.agent}@${next.version}` : next.agent;
+    process.stderr.write(`[agents] ${label} hit rate limit. Handing off to ${nextLabel}...\n`);
+    prevAgent = agent;
+    prevSessionId = pinnedSessionId;
+  }
+
+  return 1;
 }

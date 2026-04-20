@@ -4,10 +4,12 @@ import {
   buildExecCommand,
   parseExecEnv,
   execAgent,
+  runWithFallback,
   AGENT_COMMANDS,
   type ExecOptions,
   type ExecMode,
   type ExecEffort,
+  type FallbackEntry,
 } from '../lib/exec.js';
 import type { AgentId } from '../lib/types.js';
 
@@ -25,6 +27,7 @@ interface ExecCommandActionOptions {
   sessionId?: string;
   verbose?: boolean;
   timeout?: string;
+  fallback?: string;
 }
 
 function isValidAgent(agent: string): agent is AgentId {
@@ -56,6 +59,10 @@ export function registerRunCommand(program: Command): void {
     .option('--session-id <id>', 'Resume a previous conversation (Claude only)')
     .option('--verbose', 'Show detailed execution logs')
     .option('--timeout <duration>', 'Kill the agent after this duration (e.g., 30m, 1h, 2h30m)')
+    .option(
+      '--fallback <agents>',
+      'Comma-separated agents to try on rate-limit failure. Each entry accepts an optional @version pin (e.g., codex@0.116.0,gemini). The primary runs first; if it exits with a rate-limit error, the next agent picks up via /continue handoff.',
+    )
     .addHelpText('after', `
 Examples:
   # Quick read-only analysis (plan mode, low reasoning effort)
@@ -72,6 +79,12 @@ Examples:
 
   # Automated cron job: generate daily report with 10-minute timeout
   agents run claude "generate sales report for yesterday" --mode plan --timeout 10m --json > report.jsonl
+
+  # Auto-fallback to codex then gemini if claude hits a rate limit
+  agents run claude "refactor auth module" --mode edit --fallback codex,gemini
+
+  # Pin fallback versions: primary claude@2.0.65, fallback codex@0.116.0 then gemini
+  agents run claude@2.0.65 "deep refactor" --fallback codex@0.116.0,gemini
 
 Note: 'agents run' executes non-interactively (no TTY). To work interactively with
 the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
@@ -123,12 +136,32 @@ the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
         env,
       };
 
+      const fallback: FallbackEntry[] = [];
+      if (options.fallback) {
+        const entries = options.fallback.split(',').map(s => s.trim()).filter(Boolean);
+        for (const entry of entries) {
+          const [fbAgent, fbVersion] = entry.split('@');
+          if (!isValidAgent(fbAgent)) {
+            console.error(chalk.red(`Unknown fallback agent: ${fbAgent}`));
+            console.error(chalk.gray(`Available: ${VALID_AGENTS.join(', ')}`));
+            process.exit(1);
+          }
+          if (fbAgent === agent) {
+            console.error(chalk.red(`Fallback cannot include the primary agent (${agent}). Rate-limit fallback only helps when switching providers.`));
+            process.exit(1);
+          }
+          fallback.push({ agent: fbAgent, version: fbVersion || undefined });
+        }
+      }
+
       // Show what we're running (stderr so stdout stays clean for piping)
       const cmd = buildExecCommand(execOptions);
       process.stderr.write(chalk.gray(`Running: ${cmd.join(' ')}\n\n`));
 
       try {
-        const exitCode = await execAgent(execOptions);
+        const exitCode = fallback.length > 0
+          ? await runWithFallback({ ...execOptions, fallback })
+          : await execAgent(execOptions);
         process.exit(exitCode);
       } catch (err) {
         console.error(chalk.red(`Failed to execute ${agent}: ${(err as Error).message}`));
