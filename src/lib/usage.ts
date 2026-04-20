@@ -709,6 +709,18 @@ async function refreshClaudeToken(oauth: ClaudeOauthCredentials): Promise<Claude
   };
 }
 
+/**
+ * Check whether the Claude OAuth credentials for a given home are usable.
+ * Attempts a token refresh if the access token is expired.
+ * Returns true only when a valid access token can be obtained.
+ */
+export async function isClaudeAuthValid(home?: string): Promise<boolean> {
+  const oauth = await loadClaudeOauth(home);
+  if (!oauth) return false;
+  const token = await getClaudeAccessToken(oauth);
+  return token !== null;
+}
+
 function getClaudeUserAgent(cliVersion?: string | null): string {
   return cliVersion ? `claude-code/${cliVersion}` : 'claude-code';
 }

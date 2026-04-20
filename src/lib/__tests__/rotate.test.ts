@@ -7,6 +7,7 @@ function cand(overrides: Partial<RotateCandidate>): RotateCandidate {
     version: '0.0.0',
     email: 'a@b.com',
     usageStatus: 'available',
+    authValid: true,
     lastActive: new Date('2026-01-01T00:00:00Z'),
     ...overrides,
   };
@@ -70,6 +71,17 @@ describe('pickRotateCandidate', () => {
     const result = pickRotateCandidate([healthy, notAuthed]);
     expect(result!.picked.version).toBe('2.1.113');
     expect(result!.excluded).toHaveLength(1);
+  });
+
+  it('excludes accounts with invalid auth tokens', () => {
+    const valid = cand({ version: '2.1.110', lastActive: new Date('2026-04-20T10:00:00Z') });
+    const expired = cand({ version: '2.1.112', authValid: false, lastActive: new Date('2026-04-15T00:00:00Z') });
+
+    const result = pickRotateCandidate([valid, expired]);
+    expect(result!.picked.version).toBe('2.1.110');
+    expect(result!.healthy).toHaveLength(1);
+    expect(result!.excluded).toHaveLength(1);
+    expect(result!.excluded[0].version).toBe('2.1.112');
   });
 
   it('treats rate_limited as healthy (transient, not exhausted)', () => {

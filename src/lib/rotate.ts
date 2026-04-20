@@ -1,12 +1,14 @@
 import type { AgentId } from './types.js';
 import { getAccountInfo, type AccountInfo } from './agents.js';
 import { listInstalledVersions, getVersionHomePath, getGlobalDefault } from './versions.js';
+import { isClaudeAuthValid } from './usage.js';
 
 export interface RotateCandidate {
   agent: AgentId;
   version: string;
   email: string | null;
   usageStatus: AccountInfo['usageStatus'];
+  authValid: boolean;
   lastActive: Date | null;
 }
 
@@ -36,6 +38,10 @@ export function pickRotateCandidate(candidates: RotateCandidate[]): RotateResult
       continue;
     }
     if (c.usageStatus === 'out_of_credits') {
+      excluded.push(c);
+      continue;
+    }
+    if (!c.authValid) {
       excluded.push(c);
       continue;
     }
@@ -74,11 +80,15 @@ export async function selectRotateVersion(agent: AgentId): Promise<RotateResult 
     versions.map(async (version) => {
       const home = getVersionHomePath(agent, version);
       const info = await getAccountInfo(agent, home);
+      const authValid = info.email
+        ? agent === 'claude' ? await isClaudeAuthValid(home) : true
+        : false;
       return {
         agent,
         version,
         email: info.email,
         usageStatus: info.usageStatus,
+        authValid,
         lastActive: info.lastActive,
       };
     })
