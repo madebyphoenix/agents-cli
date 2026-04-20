@@ -10,7 +10,7 @@ import { SESSION_AGENTS } from '../lib/session/types.js';
 import { discoverSessions, resolveSessionById, searchContentIndex, parseTimeFilter, type ScanProgress } from '../lib/session/discover.js';
 import { filterTeamSessions } from '../lib/session/team-filter.js';
 import { parseSession } from '../lib/session/parse.js';
-import { renderTranscript, renderSummary, renderSummaryHeader, computeSummaryStats, renderTrace, renderJson } from '../lib/session/render.js';
+import { renderTranscript, renderSummary, renderSummaryHeader, computeSummaryStats, renderTrace, renderJson, filterByRole, VALID_ROLE_VALUES } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
 import { colorAgent } from '../lib/agents.js';
 import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
@@ -33,6 +33,7 @@ interface SessionsOptions extends SessionFilterOptions {
   transcript?: boolean;
   trace?: boolean;
   timeline?: boolean;
+  role?: string;
 }
 
 interface ClaudeHistoryEntry {
@@ -124,6 +125,11 @@ function resolvePathFilter(query: string): string {
 }
 
 async function sessionsAction(query: string | undefined, options: SessionsOptions): Promise<void> {
+  if (options.role && !VALID_ROLE_VALUES.includes(options.role as any)) {
+    console.error(chalk.red(`Invalid --role "${options.role}". Valid values: ${VALID_ROLE_VALUES.join(', ')}`));
+    process.exit(1);
+  }
+
   const { agent, version } = parseAgentFilter(options.agent);
 
   // Path-like queries filter by project directory instead of text search.
@@ -148,7 +154,7 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
   // When the user explicitly asks to render (via mode flag), resolve the
   // query globally so sessions outside the default cwd/30d window are found.
   if (wantsRender && searchQuery) {
-    await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project });
+    await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project, role: options.role });
     return;
   }
 
@@ -195,11 +201,11 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     if (searchQuery) {
       const idMatches = resolveSessionById(sessions, searchQuery);
       if (idMatches.length === 1) {
-        await renderSession(idMatches[0], mode);
+        await renderSession(idMatches[0], mode, options.role);
         return;
       }
       if (idMatches.length === 0 && looksLikeSessionId(searchQuery)) {
-        await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project });
+        await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project, role: options.role });
         return;
       }
     }
@@ -293,7 +299,7 @@ function resolveViewMode(options: { transcript?: boolean; trace?: boolean; timel
   return 'summary';
 }
 
-async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void> {
+async function renderSession(session: SessionMeta, mode: ViewMode, role?: string): Promise<void> {
   // OpenCode stores sessions in SQLite; filePath is "db_path#session_id"
   const realPath = session.filePath.split('#')[0];
   if (!fs.existsSync(realPath)) {
@@ -307,8 +313,12 @@ async function renderSession(session: SessionMeta, mode: ViewMode): Promise<void
   }
 
   const spinner = ora(`Parsing ${session.agent} session...`).start();
-  const events = parseSession(session.filePath, session.agent);
+  let events = parseSession(session.filePath, session.agent);
   spinner.stop();
+
+  if (role) {
+    events = filterByRole(events, role);
+  }
 
   const agentColor = colorAgent(session.agent);
   console.log('');
@@ -641,7 +651,7 @@ function applyScopeFilters(
 async function renderOneSession(
   query: string,
   mode: ViewMode,
-  scope: { agent?: string; project?: string },
+  scope: { agent?: string; project?: string; role?: string },
 ): Promise<void> {
   const spinner = ora().start();
   const tracker = createScanProgressTracker(FIND_VERBS, 'session', spinner);
@@ -711,7 +721,7 @@ async function renderOneSession(
     }
 
     spinner.stop();
-    await renderSession(session, mode);
+    await renderSession(session, mode, scope.role);
   } catch (err: any) {
     if (isPromptCancelled(err)) return;
     tracker.stop();
@@ -737,6 +747,7 @@ export function registerSessionsCommands(program: Command): void {
     .option('--trace', 'Show reasoning trace as markdown (requires a query that resolves to one session)')
     .option('--timeline', 'Show chronological timeline with tool clusters (requires a query that resolves to one session)')
     .option('--json', 'Output JSON (session list when browsing, event array when rendering one session)')
+    .option('--role <role>', 'Filter events by role: user, assistant, thinking, or tools')
     .addHelpText('after', `
 Examples:
   # Interactive picker: browse and search recent sessions (TTY only)
@@ -763,6 +774,15 @@ Examples:
   # View reasoning trace (thinking blocks) as markdown
   agents sessions a1b2c3d4 --trace
 
+  # Show only user messages from a session
+  agents sessions a1b2c3d4 --role user
+
+  # Show only thinking blocks as JSON
+  agents sessions a1b2c3d4 --role thinking --json
+
+  # Show only tool calls from a transcript
+  agents sessions a1b2c3d4 --role tools --transcript
+
   # Export all recent sessions as JSON for analysis
   agents sessions --since 30d --limit 200 --json > sessions.json
 
@@ -771,6 +791,7 @@ Examples:
 
 Note: Without a query, sessions defaults to current directory + last 30 days.
 Pass --all to see sessions from every directory, or a path to filter by location.
+--role filters events before rendering and works with all format flags (--transcript, --trace, --timeline, --json).
 `)
     .action(async (query: string | undefined, options: SessionsOptions) => {
       await sessionsAction(query, options);

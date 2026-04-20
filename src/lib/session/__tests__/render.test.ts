@@ -14,8 +14,71 @@ import {
   computeSummaryStats,
   renderSummaryHeader,
   renderSummary,
+  filterByRole,
 } from '../render.js';
 import type { SessionEvent } from '../types.js';
+
+// ── filterByRole ──────────────────────────────────────────────────────────────
+
+describe('filterByRole', () => {
+  const events: SessionEvent[] = [
+    { type: 'message', agent: 'claude', timestamp: '2024-01-01T00:00:00Z', role: 'user', content: 'Hello' },
+    { type: 'message', agent: 'claude', timestamp: '2024-01-01T00:00:01Z', role: 'assistant', content: 'Hi there' },
+    { type: 'thinking', agent: 'claude', timestamp: '2024-01-01T00:00:02Z', content: 'Let me think' },
+    { type: 'tool_use', agent: 'claude', timestamp: '2024-01-01T00:00:03Z', tool: 'Read', args: {} },
+    { type: 'tool_result', agent: 'claude', timestamp: '2024-01-01T00:00:04Z', content: 'file contents' },
+    { type: 'error', agent: 'claude', timestamp: '2024-01-01T00:00:05Z', content: 'fail' },
+  ];
+
+  it('filters to user messages only', () => {
+    const result = filterByRole(events, 'user');
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('user');
+    expect(result[0].content).toBe('Hello');
+  });
+
+  it('filters to assistant messages only', () => {
+    const result = filterByRole(events, 'assistant');
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('assistant');
+    expect(result[0].content).toBe('Hi there');
+  });
+
+  it('filters to thinking events only', () => {
+    const result = filterByRole(events, 'thinking');
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('thinking');
+    expect(result[0].content).toBe('Let me think');
+  });
+
+  it('filters to tool_use and tool_result events only', () => {
+    const result = filterByRole(events, 'tools');
+    expect(result).toHaveLength(2);
+    expect(result.every(e => e.type === 'tool_use' || e.type === 'tool_result')).toBe(true);
+  });
+
+  it('returns empty array when no events match the role', () => {
+    const onlyUser: SessionEvent[] = [
+      { type: 'message', agent: 'claude', timestamp: '2024-01-01T00:00:00Z', role: 'user', content: 'Hello' },
+    ];
+    expect(filterByRole(onlyUser, 'thinking')).toHaveLength(0);
+  });
+
+  it('throws on invalid role listing all valid values', () => {
+    expect(() => filterByRole(events, 'foo')).toThrow(/Invalid --role "foo"/);
+    expect(() => filterByRole(events, 'foo')).toThrow(/user, assistant, thinking, tools/);
+  });
+
+  it('does not include error events when filtering by tools', () => {
+    const result = filterByRole(events, 'tools');
+    expect(result.every(e => e.type !== 'error')).toBe(true);
+  });
+
+  it('does not include tool events when filtering by user', () => {
+    const result = filterByRole(events, 'user');
+    expect(result.every(e => e.type === 'message' && e.role === 'user')).toBe(true);
+  });
+});
 
 // ── unwrapCommand ─────────────────────────────────────────────────────────────
 

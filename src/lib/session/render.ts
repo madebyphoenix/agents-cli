@@ -806,6 +806,31 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
   return lines.join('\n');
 }
 
+// ── Role filter ───────────────────────────────────────────────────────────────
+
+export const VALID_ROLE_VALUES = ['user', 'assistant', 'thinking', 'tools'] as const;
+export type RoleFilter = typeof VALID_ROLE_VALUES[number];
+
+/**
+ * Filter events by role before passing to any renderer.
+ * Throws with a clear message if role is not one of the four valid values.
+ */
+export function filterByRole(events: SessionEvent[], role: string): SessionEvent[] {
+  if (!VALID_ROLE_VALUES.includes(role as RoleFilter)) {
+    throw new Error(`Invalid --role "${role}". Valid values: ${VALID_ROLE_VALUES.join(', ')}`);
+  }
+  switch (role as RoleFilter) {
+    case 'user':
+      return events.filter(e => e.type === 'message' && e.role === 'user');
+    case 'assistant':
+      return events.filter(e => e.type === 'message' && e.role === 'assistant');
+    case 'thinking':
+      return events.filter(e => e.type === 'thinking');
+    case 'tools':
+      return events.filter(e => e.type === 'tool_use' || e.type === 'tool_result');
+  }
+}
+
 // ── Other view modes (unchanged) ──────────────────────────────────────────────
 
 /**
