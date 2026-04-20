@@ -90,7 +90,7 @@ function formatHeader(session: SessionMeta, events: SessionEvent[]): string {
   if (startedAgo) line2.push(chalk.gray('started ') + chalk.white(startedAgo + ' ago'));
   if (duration) line2.push(chalk.gray('lasted ') + chalk.white(duration));
 
-  // Line 3: N msgs · T tokens · id
+  // Line 3: N msgs · T tokens · [label ·] uuid
   const line3: string[] = [];
   if (totalMessages !== undefined) {
     line3.push(chalk.bold.white(String(totalMessages)) + chalk.gray(` msg${totalMessages === 1 ? '' : 's'}`));
@@ -98,8 +98,8 @@ function formatHeader(session: SessionMeta, events: SessionEvent[]): string {
   if (totalTokens !== undefined) {
     line3.push(chalk.bold.white(formatTokens(totalTokens)) + chalk.gray(' tokens'));
   }
-  const idLabel = chalk.gray(`id ${session.id}`);
-  line3.push(session.filePath ? linkPath(session.filePath, idLabel) : idLabel);
+  if (session.label) line3.push(chalk.white(session.label));
+  line3.push(chalk.gray(session.id));
 
   return [
     line1.join(DOT),
