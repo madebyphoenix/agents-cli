@@ -27,10 +27,34 @@ function formatPath(p: string): string {
 export function registerPluginsCommands(program: Command): void {
   const pluginsCmd = program
     .command('plugins')
-    .description('Manage agent plugins');
+    .description('Bundle skills, hooks, and permissions into distributable packages')
+    .addHelpText('after', `
+Plugins are directories in ~/.agents/plugins/ that bundle skills, hooks, and permission sets into a single installable unit. Each plugin declares which agents it supports and what resources it provides. When you sync a version, agents-cli installs the plugin's contents to that agent's home.
+
+Examples:
+  # List all plugins and show which versions have them installed
+  agents plugins
+
+  # View details for a specific plugin
+  agents plugins info rush-toolkit
+
+  # Sync a plugin to specific agents
+  agents plugins sync rush-toolkit claude
+
+  # Remove a plugin from all agents and delete its source
+  agents plugins remove rush-toolkit
+
+When to use:
+  - Distribution: package related skills, hooks, and permissions for easy sharing
+  - Version control: sync plugins selectively to different agent versions
+  - Team onboarding: distribute a full toolkit via a single plugin directory
+`);
 
   // agents plugins (default: list)
   pluginsCmd
+    .addHelpText('after', `
+Note: Running 'agents plugins' with no subcommand lists all installed plugins.
+`)
     .action(() => {
       const plugins = discoverPlugins();
 
@@ -86,7 +110,12 @@ export function registerPluginsCommands(program: Command): void {
   // agents plugins info <name>
   pluginsCmd
     .command('info <name>')
-    .description('Show plugin details')
+    .description('Show plugin metadata, resources, and installation status across agent versions')
+    .addHelpText('after', `
+Examples:
+  # View details for a plugin
+  agents plugins info rush-toolkit
+`)
     .action((name: string) => {
       const plugin = getPlugin(name);
       if (!plugin) {
@@ -155,7 +184,15 @@ export function registerPluginsCommands(program: Command): void {
   // agents plugins sync <name> [agent]
   pluginsCmd
     .command('sync <name> [agent]')
-    .description('Sync a plugin to agent versions')
+    .description('Apply a plugin to the default version of an agent (or all supported agents if none specified)')
+    .addHelpText('after', `
+Examples:
+  # Sync a plugin to a specific agent (default version)
+  agents plugins sync rush-toolkit claude
+
+  # Sync to all supported agents
+  agents plugins sync rush-toolkit
+`)
     .action(async (name: string, agentArg?: string) => {
       const plugin = getPlugin(name);
       if (!plugin) {
@@ -201,8 +238,16 @@ export function registerPluginsCommands(program: Command): void {
   // agents plugins remove <name>
   pluginsCmd
     .command('remove <name>')
-    .description('Remove plugin from all agent versions and delete its source')
-    .option('--keep-source', 'Unsync from versions but keep ~/.agents/plugins/<name>')
+    .description('Unsync a plugin from all agent versions and optionally delete its source directory')
+    .option('--keep-source', 'Keep the directory at ~/.agents/plugins/<name> (only unsync from agents)')
+    .addHelpText('after', `
+Examples:
+  # Remove plugin from agents and delete source
+  agents plugins remove rush-toolkit
+
+  # Unsync but keep source directory
+  agents plugins remove rush-toolkit --keep-source
+`)
     .action((name: string, options: { keepSource?: boolean }) => {
       const pluginsDir = path.join(process.env.HOME || '', '.agents', 'plugins');
       const pluginRoot = path.join(pluginsDir, name);

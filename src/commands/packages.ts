@@ -196,10 +196,31 @@ export function registerPackagesCommands(program: Command): void {
 
   program
     .command('search <query>')
-    .description('Search package registries')
-    .option('-t, --type <type>', 'Filter by type: mcp or skill')
-    .option('-r, --registry <name>', 'Search specific registry')
-    .option('-l, --limit <n>', 'Max results', '20')
+    .description('Find packages (MCP servers, skills) across configured registries')
+    .option('-t, --type <type>', 'Limit to mcp or skill packages')
+    .option('-r, --registry <name>', 'Search only this registry')
+    .option('-l, --limit <n>', 'Max results to show', '20')
+    .addHelpText('after', `
+Search finds MCP servers and skills published to registries. Results show the package name, description, and install command.
+
+Examples:
+  # Search for MCP servers related to notion
+  agents search notion
+
+  # Search only skill packages
+  agents search testing --type skill
+
+  # Limit results to the first 10
+  agents search api --limit 10
+
+  # Search a specific registry
+  agents search postgres --registry smithery
+
+When to use:
+  - Finding MCP servers: 'agents search <keyword>' then 'agents install mcp:<name>'
+  - Discovering skills: 'agents search <domain> --type skill'
+  - Exploring registries: 'agents search <term> --registry <name>'
+`)
     .action(async (query: string, options) => {
       const spinner = ora('Searching registries...').start();
 
@@ -261,8 +282,29 @@ export function registerPackagesCommands(program: Command): void {
 
   program
     .command('install <identifier>')
-    .description('Install a package from a registry or Git source')
-    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to install to')
+    .description('Install a package by registry name (mcp:notion), GitHub URL (gh:user/repo), or skill identifier')
+    .option('-a, --agents <list>', 'Targets: claude, codex@0.116.0, or gemini@default')
+    .addHelpText('after', `
+Install resolves the package type (MCP server, skill, command, hook) and installs to the specified agents. Packages can come from registries (mcp:, skill:), GitHub (gh:user/repo), or direct URLs.
+
+Examples:
+  # Install an MCP server from a registry
+  agents install mcp:notion --agents claude
+
+  # Install skills and commands from GitHub
+  agents install gh:anthropics/skills --agents codex,claude
+
+  # Install using GitHub shorthand
+  agents install gh:user/repo --agents claude@2.1.112
+
+  # Install to all installed agents (uses defaults or prompts)
+  agents install mcp:postgres
+
+When to use:
+  - After search: 'agents search notion' then 'agents install mcp:notion'
+  - Team setup: 'agents install gh:team/resources' to sync everyone's tooling
+  - Quick MCP add: 'agents install mcp:<name>' when you know the package name
+`)
     .action(async (identifier: string, options) => {
       const spinner = ora('Resolving package...').start();
 
