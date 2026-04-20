@@ -6,7 +6,10 @@ import { AGENTS } from './agents.js';
 import type { AgentId } from './types.js';
 import { getMemoryDir, getVersionsDir } from './state.js';
 
-const IMPORT_RE = /^@(\S+)/gm;
+// Match `@path` preceded by start-of-string or whitespace. This avoids
+// matching emails ("foo@bar.com") and the middle of words. The leading
+// whitespace (if any) is captured so we can preserve it in the output.
+const IMPORT_RE = /(^|\s)@(\S+)/g;
 const MAX_DEPTH = 5;
 const COMPILED_HEADER =
   '<!-- Auto-compiled by agents-cli from ~/.agents/memory/AGENTS.md + imports.\n' +
@@ -77,19 +80,19 @@ export function resolveImports(content: string, baseDir: string): ResolveResult 
 
     const { protectedText, fences, inlines } = protectCodeRegions(text);
 
-    const expanded = protectedText.replace(IMPORT_RE, (match, rawPath: string) => {
+    const expanded = protectedText.replace(IMPORT_RE, (match, lead: string, rawPath: string) => {
       const tildeExpanded = expandTilde(rawPath);
       const resolved = path.isAbsolute(tildeExpanded)
         ? tildeExpanded
         : path.resolve(currentDir, tildeExpanded);
 
-      if (seen.has(resolved)) return ''; // cycle break
-      if (!fs.existsSync(resolved)) return match;
+      if (seen.has(resolved)) return lead; // cycle break — keep leading whitespace
+      if (!fs.existsSync(resolved)) return match; // preserve literal including lead
 
       seen.add(resolved);
       sources.push(resolved);
       const body = fs.readFileSync(resolved, 'utf8');
-      return expand(body, path.dirname(resolved), depth + 1);
+      return lead + expand(body, path.dirname(resolved), depth + 1);
     });
 
     return restoreCodeRegions(expanded, fences, inlines);
