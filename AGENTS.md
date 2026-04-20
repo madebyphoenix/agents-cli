@@ -127,22 +127,13 @@ agents search <query>        # Search MCP servers
 agents install <pkg>         # Install mcp:name or skill:user/repo
 
 # Sessions
-<<<<<<< HEAD
-agents sessions                       # Interactive picker (TTY) or table (piped)
+agents sessions                       # Interactive picker (TTY) or table (piped); team-spawned sessions hidden by default
 agents sessions <query>               # Search by text, path, or session ID
+agents sessions --teams               # Include team-spawned sessions with [team/handle · mode] tag
 agents sessions <id> --transcript     # Full conversation transcript
 agents sessions <id> --trace          # Reasoning trace as markdown
 agents sessions <id> --timeline       # Chronological timeline
 agents sessions <id> --json           # Normalized events as JSON
-=======
-agents sessions              # List sessions (team-spawned hidden by default)
-agents sessions list         # Same, with --agent/--project filters
-agents sessions --teams      # Include team-spawned sessions with [team/handle · mode] tag
-agents sessions view <id>    # View session (summary by default)
-agents sessions view <id> --transcript   # Full conversation transcript
-agents sessions view <id> --trace        # Reasoning trace as markdown
-agents sessions view <id> --json         # Normalized events as JSON
->>>>>>> ab44837 (feat: hide team-spawned sessions from agents sessions by default)
 
 # Execution
 agents run <agent> <prompt> # Execute agent non-interactively
