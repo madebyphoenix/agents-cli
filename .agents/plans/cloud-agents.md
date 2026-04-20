@@ -448,6 +448,72 @@ agents cloud run <prompt> --agents codex,claude --strategy first-wins
 
 Depends on learnings from Phases 1-3.
 
+## Open Questions
+
+These need resolution before implementation. Each captures a design tension
+where the current plan makes an assumption that may not hold.
+
+### 1. Do we need a file format for work orders in v1?
+
+The inline string (`agents cloud run "fix the test"`) covers 80% of cases.
+`task.md` is human-readable and versionable, but markdown is unstructured —
+metadata needs frontmatter or a sidecar `resources.yaml`, splitting the work
+order across two files in two formats. A YAML-first format (prompt as a field)
+is parseable by machines but less natural to write. Maybe the file format is
+premature — build inline first, see what people actually persist before
+designing the container.
+
+### 2. Is k8s-style resources the right analogy?
+
+k8s requests/limits model shared physical resources competing on a node. Cloud
+agent tasks don't share resources — each gets its own container/VM. The
+"limits" are really just budgets (time, cost, tokens). A flat budget model is
+simpler and more honest:
+
+```yaml
+budget:
+  timeout: 30m
+  max_cost: $5
+```
+
+vs three layers (global defaults, global limits, per-task overrides). What's
+the actual scenario where `defaults` separate from `limits` is justified?
+
+### 3. Does teams actually fit as the cloud orchestration layer?
+
+`agents teams` was designed for local multi-agent coordination. Cloud dispatch
+has fundamentally different constraints: network latency, async polling,
+provider-specific capabilities, different auth per agent. Shoehorning cloud
+into teams risks bloating teams with cloud concerns (polling, escalation,
+retries) while constraining cloud to team semantics. Alternative: keep teams
+for local, build cloud pipelines separately. They can share concepts without
+being the same code path. Counter-argument: "a team where agents happen to be
+remote" might be clean enough if the abstraction is right.
+
+### 4. Should we track tool_call side effects as outputs?
+
+From the agent's perspective, PRs and deployments are tool_calls. From the
+user's perspective, "did it create a PR?" is the first question. If we only
+show the agent's summary, users have to go to GitHub to find the PR. Tracking
+side effects (parsing tool calls for `gh pr create`, `git push`, etc.) is more
+useful but adds complexity. Which matters more — simplicity or discoverability?
+
+### 5. Will anyone actually read auto-generated retros?
+
+Metrics (duration, cost, tokens) are useful. The narrative ("what could
+improve") is likely generic and ignored after the first few — most developers
+skip postmortems on their own work. Maybe: show metrics always, skip the
+narrative, let users opt into deeper analysis via `agents cloud retro --analyze`.
+
+### 6. Is CLI delegation durable as an architectural principle?
+
+Wrapping official CLIs preserves subsidized tokens (real cost advantage today).
+But CLI output formats aren't stable APIs, availability varies (Claude
+Routines has no CLI yet), and some providers may never have one (Devin,
+Factory). The pragmatic middle: prefer CLI when available for token benefits,
+fall back to API when not. Don't make CLI-wrapping a principle — make it a
+provider implementation detail that can change per-provider.
+
 ## Success Criteria
 
 **Phase 1 done when:**
