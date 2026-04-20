@@ -130,15 +130,21 @@ export function resolveEffortModelMap(
     // New API: resolveEffortModelMap(agentConfigs)
     const agentConfigs = baseOrAgentConfigs as Record<AgentType, AgentConfig>;
     const resolved: EffortModelMap = {
-      fast: {} as Record<AgentType, string>,
-      default: {} as Record<AgentType, string>,
-      detailed: {} as Record<AgentType, string>
+      low: {} as Record<AgentType, string>,
+      medium: {} as Record<AgentType, string>,
+      high: {} as Record<AgentType, string>,
+      xhigh: {} as Record<AgentType, string>,
+      max: {} as Record<AgentType, string>,
+      auto: {} as Record<AgentType, string>
     };
 
     for (const [agentType, agentConfig] of Object.entries(agentConfigs)) {
-      resolved.fast[agentType as AgentType] = agentConfig.models.fast;
-      resolved.default[agentType as AgentType] = agentConfig.models.default;
-      resolved.detailed[agentType as AgentType] = agentConfig.models.detailed;
+      resolved.low[agentType as AgentType] = agentConfig.models.low;
+      resolved.medium[agentType as AgentType] = agentConfig.models.medium;
+      resolved.high[agentType as AgentType] = agentConfig.models.high;
+      resolved.xhigh[agentType as AgentType] = agentConfig.models.xhigh;
+      resolved.max[agentType as AgentType] = agentConfig.models.max;
+      resolved.auto[agentType as AgentType] = agentConfig.models.auto;
     }
 
     return resolved;
@@ -153,9 +159,12 @@ function loadDefaultAgentConfigs(): Record<AgentType, AgentConfig> {
       command: 'claude -p \'{prompt}\' --output-format stream-json --json',
       enabled: true,
       models: {
-        fast: 'claude-haiku-4-5-20251001',
-        default: 'claude-sonnet-4-5',
-        detailed: 'claude-opus-4-5'
+        low: 'claude-haiku-4-5-20251001',
+        medium: 'claude-sonnet-4-5',
+        high: 'claude-opus-4-5',
+        xhigh: 'claude-opus-4-6',
+        max: 'claude-opus-4-7',
+        auto: 'claude-sonnet-4-5'
       },
       provider: 'anthropic'
     },
@@ -163,9 +172,12 @@ function loadDefaultAgentConfigs(): Record<AgentType, AgentConfig> {
       command: 'codex exec --sandbox workspace-write \'{prompt}\' --json',
       enabled: true,
       models: {
-        fast: 'gpt-4o-mini',
-        default: 'gpt-5.2-codex',
-        detailed: 'gpt-5.1-codex-max'
+        low: 'gpt-4o-mini',
+        medium: 'gpt-5.2-codex',
+        high: 'gpt-5.1-codex-max',
+        xhigh: 'gpt-5.1-codex-max',
+        max: 'gpt-5.1-codex-max',
+        auto: 'gpt-5.2-codex'
       },
       provider: 'openai'
     },
@@ -173,9 +185,12 @@ function loadDefaultAgentConfigs(): Record<AgentType, AgentConfig> {
       command: 'gemini \'{prompt}\' --output-format stream-json',
       enabled: true,
       models: {
-        fast: 'gemini-3-flash-preview',
-        default: 'gemini-3-flash-preview',
-        detailed: 'gemini-3-pro-preview'
+        low: 'gemini-3-flash-preview',
+        medium: 'gemini-3-flash-preview',
+        high: 'gemini-3-pro-preview',
+        xhigh: 'gemini-3-pro-preview',
+        max: 'gemini-3-pro-preview',
+        auto: 'gemini-3-flash-preview'
       },
       provider: 'google'
     },
@@ -183,9 +198,12 @@ function loadDefaultAgentConfigs(): Record<AgentType, AgentConfig> {
       command: 'cursor-agent -p --output-format stream-json \'{prompt}\'',
       enabled: true,
       models: {
-        fast: 'composer-1',
-        default: 'composer-1',
-        detailed: 'composer-1'
+        low: 'composer-1',
+        medium: 'composer-1',
+        high: 'composer-1',
+        xhigh: 'composer-1',
+        max: 'composer-1',
+        auto: 'composer-1'
       },
       provider: 'custom'
     },
@@ -193,9 +211,12 @@ function loadDefaultAgentConfigs(): Record<AgentType, AgentConfig> {
       command: 'opencode run --format json \'{prompt}\'',
       enabled: true,
       models: {
-        fast: 'zai-coding-plan/glm-4.7-flash',
-        default: 'zai-coding-plan/glm-4.7',
-        detailed: 'zai-coding-plan/glm-4.7'
+        low: 'zai-coding-plan/glm-4.7-flash',
+        medium: 'zai-coding-plan/glm-4.7',
+        high: 'zai-coding-plan/glm-4.7',
+        xhigh: 'zai-coding-plan/glm-4.7',
+        max: 'zai-coding-plan/glm-4.7',
+        auto: 'zai-coding-plan/glm-4.7'
       },
       provider: 'custom'
     }

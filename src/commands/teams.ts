@@ -48,7 +48,7 @@ const AGENT_NAMES: Record<AgentType, string> = {
 
 const VALID_AGENTS = Object.keys(AGENT_NAMES) as AgentType[];
 const VALID_MODES = ['plan', 'edit', 'full'] as const;
-const VALID_EFFORTS = ['fast', 'default', 'detailed'] as const;
+const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'auto'] as const;
 
 type Mode = (typeof VALID_MODES)[number];
 type Effort = (typeof VALID_EFFORTS)[number];

@@ -197,7 +197,7 @@ describe('AgentProcess: remoteSessionId extraction', () => {
     it('rejects --after when --name is not provided', async () => {
       const mgr = new AgentManager(50, 10, freshBase());
       await expect(
-        mgr.spawn('t', 'claude', 'hi', null, 'plan', 'fast', null, null, null, null, ['someone'])
+        mgr.spawn('t', 'claude', 'hi', null, 'plan', 'low', null, null, null, null, ['someone'])
       ).rejects.toThrow(/--after without --name/i);
     });
 
@@ -205,7 +205,7 @@ describe('AgentProcess: remoteSessionId extraction', () => {
       const base = freshBase();
       const mgr = new AgentManager(50, 10, base);
       await expect(
-        mgr.spawn('t', 'claude', 'hi', null, 'plan', 'fast', null, null, null, 'alice', ['ghost'])
+        mgr.spawn('t', 'claude', 'hi', null, 'plan', 'low', null, null, null, 'alice', ['ghost'])
       ).rejects.toThrow(/no teammate named 'ghost'/i);
     });
 
@@ -213,7 +213,7 @@ describe('AgentProcess: remoteSessionId extraction', () => {
       const base = freshBase();
       const mgr = new AgentManager(50, 10, base);
       // First teammate: no deps.
-      const a = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'fast', null, null, null, 'a');
+      const a = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'low', null, null, null, 'a');
       expect(a.status).toBe('running');
       // Note: in a real run we'd launch a process; test uses spawn without
       // worrying about processes since we're about to assert on staging only.
@@ -237,13 +237,13 @@ describe('AgentProcess: remoteSessionId extraction', () => {
     it('stages teammate with deps as PENDING', async () => {
       const base = freshBase();
       const mgr = new AgentManager(50, 10, base);
-      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'fast', null, null, null, 'alice');
+      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'low', null, null, null, 'alice');
       // alice will try to actually launch (--mode plan, with a real claude shim).
       // In test env claude may or may not be present; what we care about for
       // this test is the STAGING of bob.
       void alice;
       const bob = await mgr.spawn(
-        't', 'claude', 'y', null, 'plan', 'fast', null, null, null, 'bob', ['alice']
+        't', 'claude', 'y', null, 'plan', 'low', null, null, null, 'bob', ['alice']
       );
       expect(bob.status).toBe('pending');
       expect(bob.after).toEqual(['alice']);
@@ -253,9 +253,9 @@ describe('AgentProcess: remoteSessionId extraction', () => {
     it('startReady does not launch a pending teammate whose dep is still running', async () => {
       const base = freshBase();
       const mgr = new AgentManager(50, 10, base);
-      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'fast', null, null, null, 'alice');
+      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'low', null, null, null, 'alice');
       const bob = await mgr.spawn(
-        't', 'claude', 'y', null, 'plan', 'fast', null, null, null, 'bob', ['alice']
+        't', 'claude', 'y', null, 'plan', 'low', null, null, null, 'bob', ['alice']
       );
       // Force alice back to RUNNING so dep check fails for bob.
       alice.status = AgentStatus.RUNNING;
@@ -271,8 +271,8 @@ describe('AgentProcess: remoteSessionId extraction', () => {
     it('startReady launches a pending teammate once all deps are COMPLETED', async () => {
       const base = freshBase();
       const mgr = new AgentManager(50, 10, base);
-      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'fast', null, null, null, 'alice');
-      await mgr.spawn('t', 'claude', 'y', null, 'plan', 'fast', null, null, null, 'bob', ['alice']);
+      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'low', null, null, null, 'alice');
+      await mgr.spawn('t', 'claude', 'y', null, 'plan', 'low', null, null, null, 'bob', ['alice']);
 
       // Simulate alice finishing successfully.
       alice.status = AgentStatus.COMPLETED;
@@ -297,8 +297,8 @@ describe('AgentProcess: remoteSessionId extraction', () => {
     it('startReady does NOT launch if a dep failed', async () => {
       const base = freshBase();
       const mgr = new AgentManager(50, 10, base);
-      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'fast', null, null, null, 'alice');
-      await mgr.spawn('t', 'claude', 'y', null, 'plan', 'fast', null, null, null, 'bob', ['alice']);
+      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'low', null, null, null, 'alice');
+      await mgr.spawn('t', 'claude', 'y', null, 'plan', 'low', null, null, null, 'bob', ['alice']);
 
       alice.status = AgentStatus.FAILED;
       alice.completedAt = new Date();
@@ -314,9 +314,9 @@ describe('AgentProcess: remoteSessionId extraction', () => {
       const base = freshBase();
       const mgr = new AgentManager(50, 10, base);
       // Stage a teammate so we don't depend on claude binary being installed.
-      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'fast', null, null, null, 'alice');
+      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'low', null, null, null, 'alice');
       const bob = await mgr.spawn(
-        't', 'claude', 'y', null, 'plan', 'fast', null, null, null, 'bob',
+        't', 'claude', 'y', null, 'plan', 'low', null, null, null, 'bob',
         ['alice'],
         'claude-opus-4-6'   // model override
       );
@@ -330,9 +330,9 @@ describe('AgentProcess: remoteSessionId extraction', () => {
     it('--env overrides are stored and round-trip through disk', async () => {
       const base = freshBase();
       const mgr = new AgentManager(50, 10, base);
-      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'fast', null, null, null, 'alice');
+      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'low', null, null, null, 'alice');
       const bob = await mgr.spawn(
-        't', 'claude', 'y', null, 'plan', 'fast', null, null, null, 'bob',
+        't', 'claude', 'y', null, 'plan', 'low', null, null, null, 'bob',
         ['alice'],
         null,
         { DEBUG: '1', FEATURE_FLAG: 'on' }
@@ -346,9 +346,9 @@ describe('AgentProcess: remoteSessionId extraction', () => {
     it('loadFromDisk round-trips status correctly (including PENDING)', async () => {
       const base = freshBase();
       const mgr = new AgentManager(50, 10, base);
-      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'fast', null, null, null, 'alice');
+      const alice = await mgr.spawn('t', 'claude', 'x', null, 'plan', 'low', null, null, null, 'alice');
       const bob = await mgr.spawn(
-        't', 'claude', 'y', null, 'plan', 'fast', null, null, null, 'bob', ['alice']
+        't', 'claude', 'y', null, 'plan', 'low', null, null, null, 'bob', ['alice']
       );
       // Re-read from disk via loadFromDisk and confirm PENDING didn't
       // silently turn into RUNNING (the bug I fixed while building this).

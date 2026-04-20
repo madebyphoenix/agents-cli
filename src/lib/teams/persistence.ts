@@ -74,9 +74,12 @@ export interface ProviderConfig {
 }
 
 export interface AgentModelConfig {
-  fast: string;
-  default: string;
-  detailed: string;
+  low: string;
+  medium: string;
+  high: string;
+  xhigh: string;
+  max: string;
+  auto: string;
 }
 
 export interface AgentConfig {
@@ -125,9 +128,12 @@ function getDefaultAgentConfig(agentType: AgentType): AgentConfig {
       command: 'claude -p \'{prompt}\' --output-format stream-json --json',
       enabled: true,
       models: {
-        fast: 'claude-haiku-4-5-20251001',
-        default: 'claude-sonnet-4-6',
-        detailed: 'claude-opus-4-6'
+        low: 'claude-haiku-4-5-20251001',
+        medium: 'claude-sonnet-4-6',
+        high: 'claude-opus-4-6',
+        xhigh: 'claude-opus-4-6',
+        max: 'claude-opus-4-7',
+        auto: 'claude-sonnet-4-6'
       },
       provider: 'anthropic'
     },
@@ -135,9 +141,12 @@ function getDefaultAgentConfig(agentType: AgentType): AgentConfig {
       command: 'codex exec --sandbox workspace-write \'{prompt}\' --json',
       enabled: true,
       models: {
-        fast: 'gpt-4o-mini',
-        default: 'gpt-5.2-codex',
-        detailed: 'gpt-5.1-codex-max'
+        low: 'gpt-4o-mini',
+        medium: 'gpt-5.2-codex',
+        high: 'gpt-5.1-codex-max',
+        xhigh: 'gpt-5.1-codex-max',
+        max: 'gpt-5.1-codex-max',
+        auto: 'gpt-5.2-codex'
       },
       provider: 'openai'
     },
@@ -145,9 +154,12 @@ function getDefaultAgentConfig(agentType: AgentType): AgentConfig {
       command: 'gemini \'{prompt}\' --output-format stream-json',
       enabled: true,
       models: {
-        fast: 'gemini-3-flash-preview',
-        default: 'gemini-3-flash-preview',
-        detailed: 'gemini-3-pro-preview'
+        low: 'gemini-3-flash-preview',
+        medium: 'gemini-3-flash-preview',
+        high: 'gemini-3-pro-preview',
+        xhigh: 'gemini-3-pro-preview',
+        max: 'gemini-3-pro-preview',
+        auto: 'gemini-3-flash-preview'
       },
       provider: 'google'
     },
@@ -155,9 +167,12 @@ function getDefaultAgentConfig(agentType: AgentType): AgentConfig {
       command: 'cursor-agent -p --output-format stream-json \'{prompt}\'',
       enabled: true,
       models: {
-        fast: 'composer-1',
-        default: 'composer-1',
-        detailed: 'composer-1'
+        low: 'composer-1',
+        medium: 'composer-1',
+        high: 'composer-1',
+        xhigh: 'composer-1',
+        max: 'composer-1',
+        auto: 'composer-1'
       },
       provider: 'custom'
     },
@@ -165,9 +180,12 @@ function getDefaultAgentConfig(agentType: AgentType): AgentConfig {
       command: 'opencode run --format json \'{prompt}\'',
       enabled: true,
       models: {
-        fast: 'zai-coding-plan/glm-4.7-flash',
-        default: 'zai-coding-plan/glm-4.7',
-        detailed: 'zai-coding-plan/glm-4.7'
+        low: 'zai-coding-plan/glm-4.7-flash',
+        medium: 'zai-coding-plan/glm-4.7',
+        high: 'zai-coding-plan/glm-4.7',
+        xhigh: 'zai-coding-plan/glm-4.7',
+        max: 'zai-coding-plan/glm-4.7',
+        auto: 'zai-coding-plan/glm-4.7'
       },
       provider: 'custom'
     }
