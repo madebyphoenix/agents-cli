@@ -1,18 +1,40 @@
 # agents
 
-**The package manager and runtime for AI coding agents.**
+[![npm version](https://img.shields.io/npm/v/@phnx-labs/agents-cli.svg?style=flat-square)](https://www.npmjs.com/package/@phnx-labs/agents-cli)
+[![license](https://img.shields.io/npm/l/@phnx-labs/agents-cli.svg?style=flat-square)](./LICENSE)
+[![downloads](https://img.shields.io/npm/dm/@phnx-labs/agents-cli.svg?style=flat-square)](https://www.npmjs.com/package/@phnx-labs/agents-cli)
+[![homepage](https://img.shields.io/badge/homepage-agents--cli.sh-blue?style=flat-square)](https://agents-cli.sh)
 
-Install versions. Install skills. Run any agent through one interface. Put agents on a team to work a shared task in parallel. Works with Claude, Codex, Gemini, Cursor, OpenCode, and more.
+**The open client for AI coding agents.** Run Claude, Codex, Gemini, Cursor — same interface, on your machine.
+
+Pin versions per project. Install skills, MCP servers, and slash commands once — every agent gets them. Chain agents in pipelines. Put agents on a team to work a shared task in parallel.
 
 ```bash
-npm install -g @swarmify/agents-cli
+curl -fsSL agents-cli.sh | sh
+# or
+npm install -g @phnx-labs/agents-cli
 ```
 
-Also available as `ag` -- all commands work with both `agents` and `ag`.
+Also available as `ag` — all commands work with both `agents` and `ag`.
+
+## Table of contents
+
+- [Run any agent, same interface](#run-any-agent-same-interface)
+- [Put agents on a team](#put-agents-on-a-team)
+- [Non-interactive usage](#non-interactive-usage)
+- [Search sessions fast](#search-sessions-fast)
+- [Pin agent versions per project](#pin-agent-versions-per-project)
+- [Install skills, MCP servers, and commands once](#install-skills-mcp-servers-and-commands-once--every-agent-gets-them)
+- [Quick reference](#quick-reference)
+- [Skill format](#skill-format)
+- [Compatibility](#compatibility)
+- [FAQ](#faq)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## Run any agent. Same interface.
+## Run any agent, same interface
 
 ```bash
 agents run claude "Find all auth vulnerabilities in src/"
@@ -199,12 +221,7 @@ agents push                       # Snapshot your config to git
 agents pull                       # Restore on any machine
 ```
 
-`push` captures your current agent versions and MCP registrations into `~/.agents/`. `pull` does the real work -- it installs agent CLIs, registers MCP servers, syncs resources (commands, skills, rules, hooks, permissions) into each agent's config directory, sets up PATH shims, and configures defaults. One command, fully configured machine.
-
-```bash
-agents fork                       # Fork the default repo to your GitHub
-agents pull --upstream             # Merge updates from upstream
-```
+`push` captures your current agent versions and MCP registrations into `~/.agents/`. `pull` does the real work — it installs agent CLIs, registers MCP servers, syncs resources (commands, skills, rules, hooks, permissions) into each agent's config directory, sets up PATH shims, and configures defaults. One command, fully configured machine.
 
 ### Interactive PTY sessions
 
@@ -299,7 +316,6 @@ agents mcp add <name> <cmd>       # Register manually
 # Sync
 agents pull [source]              # Sync from repo
 agents push                       # Push changes back
-agents fork                       # Fork to your GitHub
 
 # Drive
 agents drive remote <user@host>   # Set sync target
@@ -380,10 +396,60 @@ Add rule files in a `rules/` subdirectory -- each rule is a markdown file with s
 | OpenCode | yes | yes | yes | yes | AGENTS.md | yes | yes | -- | yes |
 | OpenClaw | yes | yes | -- | yes | workspace/AGENTS.md | yes | -- | -- | -- |
 
-## How It Compares
+## FAQ
 
-See [docs/04-landscape.md](docs/04-landscape.md) for a detailed comparison with other tools in the ecosystem -- Rivet, Agentloom, mise, skills.sh, cass, Microsoft APM, and more.
+### Why use `agents` instead of `claude` / `codex` / `gemini` directly?
+
+Each agent CLI has its own config format, its own MCP setup, its own version management, its own skill system. If you use more than one, you end up maintaining N copies of everything. `agents` gives you one interface, one config source, and one place to pin versions — plus features the individual CLIs don't ship: cross-agent pipelines, shared teams, session discovery across all of them, and project-pinned versions like `.nvmrc`.
+
+### Is this like `nvm` / `mise` / `asdf` but for AI agents?
+
+For version management, yes — that's the closest analogue. `agents-cli` reads `.agents-version` in a project, walks up the directory tree, and routes `claude` / `codex` / `gemini` to the correct installed binary per project. But `agents` also manages agent-native resources (skills, MCP servers, slash commands, hooks, permissions) that language version managers don't touch.
+
+### How is this different from Vercel's Open Agents?
+
+Open Agents is a hosted cloud product. `agents-cli` is a local-first open client — your agents run on your machine against your API keys, no SaaS layer in between. Part of an open stack for AI coding agents; cloud runner coming separately.
+
+### Does it store my API keys or send telemetry?
+
+No. `agents-cli` reads API keys from your shell environment or each agent CLI's existing auth (it never writes a credential file, never reads one you didn't already set up). No telemetry, no phone-home. All state lives in `~/.agents/` and each agent's own config dir.
+
+### Do I need Node.js? Bun?
+
+Either works. The installer tries Bun first (faster), falls back to npm. Node 18+ is required at runtime. No other build tools needed.
+
+### Which platforms are supported?
+
+macOS and Linux today. Windows via WSL works but isn't first-class. Native Windows support is on the roadmap.
+
+### Can I use `agents` in CI?
+
+Yes — `agents run` is non-interactive by default with `--yes` flags for every prompt and JSON output for parsing. The [non-interactive usage](#non-interactive-usage) section covers the automation-friendly flags.
+
+### Can I add support for a new agent CLI?
+
+Yes. Agents are defined in [src/lib/agents.ts](src/lib/agents.ts) — each is a config object declaring commands dir, memory file format, and capabilities. Open an issue or PR.
+
+### What's the relationship to Phoenix Labs / Rush?
+
+`agents-cli` is an open client maintained by Phoenix Labs. Rush is a separate product that builds on top of the same runtime. You can use `agents-cli` on its own — no Rush account required, no upsell.
+
+## Contributing
+
+PRs and issues welcome. To develop locally:
+
+```bash
+git clone https://github.com/phnx-labs/agents-cli
+cd agents-cli
+bun install
+bun run build
+bun test
+```
+
+The CLI entry is [src/index.ts](src/index.ts). Commands live in [src/commands/](src/commands/); shared libraries in [src/lib/](src/lib/). Tests sit next to source as `*.test.ts` and run under `vitest` (see [CLAUDE.md](CLAUDE.md) for the full style guide).
+
+For a full comparison with other tools in the ecosystem — Rivet, Agentloom, mise, skills.sh, cass, Microsoft APM — see [docs/04-landscape.md](docs/04-landscape.md).
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
