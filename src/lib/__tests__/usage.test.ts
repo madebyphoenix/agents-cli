@@ -210,7 +210,7 @@ describe('Claude usage cache', () => {
     }
   });
 
-  it('drops cached windows that have already expired', () => {
+  it('resets expired cached windows to 0%', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-usage-cache-'));
     const cachePath = path.join(tempDir, 'claude-usage.json');
     const snapshot: UsageSnapshot = {
@@ -245,7 +245,9 @@ describe('Claude usage cache', () => {
         new Date('2026-04-17T14:00:00Z')
       );
 
-      expect(cached?.windows.map((window) => window.shortLabel)).toEqual(['W']);
+      expect(cached?.windows.map((window) => window.shortLabel)).toEqual(['S', 'W']);
+      expect(cached?.windows.find((w) => w.shortLabel === 'S')?.usedPercent).toBe(0);
+      expect(cached?.windows.find((w) => w.shortLabel === 'W')?.usedPercent).toBe(80);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
