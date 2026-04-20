@@ -46,12 +46,37 @@ import {
 export function registerRulesCommands(program: Command): void {
   const rulesCmd = program
     .command('rules')
-    .description('Manage agent rules/instructions (AGENTS.md, CLAUDE.md, .cursorrules, etc.)');
+    .description('Control agent behavior by installing persistent instructions and rules')
+    .addHelpText('after', `
+Rules are markdown files (AGENTS.md, CLAUDE.md, .cursorrules) that define how an agent operates. They persist across sessions and guide the agent's approach to tasks.
+
+Examples:
+  # List all rule files across agents
+  agents rules list
+
+  # Check rules for a specific agent and version
+  agents rules list claude@2.1.112
+
+  # Install rules from your .agents repo to multiple agents
+  agents rules add --agents claude,codex,gemini
+
+  # Install a shared rule file from GitHub
+  agents rules add gh:anthropics/agent-rules --agents codex@0.116.0
+
+  # View the content of your claude rules
+  agents rules view claude --scope user
+
+When to use:
+  - New agent install: sync your standard rules with 'agents rules add --agents claude'
+  - Team onboarding: share rules via 'agents rules add gh:team/standards'
+  - Project setup: add project-specific rules with '--scope project'
+  - Version testing: install different rule sets per version to A/B test approaches
+`);
 
   rulesCmd
     .command('list [agent]')
-    .description('List installed rule files. Use agent@version for specific version, agent@default for default only.')
-    .option('-a, --agent <agent>', 'Filter by agent')
+    .description('Show which rule files are installed. Pass agent@version to see a specific version.')
+    .option('-a, --agent <agent>', 'Filter to a specific agent (alternative to positional arg)')
     .action(async (agentArg, options) => {
       const cwd = process.cwd();
 
@@ -200,10 +225,24 @@ export function registerRulesCommands(program: Command): void {
 
   rulesCmd
     .command('add [source]')
-    .description('Install rule files from a repo or local path')
-    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to install to')
-    .option('--names <list>', 'Comma-separated rule file names from ~/.agents/memory/')
-    .option('-y, --yes', 'Skip prompts and use defaults')
+    .description('Install rule files from a source (GitHub, local path) or pick from central storage')
+    .option('-a, --agents <list>', 'Targets: claude, codex@0.116.0, or gemini@default')
+    .option('--names <list>', 'Rule file names from ~/.agents/memory/ (comma-separated)')
+    .option('-y, --yes', 'Skip all prompts and use defaults')
+    .addHelpText('after', `
+Examples:
+  # Interactive: pick from ~/.agents/memory/ and select agents
+  agents rules add
+
+  # Install AGENTS.md to codex version 0.116.0
+  agents rules add --names AGENTS.md --agents codex@0.116.0
+
+  # Install all rules from a GitHub repo to multiple agents
+  agents rules add gh:team/agent-rules --agents claude,gemini
+
+  # Sync a local rules directory to your active agents
+  agents rules add ~/projects/my-rules --agents claude@default
+`)
     .action(async (source: string | undefined, options) => {
       try {
         let ruleNames: string[];
@@ -364,8 +403,19 @@ export function registerRulesCommands(program: Command): void {
 
   rulesCmd
     .command('view [agent]')
-    .description('Show rule file content for an agent. Use agent@version for specific version.')
-    .option('-s, --scope <scope>', 'Scope: user or project', 'user')
+    .description('Read the full content of a rule file with markdown rendering')
+    .option('-s, --scope <scope>', 'user (global) or project (repo-specific)', 'user')
+    .addHelpText('after', `
+Examples:
+  # Read the user-level rules for claude
+  agents rules view claude
+
+  # Check project-specific rules for codex
+  agents rules view codex --scope project
+
+  # View rules for a specific installed version
+  agents rules view gemini@1.5.0
+`)
     .action(async (agentArg?: string, options?: { scope?: string }) => {
       const cwd = process.cwd();
       let agentId: AgentId | undefined;
@@ -446,7 +496,15 @@ export function registerRulesCommands(program: Command): void {
 
   rulesCmd
     .command('remove <agent>')
-    .description('Remove user rules for an agent. Use agent@version for specific version.')
+    .description('Delete user-level rule files for an agent or version')
+    .addHelpText('after', `
+Examples:
+  # Remove user rules for claude (all versions)
+  agents rules remove claude
+
+  # Remove rules only from a specific version
+  agents rules remove codex@0.116.0
+`)
     .action((agentArg: string) => {
       const parts = agentArg.split('@');
       const agentName = parts[0];

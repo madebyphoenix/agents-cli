@@ -128,9 +128,31 @@ function warnIfShimShadowed(agent: AgentId): void {
 export function registerVersionsCommands(program: Command): void {
   program
     .command('add <specs...>')
-    .description('Install agent CLI versions')
-    .option('-p, --project', 'Pin version in project manifest (.agents/agents.yaml)')
-    .option('-y, --yes', 'Skip prompts and use defaults')
+    .description('Download and install agent CLI versions. Enables subsidized API usage through managed binaries.')
+    .option('-p, --project', 'Lock this version to the current project directory only, stored in .agents/agents.yaml')
+    .option('-y, --yes', 'Auto-accept defaults without prompting (useful for scripts and CI)')
+    .addHelpText('after', `
+Examples:
+  # Fresh install of the latest Claude CLI
+  agents add claude@latest
+
+  # Install specific version (use this when you need reproducibility)
+  agents add claude@2.1.112
+
+  # Install multiple agents at once
+  agents add claude@latest codex@0.116.0
+
+  # Pin a version to this project only (won't affect global default)
+  agents add claude@2.1.100 --project
+
+When to use:
+  - First time setup: install the agent CLI you want to use
+  - Upgrading: install a newer version (old versions remain available)
+  - Multi-account: install different versions for different accounts (each version has its own auth)
+  - Project-specific: lock a version for a repo with --project
+
+Note: The first version you install is NOT set as default automatically. Run 'agents use' to set it.
+`)
     .action(async (specs: string[], options) => {
       const isProject = options.project;
       const skipPrompts = options.yes || !isInteractiveTerminal();
@@ -330,8 +352,28 @@ export function registerVersionsCommands(program: Command): void {
 
   program
     .command('remove <specs...>')
-    .description('Remove agent CLI versions')
-    .option('-p, --project', 'Also remove from project manifest')
+    .description('Uninstall agent CLI versions from your system. Frees up disk space and removes auth tokens.')
+    .option('-p, --project', 'Also clear the pinned version from .agents/agents.yaml in the current project')
+    .addHelpText('after', `
+Examples:
+  # Remove a specific version
+  agents remove claude@2.0.50
+
+  # Remove without specifying version (opens interactive picker)
+  agents remove claude
+
+  # Remove and also clear project pin
+  agents remove claude@2.0.50 --project
+
+When to use:
+  - Freeing disk space by removing old unused versions
+  - Cleaning up after testing a version you no longer need
+  - Removing a version tied to an account you've deactivated
+
+Notes:
+  - Removing the default version will unset the default; run 'agents use' to pick a new one
+  - You can always reinstall with 'agents add' later
+`)
     .action(async (specs: string[], options) => {
       const isProject = options.project;
 
