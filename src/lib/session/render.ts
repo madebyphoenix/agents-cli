@@ -295,10 +295,13 @@ function extractReferences(text: string): string[] {
 
 // ── Tool summary (short form for reasoning section) ───────────────────────────
 
-function toolSummaryShort(event: SessionEvent, cwd?: string): string {
+function toolSummaryShort(event: SessionEvent, cwd?: string, verbose = false): string {
   const tool = event.tool || '';
   const args = event.args || {};
   const p = event.path || args.file_path || args.path || '';
+  const cmdWidth = verbose ? 180 : 50;
+  const patternWidth = verbose ? 80 : 30;
+  const descWidth = verbose ? 120 : 50;
 
   switch (tool) {
     case 'Read':
@@ -309,22 +312,22 @@ function toolSummaryShort(event: SessionEvent, cwd?: string): string {
     }
     case 'Bash': {
       const cmd = String(args.command || '').replace(/\n/g, ' ').trim();
-      return cmd ? `Bash ${cmd.slice(0, 50)}${cmd.length > 50 ? '…' : ''}` : 'Bash';
+      return cmd ? `Bash ${cmd.slice(0, cmdWidth)}${cmd.length > cmdWidth ? '…' : ''}` : 'Bash';
     }
     case 'Grep':
-      return `Grep "${(String(args.pattern || '')).slice(0, 30)}"`;
+      return `Grep "${String(args.pattern || '').slice(0, patternWidth)}"`;
     case 'Glob':
       return `Glob ${args.pattern || ''}`;
     case 'Agent':
     case 'Task':
-      return `${tool}: ${String(args.description || args.prompt || '').slice(0, 50)}`;
+      return `${tool}: ${String(args.description || args.prompt || '').slice(0, descWidth)}`;
     case 'TodoWrite':
       return 'TodoWrite';
     case 'ExitPlanMode':
       return 'ExitPlanMode';
     default: {
       for (const k of ['file_path', 'path', 'pattern', 'command', 'description']) {
-        if (args[k]) return `${tool}: ${String(args[k]).slice(0, 50)}`;
+        if (args[k]) return `${tool}: ${String(args[k]).slice(0, descWidth)}`;
       }
       return tool;
     }
@@ -495,7 +498,13 @@ function renderFileGroup(lines: string[], groups: Map<string, string[]>, absPath
  * Render session as an activity summary.
  * Returns a chalk-formatted string (not markdown) for direct terminal output.
  */
-export function renderSummary(events: SessionEvent[], cwd?: string): string {
+export interface RenderSummaryOptions {
+  /** When true, show Timeline section and suppress the bucketed sections. */
+  timeline?: boolean;
+}
+
+export function renderSummary(events: SessionEvent[], cwd?: string, opts: RenderSummaryOptions = {}): string {
+  const timelineMode = !!opts.timeline;
   // ── Collect data in a single chronological pass ───────────────────────────
 
   let firstUserMessage = '';
@@ -574,7 +583,7 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
 
       // Attach to current timeline entry
       if (currentEntry) {
-        currentEntry.tools.push({ summary: toolSummaryShort(event, cwd) });
+        currentEntry.tools.push({ summary: toolSummaryShort(event, cwd, timelineMode) });
       }
 
     } else if (event.type === 'error') {
