@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+
+const LIVE = process.env.LIVE === '1';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir, tmpdir } from 'os';
@@ -99,7 +101,7 @@ describe('getEnabledRegistries', () => {
   });
 });
 
-describe('MCP Registry API (live)', () => {
+describe.skipIf(!LIVE)('MCP Registry API (live)', () => {
   it('searches for servers', async () => {
     const results = await searchMcpRegistries('github', { limit: 5 });
     expect(Array.isArray(results)).toBe(true);
@@ -117,26 +119,31 @@ describe('MCP Registry API (live)', () => {
   });
 
   it('gets specific server info', async () => {
-    // Search for a known MCP server
     const info = await getMcpServerInfo('filesystem');
-    // May or may not find it depending on registry state
     if (info) {
       expect(info).toHaveProperty('name');
+    }
+  });
+
+  it('search: searches all registry types by default', async () => {
+    const results = await search('github', { limit: 5 });
+    expect(Array.isArray(results)).toBe(true);
+  });
+
+  it('search: filters by MCP type', async () => {
+    const results = await search('github', { type: 'mcp', limit: 5 });
+    expect(results.every((r) => r.type === 'mcp')).toBe(true);
+  });
+
+  it('resolvePackage: resolves mcp: prefix via registry', async () => {
+    const result = await resolvePackage('mcp:filesystem');
+    if (result) {
+      expect(result.type).toBe('mcp');
     }
   });
 });
 
 describe('search', () => {
-  it('searches all registry types by default', async () => {
-    const results = await search('github', { limit: 5 });
-    expect(Array.isArray(results)).toBe(true);
-  });
-
-  it('filters by MCP type', async () => {
-    const results = await search('github', { type: 'mcp', limit: 5 });
-    expect(results.every((r) => r.type === 'mcp')).toBe(true);
-  });
-
   it('returns empty for skill type (no registries)', async () => {
     const results = await search('github', { type: 'skill', limit: 5 });
     expect(results).toEqual([]);
@@ -152,15 +159,6 @@ describe('resolvePackage', () => {
   it('resolves skill: prefix to git fallback', async () => {
     const result = await resolvePackage('skill:user/repo');
     expect(result).toEqual({ type: 'git', source: 'gh:user/repo' });
-  });
-
-  it('resolves mcp: prefix via registry', async () => {
-    // This will search the MCP registry
-    const result = await resolvePackage('mcp:filesystem');
-    // May or may not find it depending on registry
-    if (result) {
-      expect(result.type).toBe('mcp');
-    }
   });
 
   it('resolves unknown user/repo to git fallback', async () => {
