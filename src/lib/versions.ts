@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as yaml from 'yaml';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import chalk from 'chalk';
@@ -1095,20 +1096,21 @@ export function resolveVersion(agent: AgentId, projectPath?: string): string | n
 }
 
 /**
- * Get version specified in project manifest.
+ * Get version specified in a project-root agents.yaml (not the user ~/.agents/agents.yaml).
  */
 export function getProjectVersion(agent: AgentId, startPath: string): string | null {
+  const userAgentsYaml = path.join(os.homedir(), '.agents', 'agents.yaml');
   let dir = path.resolve(startPath);
 
   while (dir !== path.dirname(dir)) {
-    const manifestPath = path.join(dir, '.agents', 'agents.yaml');
-    if (fs.existsSync(manifestPath)) {
+    const manifestPath = path.join(dir, 'agents.yaml');
+    if (manifestPath !== userAgentsYaml && fs.existsSync(manifestPath)) {
       try {
         const content = fs.readFileSync(manifestPath, 'utf-8');
-        // Simple YAML parsing for agents section (flat format: claude: "1.5.0")
-        const agentMatch = content.match(new RegExp(`^\\s+${agent}:\\s*['"]?([^'"\n]+)['"]?`, 'm'));
-        if (agentMatch) {
-          return agentMatch[1].trim();
+        const parsed = yaml.parse(content);
+        const version = parsed?.agents?.[agent];
+        if (typeof version === 'string' && version.trim()) {
+          return version.trim();
         }
       } catch {
         // Ignore parsing errors

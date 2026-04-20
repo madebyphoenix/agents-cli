@@ -159,7 +159,7 @@ export async function promptConflictStrategy(
  * Generate the shim script content for an agent.
  *
  * The shim resolves the version in order:
- * 1. .agents-version in cwd (walk up to root)
+ * 1. agents.yaml in project root (walk up from $PWD, skip ~/.agents/agents.yaml)
  * 2. ~/.agents/agents.yaml default
  *
  * If version is specified but not installed, auto-installs it.
@@ -179,8 +179,11 @@ export async function promptConflictStrategy(
  *        shim hook for non-@-capable agents.
  *   v3 — sync/refresh-memory flag renamed `--version` → `--agent-version`
  *        so it no longer collides with commander's top-level `--version`.
+ *   v4 — project version marker changed from `.agents-version` to a
+ *        root-level `agents.yaml`; shim now skips ~/.agents/agents.yaml
+ *        when walking up for a project marker.
  */
-export const SHIM_SCHEMA_VERSION = 3;
+export const SHIM_SCHEMA_VERSION = 4;
 
 const SHIM_VERSION_MARKER = 'agents-shim-version:';
 
@@ -219,30 +222,20 @@ AGENTS_DIR="$HOME/.agents"
 AGENT="${agent}"
 CLI_COMMAND="${cliCommand}"
 
-# Find .agents-version walking up from cwd
+# Find project agents.yaml walking up from cwd (skip ~/.agents/agents.yaml)
 find_project_version() {
   local dir="$PWD"
+  local user_agents_yaml="$HOME/.agents/agents.yaml"
   while [ "$dir" != "/" ]; do
-    if [ -f "$dir/.agents-version" ]; then
-      # Parse YAML - handle both "agent: version" and "agent:\\n  - version"
+    local candidate="$dir/agents.yaml"
+    if [ -f "$candidate" ] && [ "$candidate" != "$user_agents_yaml" ]; then
+      # Parse agents: section — same shape as resolve_default_version()
       local version
       version=$(awk -v agent="$AGENT" '
-        $0 ~ "^" agent ":" {
-          # Check if value is on same line
-          if (match($0, /:[[:space:]]+[0-9]/)) {
-            gsub(/.*:[[:space:]]*["'"'"']?|["'"'"']?[[:space:]]*$/, "")
-            print
-            exit
-          }
-          # Value might be on next line (array format)
-          getline
-          if (/^[[:space:]]+-[[:space:]]/) {
-            gsub(/^[[:space:]]+-[[:space:]]*["'"'"']?|["'"'"']?[[:space:]]*$/, "")
-            print
-            exit
-          }
-        }
-      ' "$dir/.agents-version")
+        /^agents:/ { in_agents=1; next }
+        in_agents && /^[^ ]/ { in_agents=0 }
+        in_agents && $0 ~ "^  " agent ":" { gsub(/.*:[[:space:]]*["'"'"']?|["'"'"']?[[:space:]]*$/, ""); print; exit }
+      ' "$candidate")
       if [ -n "$version" ]; then
         echo "$version"
         return 0
@@ -265,7 +258,7 @@ resolve_default_version() {
   fi
 }
 
-# Find project-scoped .agents directory (stop at .git or .agents-version)
+# Find project-scoped .agents directory (stop at agents.yaml or .git)
 find_project_agents_dir() {
   local dir="$PWD"
   while [ "$dir" != "/" ]; do
@@ -273,7 +266,7 @@ find_project_agents_dir() {
       echo "$dir/.agents"
       return 0
     fi
-    if [ -f "$dir/.agents-version" ] || [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
+    if [ -f "$dir/agents.yaml" ] || [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
       break
     fi
     dir=$(dirname "$dir")
@@ -301,7 +294,7 @@ BINARY="$VERSION_DIR/node_modules/.bin/$CLI_COMMAND"
 # Auto-install if not present
 if [ ! -x "$BINARY" ]; then
   if [ "$VERSION_SOURCE" = "project" ]; then
-    echo "agents: $AGENT@$VERSION required by .agents-version but not installed" >&2
+    echo "agents: $AGENT@$VERSION required by agents.yaml but not installed" >&2
 
     # Spinner animation
     spin() {

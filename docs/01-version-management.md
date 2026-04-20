@@ -39,10 +39,10 @@ User runs: claude --help
 ┌─────────────────────────────────────────────────────────────────────┐
 │  ~/.agents/shims/claude (bash script)                               │
 │                                                                     │
-│  1. Walk up from $PWD looking for .agents-version file              │
-│     └─ Parse YAML: claude: "2.0.70"                                 │
+│  1. Walk up from $PWD looking for project agents.yaml               │
+│     └─ Parse agents.claude: "2.0.70" (skips ~/.agents/agents.yaml)  │
 │                                                                     │
-│  2. If not found, read ~/.agents/agents.yaml                        │
+│  2. If not found, read ~/.agents/agents.yaml (user default)         │
 │     └─ Parse: agents.claude = "2.0.65"                              │
 │                                                                     │
 │  3. If version not installed, auto-install (project versions only)  │

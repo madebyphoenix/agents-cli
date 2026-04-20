@@ -10,7 +10,7 @@ The space is young and moving fast. Many of these tools are excellent and solve 
 
 agents-cli is a developer workstation tool that combines:
 
-1. **Version management** -- Pin AI agent CLI versions per project via `.agents-version`, with shim-based resolution and isolated config per version
+1. **Version management** -- Pin AI agent CLI versions per project via `agents.yaml`, with shim-based resolution and isolated config per version
 2. **Package management** -- Install and sync skills, MCP servers, slash commands, rules, hooks, and permissions across all agents
 3. **Unified execution** -- Run any agent through one interface (`agents run <agent> <prompt>`), enabling pipelines and CI scripting
 4. **Team sharing** -- Git-based push/pull of your entire agent setup, so teammates and new machines get the same config in one command
@@ -26,7 +26,7 @@ No other single tool combines all five. Each individual capability has strong to
 
 | Tool | What it does | Difference |
 |------|-------------|------------|
-| [mise](https://mise.jdx.dev) | Universal dev tool version manager (asdf successor). Has Claude and Codex in its registry via npm backend. | General-purpose -- no config isolation per version, no `.agents-version` file, no automatic backup on version switch. Great tool for language runtimes; agent CLIs are a secondary use case. |
+| [mise](https://mise.jdx.dev) | Universal dev tool version manager (asdf successor). Has Claude and Codex in its registry via npm backend. | General-purpose -- no config isolation per version, no project `agents.yaml`, no automatic backup on version switch. Great tool for language runtimes; agent CLIs are a secondary use case. |
 | [llm-agents.nix](https://github.com/numtide/llm-agents.nix) | Nix flake packaging 50+ agent CLIs. 1,000+ stars, auto-updated daily. | Deterministic builds via Nix, not per-project switching. Excellent if your team already uses Nix. |
 | [AgentManager](https://github.com/kevinelliott/agentmanager) | Detects installed agents, checks for updates. | Global-only -- no per-project pinning or version switching. Useful as a dashboard for what's installed. |
 

@@ -35,7 +35,7 @@ CLI for managing AI coding agent versions, config, and sessions (Claude, Codex, 
 1. If `~/.claude/` is a real directory -> backup to `~/.agents/backups/claude/{timestamp}/`
 2. Create symlink: `~/.claude/ -> ~/.agents/versions/claude/2.0.65/home/.claude/`
 
-Shims in `~/.agents/shims/` resolve version from `.agents-version` (project) or `agents.yaml` (global), then exec.
+Shims in `~/.agents/shims/` resolve version from project-root `agents.yaml` (project) or `~/.agents/agents.yaml` (user default), then exec.
 
 ### Resource Sync
 
@@ -193,7 +193,7 @@ All formats normalize to `SessionEvent` with types: message, tool_use, tool_resu
 
 - `setGlobalDefault()` MUST only be called from `agents use`
 - Resources sync via symlinks, not copies (except Gemini TOML conversion)
-- Version resolution: `.agents-version` (walk up) -> `~/.agents/agents.yaml`
+- Version resolution: project-root `agents.yaml` (walk up, skip `~/.agents/agents.yaml`) -> `~/.agents/agents.yaml` (user default)
 
 ## Build
 
