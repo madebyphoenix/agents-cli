@@ -265,9 +265,15 @@ async function printTeamStatus(team: string, result: import('../lib/teams/api.js
     console.log(chalk.gray('  (no teammates yet — add one with `agents teams add`)'));
   } else {
     const sessions = await resolveTeammateSessions(agents);
-    for (const a of agents) {
+    const width = Math.min(process.stdout.columns || 80, 80);
+    const divider = chalk.gray('┈'.repeat(width));
+    for (let i = 0; i < agents.length; i++) {
       console.log();
-      printAgentDetail(a, sessions.get(a.agent_id) ?? null);
+      if (i > 0) {
+        console.log(divider);
+        console.log();
+      }
+      printAgentDetail(agents[i], sessions.get(agents[i].agent_id) ?? null);
     }
   }
   console.log();
