@@ -103,6 +103,10 @@ Run agents:
   teams                           Coordinate multiple agents on shared work
   sessions                        Browse and replay past runs
 
+Credentials:
+  profiles                        Bundles of (host CLI, endpoint, model, auth)
+  secrets                         Keychain-backed env bundles injected at spawn
+
 Schedule:
   routines                        Run agents on a cron schedule (scheduler auto-starts)
 

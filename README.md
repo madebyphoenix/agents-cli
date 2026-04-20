@@ -20,6 +20,7 @@ Also available as `ag` — all commands work with both `agents` and `ag`.
 ## Table of contents
 
 - [Run any agent, same interface](#run-any-agent-same-interface)
+- [Keep secrets out of plaintext env files](#keep-secrets-out-of-plaintext-env-files)
 - [Put agents on a team](#put-agents-on-a-team)
 - [Non-interactive usage](#non-interactive-usage)
 - [Search sessions fast](#search-sessions-fast)
@@ -343,6 +344,18 @@ agents search <query>             # Find in registry
 agents install mcp:<name>         # Install + register
 agents mcp list                   # Show registered servers
 agents mcp add <name> <cmd>       # Register manually
+
+# Secrets (keychain-backed env bundles, injected at run time)
+agents secrets list                       # Show all bundles
+agents secrets add <name>                 # Create an empty bundle
+agents secrets set <bundle> <KEY>         # Prompt, store in keychain, write ref
+agents secrets set <bundle> <KEY> --value <v>      # Store as YAML literal
+agents secrets set <bundle> <KEY> --env <VAR>      # Inherit from parent shell
+agents secrets set <bundle> <KEY> --file <path>    # Read from a file at run time
+agents secrets view <name> [--reveal]     # Show bundle (masked by default)
+agents secrets import <name> --from .env  # Import a dotenv file into keychain
+agents secrets rm <name>                  # Delete bundle and purge keychain
+agents run <agent> "..." --secrets <name> # Inject a bundle (repeatable)
 
 # Sync
 agents pull [source]              # Sync from repo
