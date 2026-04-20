@@ -14,11 +14,37 @@ import { listJobs as listAllJobs } from '../lib/routines.js';
 import { JobScheduler } from '../lib/scheduler.js';
 
 export function registerDaemonCommands(program: Command): void {
-  const daemonCmd = program.command('daemon').description('Manage the jobs daemon');
+  const daemonCmd = program
+    .command('daemon')
+    .description('Control the background daemon that executes routines on schedule. Routines only fire when the daemon is running.')
+    .addHelpText(
+      'after',
+      `
+The daemon is a background process that watches your routines and executes them
+on schedule. It runs independently of your terminal session (safe to log out).
+
+Start it once after boot or when you add your first routine. It reloads automatically
+when you add, edit, or remove routines.
+
+Examples:
+  # Launch the daemon (required before routines will execute)
+  agents daemon start
+
+  # Check whether it's running and see upcoming routine executions
+  agents daemon status
+
+  # Stop the daemon (scheduled routines won't fire until you restart)
+  agents daemon stop
+
+  # Read daemon logs (useful when a routine behaves unexpectedly)
+  agents daemon logs
+  agents daemon logs --follow
+`
+    );
 
   daemonCmd
     .command('start')
-    .description('Start the daemon')
+    .description('Launch the daemon if not already running. Routines will begin firing on schedule.')
     .action(() => {
       const result = startDaemon();
       if (result.method === 'already-running') {
@@ -30,7 +56,7 @@ export function registerDaemonCommands(program: Command): void {
 
   daemonCmd
     .command('stop')
-    .description('Stop the daemon')
+    .description('Shut down the daemon. Scheduled routines will not execute until you start it again.')
     .action(() => {
       if (!isDaemonRunning()) {
         console.log(chalk.yellow('Daemon is not running'));
@@ -42,7 +68,7 @@ export function registerDaemonCommands(program: Command): void {
 
   daemonCmd
     .command('status')
-    .description('Show daemon status')
+    .description('Show whether the daemon is running, how many routines are enabled, and when they fire next')
     .action(() => {
       const running = isDaemonRunning();
       const pid = readDaemonPid();
@@ -70,9 +96,9 @@ export function registerDaemonCommands(program: Command): void {
 
   daemonCmd
     .command('logs')
-    .description('Show daemon logs')
-    .option('-n, --lines <number>', 'Number of lines to show', '50')
-    .option('-f, --follow', 'Follow log output')
+    .description('Read daemon log output. Use --follow to stream new entries as they arrive.')
+    .option('-n, --lines <number>', 'Show this many recent lines (default: 50)', '50')
+    .option('-f, --follow', 'Stream log output in real time (like tail -f)')
     .action(async (options) => {
       if (options.follow) {
         const { exec: execCb } = await import('child_process');

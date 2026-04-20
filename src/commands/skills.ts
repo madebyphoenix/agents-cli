@@ -47,13 +47,37 @@ import {
 export function registerSkillsCommands(program: Command): void {
   const skillsCmd = program
     .command('skills')
-    .description('Manage skills (SKILL.md + rules/)');
+    .description('Add domain-specific capabilities to agents via packaged SKILL.md files')
+    .addHelpText('after', `
+Skills are structured bundles (SKILL.md + rules/) that teach agents specialized domains: API conventions, testing patterns, code review checklists. Each skill can ship with its own rules that only apply when the skill is invoked.
+
+Examples:
+  # See what skills are installed
+  agents skills list
+
+  # Check skills for a specific agent version
+  agents skills list claude@2.1.112
+
+  # Install a skill from GitHub
+  agents skills add gh:anthropics/skills --agents codex,claude
+
+  # Interactive: pick from ~/.agents/skills/
+  agents skills add
+
+  # Install a specific skill by name
+  agents skills add --names api-testing --agents codex@0.116.0
+
+When to use:
+  - Onboarding: 'agents skills add gh:team/skills' to share expertise across the team
+  - Specialization: install domain skills (rush-product-knowledge, rdev) per project
+  - Version isolation: install different skills to different versions for experimentation
+`);
 
   skillsCmd
     .command('list [agent]')
-    .description('List installed skills. Use agent@version for specific version, agent@default for default only.')
-    .option('-a, --agent <agent>', 'Filter by agent')
-    .option('-s, --scope <scope>', 'Filter by scope: user, project, or all', 'all')
+    .description('Show which skills are installed for agents or versions')
+    .option('-a, --agent <agent>', 'Filter to a specific agent (alternative to positional arg)')
+    .option('-s, --scope <scope>', 'user (global), project (repo), or all', 'all')
     .action(async (agentArg, options) => {
       const spinner = ora({ text: 'Loading...', isSilent: !process.stdout.isTTY }).start();
       const cwd = process.cwd();
@@ -312,10 +336,24 @@ export function registerSkillsCommands(program: Command): void {
 
   skillsCmd
     .command('add [source]')
-    .description('Install skills from a repo or local path')
-    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to install to')
-    .option('--names <list>', 'Comma-separated skill names from ~/.agents/skills/')
-    .option('-y, --yes', 'Skip prompts and use defaults')
+    .description('Install skills from a source (GitHub, local) or pick from central storage')
+    .option('-a, --agents <list>', 'Targets: claude, codex@0.116.0, or gemini@default')
+    .option('--names <list>', 'Skill names from ~/.agents/skills/ (comma-separated)')
+    .option('-y, --yes', 'Skip all prompts')
+    .addHelpText('after', `
+Examples:
+  # Interactive picker from ~/.agents/skills/
+  agents skills add
+
+  # Install a specific skill to one version
+  agents skills add --names api-testing --agents codex@0.116.0
+
+  # Clone and install skills from GitHub
+  agents skills add gh:anthropics/skills --agents claude,codex
+
+  # Add a local skill directory (must contain SKILL.md)
+  agents skills add ~/my-skill --agents claude@default
+`)
     .action(async (source: string | undefined, options) => {
       try {
         let skills: { name: string; path?: string; metadata: { description?: string }; ruleCount?: number }[];
@@ -525,7 +563,15 @@ export function registerSkillsCommands(program: Command): void {
 
   skillsCmd
     .command('remove [name]')
-    .description('Remove a skill')
+    .description('Delete a skill from central storage (interactive picker if no name given)')
+    .addHelpText('after', `
+Examples:
+  # Remove a skill by name
+  agents skills remove api-testing
+
+  # Interactive: pick skills to remove
+  agents skills remove
+`)
     .action(async (name?: string) => {
       let skillsToRemove: string[];
 
@@ -585,7 +631,15 @@ export function registerSkillsCommands(program: Command): void {
 
   skillsCmd
     .command('view [name]')
-    .description('Show skill details')
+    .description('Read skill metadata (name, description, rules count)')
+    .addHelpText('after', `
+Examples:
+  # View details for a specific skill
+  agents skills view api-testing
+
+  # Interactive picker
+  agents skills view
+`)
     .action(async (name?: string) => {
       // If no name provided, show interactive select
       if (!name) {

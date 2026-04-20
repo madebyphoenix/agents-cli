@@ -725,18 +725,53 @@ export function registerSessionsCommands(program: Command): void {
   program
     .command('sessions')
     .argument('[query]', 'Session ID, search query, or path (., ../, /path) to filter by project')
-    .description('Browse, search, resume, and render agent sessions')
-    .option('-a, --agent <agent>', SESSION_AGENT_FILTER_HELP)
-    .option('--all', 'Show sessions from every directory')
+    .description('Find, browse, and read agent conversation transcripts across Claude, Codex, Gemini, and OpenCode.')
+    .option('-a, --agent <agent>', 'Filter by agent type and version (e.g., claude, codex@0.116.0)')
+    .option('--all', 'Include sessions from every directory (not just current project)')
     .option('--teams', 'Include team-spawned sessions (hidden by default)')
-    .option('--project <name>', 'Filter by project name across all directories')
-    .option('--since <time>', 'Filter sessions newer than time (e.g., "2h", "7d", "4w", ISO date)')
-    .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
-    .option('-n, --limit <n>', 'Max sessions to show', '50')
-    .option('--transcript', 'Render full conversation transcript (requires query)')
-    .option('--trace', 'Render reasoning trace as markdown (requires query)')
-    .option('--timeline', 'Render chronological timeline of narration + tool clusters (requires query)')
-    .option('--json', 'Output as JSON (session list, or event array when query resolves to one session)')
+    .option('--project <name>', 'Filter by project name (searches across all directories)')
+    .option('--since <time>', 'Only sessions newer than this (e.g., 2h, 7d, 4w, or ISO date)')
+    .option('--until <time>', 'Only sessions older than this (ISO timestamp)')
+    .option('-n, --limit <n>', 'Maximum number of sessions to return', '50')
+    .option('--transcript', 'Show the full conversation (requires a query that resolves to one session)')
+    .option('--trace', 'Show reasoning trace as markdown (requires a query that resolves to one session)')
+    .option('--timeline', 'Show chronological timeline with tool clusters (requires a query that resolves to one session)')
+    .option('--json', 'Output JSON (session list when browsing, event array when rendering one session)')
+    .addHelpText('after', `
+Examples:
+  # Interactive picker: browse and search recent sessions (TTY only)
+  agents sessions
+
+  # List sessions from current project (default: last 30 days, piped output shows table)
+  agents sessions | head -20
+
+  # Search sessions by text (topic, file paths, commands)
+  agents sessions "add auth middleware"
+
+  # Filter by project across all directories
+  agents sessions --project agents-cli --all
+
+  # Filter by agent and time window
+  agents sessions --agent claude --since 7d
+
+  # Filter sessions in a specific directory
+  agents sessions /Users/muqsit/src/my-project
+
+  # View full transcript of one session (by ID, or query that resolves to one)
+  agents sessions a1b2c3d4 --transcript
+
+  # View reasoning trace (thinking blocks) as markdown
+  agents sessions a1b2c3d4 --trace
+
+  # Export all recent sessions as JSON for analysis
+  agents sessions --since 30d --limit 200 --json > sessions.json
+
+  # Include team-spawned sessions in results
+  agents sessions --teams
+
+Note: Without a query, sessions defaults to current directory + last 30 days.
+Pass --all to see sessions from every directory, or a path to filter by location.
+`)
     .action(async (query: string | undefined, options: SessionsOptions) => {
       await sessionsAction(query, options);
     });

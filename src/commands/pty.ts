@@ -23,18 +23,60 @@ import { isPtyServerRunning, runPtyServer, getPtyPidPath, getPtyLogPath } from '
 import * as fs from 'fs';
 
 export function registerPtyCommands(program: Command): void {
-  const pty = program.command('pty').description('Interactive PTY sessions for AI agents');
+  const pty = program
+    .command('pty')
+    .description('Drive interactive terminal programs from AI agents. Use this for REPLs, TUIs, or anything needing a real terminal.')
+    .addHelpText('after', `
+Typical session workflow:
+  # Start a new terminal session (returns a session ID)
+  SID=$(agents pty start)
+
+  # Run a command (non-blocking, returns immediately)
+  agents pty exec $SID "python3"
+
+  # Wait a moment, then see what's on screen (clean text, no ANSI)
+  sleep 1 && agents pty screen $SID
+
+  # Send input (supports escape sequences: \\n \\t \\e \\xHH)
+  agents pty write $SID "print('hello')\\n"
+
+  # Read the output again
+  agents pty screen $SID
+
+  # Clean up when done
+  agents pty stop $SID
+
+Use cases:
+  - Drive REPLs (python, node, irb) from agent code
+  - Automate TUI programs (npm init, interactive wizards)
+  - Test CLI tools that require a real PTY
+  - Run the 'agents' CLI itself from another agent
+
+The PTY server auto-starts on first use and runs in the background.
+Use 'agents pty server status' to check health.
+`);
 
   // --- Session lifecycle ---
 
   pty
     .command('start')
-    .description('Start a new PTY session')
-    .option('-r, --rows <n>', 'Terminal rows', '24')
-    .option('-c, --cols <n>', 'Terminal columns', '120')
-    .option('-s, --shell <shell>', 'Shell to use (default: $SHELL)')
-    .option('-d, --cwd <dir>', 'Working directory')
-    .option('--json', 'Output as JSON')
+    .description('Start a new PTY session and return its ID. The session persists until you stop it.')
+    .option('-r, --rows <n>', 'Terminal height in rows', '24')
+    .option('-c, --cols <n>', 'Terminal width in columns', '120')
+    .option('-s, --shell <shell>', 'Shell to launch (defaults to $SHELL, e.g., zsh, bash)')
+    .option('-d, --cwd <dir>', 'Working directory for the shell')
+    .option('--json', 'Output full session metadata as JSON')
+    .addHelpText('after', `
+Examples:
+  # Start a session and capture its ID
+  SID=$(agents pty start)
+
+  # Start a Python REPL in a specific directory
+  agents pty start --shell python3 --cwd /tmp
+
+  # Start a wider terminal for TUI programs
+  agents pty start --cols 160 --rows 40
+`)
     .action(async (opts) => {
       const params: Record<string, any> = {
         rows: parseInt(opts.rows, 10),
@@ -58,9 +100,20 @@ export function registerPtyCommands(program: Command): void {
 
   pty
     .command('exec <id> <command>')
-    .description('Execute a command in a PTY session (non-blocking)')
-    .option('--wait <ms>', 'Wait for output after submission', '0')
+    .description('Send a command to a PTY session. Returns immediately (non-blocking). Use screen or read to see output.')
+    .option('--wait <ms>', 'Wait this many milliseconds then return the screen (convenience for quick commands)', '0')
     .option('--json', 'Output as JSON')
+    .addHelpText('after', `
+Examples:
+  # Run a command and return immediately
+  agents pty exec $SID "ls -la"
+
+  # Run a command and wait 500ms to see output
+  agents pty exec $SID "git status" --wait 500
+
+  # Start a long-running process (returns right away)
+  agents pty exec $SID "npm run dev"
+`)
     .action(async (id, command, opts) => {
       const res = await ptyRequest('exec', id, { command });
       if (!res.ok) {
@@ -85,9 +138,17 @@ export function registerPtyCommands(program: Command): void {
 
   pty
     .command('read <id>')
-    .description('Read pending output from a PTY session')
-    .option('-m, --ms <ms>', 'Wait timeout in ms (50-5000)', '200')
+    .description('Read raw output from the PTY (includes ANSI codes). Use screen for clean text instead.')
+    .option('-m, --ms <ms>', 'Wait up to this many milliseconds for new output (50-5000)', '200')
     .option('--json', 'Output as JSON')
+    .addHelpText('after', `
+Examples:
+  # Read pending output (wait up to 200ms)
+  agents pty read $SID
+
+  # Read with longer wait for slow commands
+  agents pty read $SID --ms 1000
+`)
     .action(async (id, opts) => {
       const ms = parseInt(opts.ms, 10);
       const res = await ptyRequest('read', id, { ms });
@@ -105,9 +166,26 @@ export function registerPtyCommands(program: Command): void {
 
   pty
     .command('write <id> <input>')
-    .description('Send input to a PTY session (supports \\n \\t \\e \\xHH)')
-    .option('--raw', 'Send input without escape processing')
+    .description('Send keystrokes to the PTY (like typing into the terminal). Processes escape sequences by default.')
+    .option('--raw', 'Send input literally without processing \\n \\t \\e \\xHH escape codes')
     .option('--json', 'Output as JSON')
+    .addHelpText('after', `
+Examples:
+  # Send Enter key
+  agents pty write $SID "\\n"
+
+  # Type a command and press Enter
+  agents pty write $SID "ls -la\\n"
+
+  # Send Ctrl-C (interrupt signal)
+  agents pty write $SID "\\x03"
+
+  # Send Escape key
+  agents pty write $SID "\\e"
+
+  # Send literal backslash-n (not newline)
+  agents pty write $SID "\\\\n" --raw
+`)
     .action(async (id, input, opts) => {
       const processed = opts.raw ? input : unescapeInput(input);
       const res = await ptyRequest('write', id, { input: processed });
@@ -123,8 +201,18 @@ export function registerPtyCommands(program: Command): void {
 
   pty
     .command('screen <id>')
-    .description('Render the current terminal screen as text')
-    .option('--json', 'Output as JSON (includes cursor position)')
+    .description('Render the terminal screen as clean text (no ANSI codes). This is what a human sees looking at the terminal.')
+    .option('--json', 'Output as JSON (includes cursor position and dimensions)')
+    .addHelpText('after', `
+Examples:
+  # See what's currently on screen
+  agents pty screen $SID
+
+  # Get screen with cursor position as JSON
+  agents pty screen $SID --json
+
+Use this (not read) when you want clean text for an LLM to parse.
+`)
     .action(async (id, opts) => {
       const res = await ptyRequest('screen', id);
       if (!res.ok) {
@@ -141,7 +229,18 @@ export function registerPtyCommands(program: Command): void {
 
   pty
     .command('signal <id> [signal]')
-    .description('Send a signal to the PTY process (INT, TERM, KILL)')
+    .description('Send a POSIX signal to the running process. Defaults to INT (Ctrl-C).')
+    .addHelpText('after', `
+Examples:
+  # Send Ctrl-C (interrupt)
+  agents pty signal $SID INT
+
+  # Terminate gracefully
+  agents pty signal $SID TERM
+
+  # Force kill
+  agents pty signal $SID KILL
+`)
     .action(async (id, signal) => {
       const res = await ptyRequest('signal', id, { signal: signal || 'INT' });
       if (!res.ok) {
@@ -170,7 +269,11 @@ export function registerPtyCommands(program: Command): void {
 
   pty
     .command('stop <id>')
-    .description('Stop a PTY session')
+    .description('Stop a PTY session and clean up. The session ID becomes invalid.')
+    .addHelpText('after', `
+Example:
+  agents pty stop $SID
+`)
     .action(async (id) => {
       const res = await ptyRequest('stop', id);
       if (!res.ok) {
@@ -183,8 +286,12 @@ export function registerPtyCommands(program: Command): void {
 
   pty
     .command('list')
-    .description('List active PTY sessions')
+    .description('List all active PTY sessions (running or idle).')
     .option('--json', 'Output as JSON')
+    .addHelpText('after', `
+Example:
+  agents pty list
+`)
     .action(async (opts) => {
       const res = await ptyRequest('list');
       if (!res.ok) {
@@ -217,11 +324,13 @@ export function registerPtyCommands(program: Command): void {
 
   // --- Server management ---
 
-  const serverCmd = pty.command('server').description('Manage the PTY sidecar server');
+  const serverCmd = pty
+    .command('server')
+    .description('Manage the PTY sidecar server (auto-starts on first use, usually you do not need this).');
 
   serverCmd
     .command('start')
-    .description('Start the PTY server')
+    .description('Start the PTY server manually (auto-starts on first pty command anyway).')
     .action(async () => {
       if (isPtyServerRunning()) {
         const pidPath = getPtyPidPath();
@@ -242,7 +351,7 @@ export function registerPtyCommands(program: Command): void {
 
   serverCmd
     .command('stop')
-    .description('Stop the PTY server')
+    .description('Stop the PTY server and kill all active sessions.')
     .action(async () => {
       if (!isPtyServerRunning()) {
         console.log(chalk.yellow('PTY server is not running'));
@@ -262,7 +371,7 @@ export function registerPtyCommands(program: Command): void {
 
   serverCmd
     .command('status')
-    .description('Show PTY server status')
+    .description('Check if the PTY server is running and how many sessions are active.')
     .action(async () => {
       const running = isPtyServerRunning();
       console.log(`  Status: ${running ? chalk.green('running') : chalk.gray('stopped')}`);

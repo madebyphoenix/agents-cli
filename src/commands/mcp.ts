@@ -105,13 +105,37 @@ function formatTargetLabel(agentId: AgentId, version?: string): string {
 export function registerMcpCommands(program: Command): void {
   const mcpCmd = program
     .command('mcp')
-    .description('Manage MCP servers');
+    .description('Connect agents to external tools via Model Context Protocol servers')
+    .addHelpText('after', `
+MCP servers give agents runtime access to databases, APIs, filesystems, and services. Add a server once, invoke its tools from any agent session. Agents-cli handles registration and configuration across versions.
+
+Examples:
+  # List all registered MCP servers
+  agents mcp list
+
+  # Check what servers are available for a specific agent
+  agents mcp list claude@2.1.112
+
+  # Register a Node-based MCP server
+  agents mcp add notion uvx notion-mcp --agents claude,codex
+
+  # Register an HTTP MCP server
+  agents mcp add my-api https://api.example.com --transport http --agents claude
+
+  # Apply servers from manifest to specific agents
+  agents mcp register --agents codex@0.116.0
+
+When to use:
+  - After install: 'agents mcp add <server>' to connect a new service
+  - Version upgrade: 'agents mcp register' to sync servers to the new version
+  - Team setup: commit mcp config to .agents and run 'agents mcp register'
+`);
 
   mcpCmd
     .command('list [agent]')
-    .description('List MCP servers. Use agent@version for specific version, agent@default for default only.')
-    .option('-a, --agent <agent>', 'Filter by agent')
-    .option('-s, --scope <scope>', 'Filter by scope: user, project, or all', 'all')
+    .description('Show which MCP servers are registered for agents or versions')
+    .option('-a, --agent <agent>', 'Filter to a specific agent (alternative to positional arg)')
+    .option('-s, --scope <scope>', 'user (global), project (repo), or all', 'all')
     .action(async (agentArg, options) => {
       const spinner = ora({ text: 'Loading...', isSilent: !process.stdout.isTTY }).start();
       const cwd = process.cwd();
@@ -298,14 +322,25 @@ export function registerMcpCommands(program: Command): void {
 
   mcpCmd
     .command('add <name> [command_or_url...]')
-    .description('Add an MCP server (stdio or HTTP)')
-    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets', MCP_CAPABLE_AGENTS.join(','))
-    .option('-s, --scope <scope>', 'Scope: user or project', 'user')
-    .option('-t, --transport <type>', 'Transport: stdio or http', 'stdio')
-    .option('-H, --header <header>', 'HTTP header (name:value), can be repeated', (val, acc: string[]) => {
+    .description('Add an MCP server to the manifest (run "agents mcp register" afterward to apply)')
+    .option('-a, --agents <list>', 'Targets: claude, codex@0.116.0', MCP_CAPABLE_AGENTS.join(','))
+    .option('-s, --scope <scope>', 'user (global) or project (repo-specific)', 'user')
+    .option('-t, --transport <type>', 'stdio (default) or http', 'stdio')
+    .option('-H, --header <header>', 'HTTP header as name:value (repeatable)', (val, acc: string[]) => {
       acc.push(val);
       return acc;
     }, [])
+    .addHelpText('after', `
+Examples:
+  # Add a stdio MCP server (Node-based)
+  agents mcp add notion uvx notion-mcp --agents claude,codex
+
+  # Add an HTTP MCP server with auth header
+  agents mcp add my-api https://api.example.com --transport http --header "Authorization: Bearer token" --agents claude
+
+  # Add to manifest only (register later)
+  agents mcp add db-server -- uvx postgres-mcp
+`)
     .action(async (name: string, commandOrUrl: string[], options) => {
       const transport = options.transport as 'stdio' | 'http';
 
@@ -362,8 +397,19 @@ export function registerMcpCommands(program: Command): void {
 
   mcpCmd
     .command('remove [name]')
-    .description('Remove an MCP server from agents')
-    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets')
+    .description('Unregister an MCP server from agents (interactive picker if no name given)')
+    .option('-a, --agents <list>', 'Limit removal to specific agents')
+    .addHelpText('after', `
+Examples:
+  # Remove a server by name
+  agents mcp remove notion
+
+  # Remove from specific agents only
+  agents mcp remove notion --agents codex,claude
+
+  # Interactive picker
+  agents mcp remove
+`)
     .action(async (name?: string, options?: { agents?: string }) => {
       const cwd = process.cwd();
       const cliStates = await getAllCliStates();
@@ -468,7 +514,15 @@ export function registerMcpCommands(program: Command): void {
 
   mcpCmd
     .command('view [name]')
-    .description('Show MCP server details')
+    .description('Show MCP server configuration (command, scope, registered agents)')
+    .addHelpText('after', `
+Examples:
+  # View details for a specific server
+  agents mcp view notion
+
+  # Interactive picker
+  agents mcp view
+`)
     .action(async (name?: string) => {
       const cwd = process.cwd();
       const cliStates = await getAllCliStates();
@@ -540,8 +594,19 @@ export function registerMcpCommands(program: Command): void {
 
   mcpCmd
     .command('register [name]')
-    .description('Register MCP server(s) with agent CLIs')
-    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets')
+    .description('Apply MCP servers from manifest to agent config files (stdio only for now)')
+    .option('-a, --agents <list>', 'Override manifest targets: claude, codex@0.116.0')
+    .addHelpText('after', `
+Examples:
+  # Register all servers from manifest
+  agents mcp register
+
+  # Register a specific server
+  agents mcp register notion
+
+  # Register to specific agents (overrides manifest config)
+  agents mcp register --agents codex@0.116.0
+`)
     .action(async (name: string | undefined, options) => {
       const localPath = getAgentsDir();
       const manifest = readManifest(localPath);

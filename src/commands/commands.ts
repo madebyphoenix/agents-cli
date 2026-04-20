@@ -437,8 +437,16 @@ Examples:
 
   commandsCmd
     .command('remove [name]')
-    .description('Remove a command')
-    .option('-a, --agents <list>', 'Comma-separated agents to remove from')
+    .description('Delete a command from agents (interactive picker if no name given)')
+    .option('-a, --agents <list>', 'Limit removal to specific agents (e.g., claude,codex)')
+    .addHelpText('after', `
+Examples:
+  # Remove a command by name
+  agents commands remove README
+
+  # Interactive: pick commands to remove
+  agents commands remove
+`)
     .action(async (name?: string, options?: { agents?: string }) => {
       let commandsToRemove: string[];
 
@@ -503,7 +511,15 @@ Examples:
 
   commandsCmd
     .command('view [name]')
-    .description('Show command details')
+    .description('Read the full content of a command file with markdown rendering')
+    .addHelpText('after', `
+Examples:
+  # View a specific command
+  agents commands view README
+
+  # Interactive picker
+  agents commands view
+`)
     .action(async (name?: string) => {
       // If no name provided, show interactive select
       if (!name) {

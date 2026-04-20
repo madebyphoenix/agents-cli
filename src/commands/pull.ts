@@ -69,10 +69,42 @@ import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
 export function registerPullCommand(program: Command): void {
   program
     .command('pull [source] [agent]')
-    .description('Sync config from a .agents repo')
-    .option('-y, --yes', 'Skip prompts and use defaults')
-    .option('--skip-clis', 'Do not sync CLI versions')
-    .option('--upstream', 'Pull from upstream (system repo) instead of origin')
+    .description('Sync your config from a git repo. Clones on first run, pulls updates thereafter.')
+    .option('-y, --yes', 'Auto-sync all resources without prompting')
+    .option('--skip-clis', 'Pull config changes but do not install or upgrade agent CLIs')
+    .option('--upstream', 'Pull from the upstream remote instead of origin (for forked repos)')
+    .addHelpText('after', `
+Examples:
+  # First time: clone from your repo (also works if ~/.agents/ is empty)
+  agents pull gh:yourname/.agents
+
+  # Update your config from origin (GitHub)
+  agents pull
+
+  # Pull updates from the upstream default repo (after you've forked)
+  agents pull --upstream
+
+  # Sync only one agent's config
+  agents pull claude
+
+  # Non-interactive sync (for scripts / CI)
+  agents pull -y
+
+When to use:
+  - Initial setup: clone your config repo to a new machine
+  - Daily sync: pull changes you or teammates pushed to the repo
+  - Upstream updates: get new skills, commands, or MCP servers from the default repo
+  - Per-agent: sync just one agent's config without touching others
+
+What it syncs:
+  - CLI versions listed in agents.yaml
+  - Commands, skills, hooks from the repo
+  - MCP server configs
+  - Memory/rules files
+  - Permissions groups
+
+Skip CLI installs with --skip-clis when you only want config updates, not version changes.
+`)
     .action(async (arg1: string | undefined, arg2: string | undefined, options) => {
       const skipPrompts = options.yes || !isInteractiveTerminal();
       // Parse source and agent filter from positional args

@@ -18,7 +18,31 @@ import { isPromptCancelled } from './utils.js';
 export function registerForkCommand(program: Command): void {
   program
     .command('fork')
-    .description('Fork system repo to your GitHub and reconfigure remotes')
+    .description('Copy the default config repo to your own GitHub so you can push changes. Runs once after init.')
+    .addHelpText('after', `
+Examples:
+  # Fork the default repo to your GitHub account
+  agents fork
+
+When to use:
+  - You initialized with 'agents init' using the default config
+  - You've customized commands, skills, or settings
+  - You want to save your changes to your own GitHub repo
+
+What it does:
+  1. Creates a fork of the default repo under your GitHub account (gh:yourname/.agents)
+  2. Reconfigures remotes: origin -> your fork, upstream -> default repo
+  3. Commits any local changes you've made
+  4. Pushes everything to your new fork
+
+After forking:
+  - 'agents push' sends your changes to your fork
+  - 'agents pull --upstream' pulls updates from the default repo
+
+Requirements:
+  - GitHub CLI authenticated (run 'gh auth login' if needed)
+  - ~/.agents/ must be tracking the default repo (not already forked)
+`)
     .action(async () => {
       try {
         const agentsDir = getAgentsDir();

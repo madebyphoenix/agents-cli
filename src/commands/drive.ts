@@ -13,11 +13,38 @@ import {
 export function registerDriveCommands(program: Command): void {
   const driveCmd = program
     .command('drive')
-    .description('Sync agent sessions across machines');
+    .description('Sync agent session history across machines via rsync. Set up once, then pull/push to keep sessions in sync.')
+    .addHelpText('after', `
+Typical workflow:
+  # One-time setup: point to your remote machine
+  agents drive remote user@hostname
+
+  # Pull sessions from remote to local
+  agents drive pull
+
+  # Work locally with your agents...
+
+  # Push your new sessions back to remote
+  agents drive push
+
+  # Check sync state
+  agents drive status
+
+Use case: Keep session history consistent across your laptop and desktop,
+or back up sessions to a server you control.
+`);
 
   driveCmd
     .command('remote <target>')
-    .description('Set rsync remote target (e.g. muqsit@spark)')
+    .description('Set the rsync remote target (e.g., user@hostname). Sessions sync to <target>:~/.agents/drive/')
+    .addHelpText('after', `
+Examples:
+  # Set remote to a server
+  agents drive remote muqsit@spark
+
+  # Set remote to a local machine on your network
+  agents drive remote macbook.local
+`)
     .action((target: string) => {
       try {
         setRemote(target);
@@ -31,7 +58,13 @@ export function registerDriveCommands(program: Command): void {
 
   driveCmd
     .command('pull')
-    .description('Pull sessions from remote')
+    .description('Fetch sessions from the remote and merge them into your local ~/.agents/drive/.')
+    .addHelpText('after', `
+Example:
+  agents drive pull
+
+Run this when you switch machines to get the latest session history.
+`)
     .action(async () => {
       const spinner = ora('Pulling from remote...').start();
       try {
@@ -45,7 +78,13 @@ export function registerDriveCommands(program: Command): void {
 
   driveCmd
     .command('push')
-    .description('Push sessions to remote')
+    .description('Upload your local sessions to the remote so other machines can pull them.')
+    .addHelpText('after', `
+Example:
+  agents drive push
+
+Run this after working locally to share your new sessions with other machines.
+`)
     .action(async () => {
       const spinner = ora('Pushing to remote...').start();
       try {
@@ -59,7 +98,14 @@ export function registerDriveCommands(program: Command): void {
 
   driveCmd
     .command('attach')
-    .description('Use drive as active agent home')
+    .description('Point your agent homes (~/.claude, etc.) at drive so sessions write directly to the synced location.')
+    .addHelpText('after', `
+Example:
+  agents drive attach
+
+After attach, agent sessions are saved to ~/.agents/drive/ instead of version homes.
+Use 'detach' to switch back to version-specific homes.
+`)
     .action(() => {
       try {
         attach();
@@ -72,7 +118,11 @@ export function registerDriveCommands(program: Command): void {
 
   driveCmd
     .command('detach')
-    .description('Restore agent home to version config')
+    .description('Restore agent homes back to their version-specific directories (undo attach).')
+    .addHelpText('after', `
+Example:
+  agents drive detach
+`)
     .action(() => {
       try {
         detach();
@@ -85,7 +135,11 @@ export function registerDriveCommands(program: Command): void {
 
   driveCmd
     .command('status')
-    .description('Show drive state')
+    .description('Show current drive configuration, attach state, and last sync times.')
+    .addHelpText('after', `
+Example:
+  agents drive status
+`)
     .action(() => {
       const status = getDriveStatus();
 

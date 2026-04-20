@@ -246,27 +246,44 @@ export function registerTeamsCommands(program: Command): void {
     .addHelpText(
       'after',
       `
+A team is a named group of agents working together on a shared task. Each teammate
+runs in the background; you use 'status' to check in on progress. Use --after to
+create DAG-style dependencies (one teammate waits for another to finish first).
+
+Teammate sessions appear in 'agents sessions --teams' with a [team/name · mode] tag.
+
 Examples:
+  # Start a new team for a feature
   agents teams create auth-feature
-  agents teams add    auth-feature claude "Add JWT auth" --name alice
-  agents teams add    auth-feature codex@0.116.0 "Write tests" --name bob
+
+  # Add Alice (Claude) to work on the backend
+  agents teams add auth-feature claude "Add JWT auth middleware" --name alice
+
+  # Add Bob (Codex 0.116.0) to write tests, but wait for Alice to finish first
+  agents teams add auth-feature codex@0.116.0 "Write integration tests" --name bob --after alice
+
+  # Kick off any staged teammates whose dependencies are satisfied
+  agents teams start auth-feature
+
+  # Check in on progress (delta polling with --since for efficiency)
   agents teams status auth-feature
+  agents teams status auth-feature --since 2026-04-19T10:30:00Z
+
+  # Let Alice go when she's done
   agents teams remove auth-feature alice
+
+  # Wind down the whole team when work is complete
   agents teams disband auth-feature
 
 Short aliases:
   teams c  = create    teams a  = add       teams s  = status
   teams rm = remove    teams d  = disband   teams ls = list
 
-A team is a named group of agents collaborating on a shared task. Each teammate
-runs in the background; you can check in with 'status' (pass --since <cursor>
-for efficient delta polling) and let them go with 'remove' or 'disband'.
-
-Teammates use the same syntax as the rest of agents-cli:
+Teammate syntax (same as the rest of agents-cli):
   'claude'              -> the default Claude version on this machine
   'claude@2.1.112'      -> a specific installed version (see 'agents view')
 
-Name them with --name alice  to refer to them as 'alice' instead of a UUID.
+Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
 `
     );
 
@@ -275,12 +292,12 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
     .command('list [query]')
     .alias('ls')
     .description('List your teams, most recent activity first')
-    .option('-a, --agent <agent>', 'Only teams with a teammate of this agent, e.g. claude or claude@2.1.112')
-    .option('--status <status>', 'Only teams with this status: working|done|failed|empty')
-    .option('--since <time>', 'Teams active newer than this (e.g. "2h", "7d", ISO date)')
-    .option('--until <time>', 'Teams active older than this (e.g. "30d", ISO date)')
-    .option('-n, --limit <n>', 'Max teams to show', '20')
-    .option('--json', 'Output JSON')
+    .option('-a, --agent <agent>', 'Filter: only teams with this agent (e.g. claude or claude@2.1.112)')
+    .option('--status <status>', 'Filter: only teams with this status (working, done, failed, or empty)')
+    .option('--since <time>', 'Filter: teams active after this time (e.g. "2h", "7d", or ISO date)')
+    .option('--until <time>', 'Filter: teams active before this time (e.g. "30d", or ISO date)')
+    .option('-n, --limit <n>', 'Show at most this many teams (default: 20)', '20')
+    .option('--json', 'Output machine-readable JSON instead of formatted table')
     .action(async (query: string | undefined, opts: {
       agent?: string; status?: string; since?: string; until?: string;
       limit: string; json?: boolean;
@@ -379,9 +396,9 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
   teams
     .command('create <team>')
     .aliases(['c', 'new'])
-    .description('Start a new team. No teammates yet — add them with `teams add`.')
-    .option('-d, --description <text>', 'Short description of what this team is working on')
-    .option('--json', 'Output JSON')
+    .description('Start a new team. No teammates yet; add them with `teams add`.')
+    .option('-d, --description <text>', 'One-line summary of what this team is working on')
+    .option('--json', 'Output machine-readable JSON')
     .action(async (team: string, opts: { description?: string; json?: boolean }) => {
       try {
         const meta = await createTeam(team, opts.description);
@@ -403,20 +420,20 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
   teams
     .command('add <team> <teammate> <task>')
     .alias('a')
-    .description("Bring someone onto the team to work on a task. Returns immediately.")
-    .option('-n, --name <name>', 'Give this teammate a friendly name (e.g. alice). Unique within team.')
-    .option('-m, --mode <mode>', `How much they can do: plan (read-only) | edit (write) | full (write + permission gates off)`, 'edit')
-    .option('-e, --effort <effort>', `Model tier: ${VALID_EFFORTS.join('|')}`, 'default')
-    .option('--model <model>', 'Override the effort→model mapping (e.g. claude-opus-4-6)')
+    .description("Add a teammate to work on a task. Runs in background; returns immediately. Use 'status' to check in.")
+    .option('-n, --name <name>', 'Friendly name for this teammate (e.g. alice). Required if using --after. Unique within team.')
+    .option('-m, --mode <mode>', `Permissions: plan (read-only) | edit (can write files) | full (write + skip permission prompts)`, 'edit')
+    .option('-e, --effort <effort>', `Model tier: ${VALID_EFFORTS.join('|')} (maps to Sonnet/Opus/Haiku)`, 'default')
+    .option('--model <model>', 'Override the effort tier and use this specific model (e.g. claude-opus-4-6)')
     .option(
       '--env <key=value>',
-      'Pass an environment variable to this teammate (repeatable)',
+      'Set an environment variable for this teammate (repeatable for multiple vars)',
       (val: string, prev: string[]) => [...prev, val],
       []
     )
-    .option('--cwd <dir>', 'Where they should work (defaults to current directory)')
-    .option('--after <names>', "Wait for these teammates to finish first (comma-separated names). Stages as PENDING; kick off with 'teams start'.")
-    .option('--json', 'Output JSON')
+    .option('--cwd <dir>', 'Working directory for this teammate (default: current directory)')
+    .option('--after <names>', "DAG dependencies: comma-separated teammate names to wait for. Stages as PENDING; run 'teams start' to launch when ready.")
+    .option('--json', 'Output machine-readable JSON')
     .action(async (team: string, teammate: string, task: string, opts: {
       name?: string; mode: string; effort: string; model?: string; env: string[];
       cwd?: string; after?: string; json?: boolean;
@@ -516,11 +533,11 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
   teams
     .command('status <team>')
     .aliases(['s', 'st', 'check'])
-    .description("See what a team has been up to. Pass --since <cursor> for efficient polling.")
-    .option('-f, --filter <state>', 'working|completed|failed|stopped|all', 'all')
-    .option('-s, --since <iso>', 'Cursor from a previous status call')
-    .option('--agent-id <id>', 'Show only one teammate')
-    .option('--json', 'Output JSON')
+    .description("Check in on a team: who's working, what files they touched, recent commands, last output. Pass --since for efficient delta polling.")
+    .option('-f, --filter <state>', 'Show only teammates in this state: working, completed, failed, stopped, or all (default: all)', 'all')
+    .option('-s, --since <iso>', 'Cursor from a previous status call; only show updates after this timestamp (enables efficient polling)')
+    .option('--agent-id <id>', 'Show only this one teammate (by UUID or UUID prefix)')
+    .option('--json', 'Output machine-readable JSON')
     .action(async (team: string, opts: {
       filter: string; since?: string; agentId?: string; json?: boolean;
     }) => {
@@ -572,8 +589,8 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
   // start — fire any staged teammates whose --after deps have all completed
   teams
     .command('start <team>')
-    .description('Launch any pending teammates whose --after dependencies are now satisfied. Re-run to advance the DAG.')
-    .option('--json', 'Output JSON')
+    .description('Launch any pending teammates whose --after dependencies are satisfied. Re-run to advance the DAG as teammates finish.')
+    .option('--json', 'Output machine-readable JSON')
     .action(async (team: string, opts: { json?: boolean }) => {
       const mgr = new AgentManager();
       const launched = await mgr.startReady(team);
@@ -632,9 +649,9 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
   teams
     .command('remove <team> <teammate>')
     .alias('rm')
-    .description("Let a teammate go. Accepts a name ('alice') or UUID prefix. Stops them cleanly if they're still working.")
-    .option('--keep-logs', 'Keep the log files on disk (default: delete)')
-    .option('--json', 'Output JSON')
+    .description("Remove a teammate from the team. Stops them cleanly if still working. Accepts name, UUID, or UUID prefix.")
+    .option('--keep-logs', 'Keep their log files on disk (default: delete them)')
+    .option('--json', 'Output machine-readable JSON')
     .action(async (team: string, ref: string, opts: { keepLogs?: boolean; json?: boolean }) => {
       const mgr = new AgentManager();
       const lookup = await mgr.resolveAgentIdInTask(team, ref);
@@ -679,9 +696,9 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
   teams
     .command('disband <team>')
     .alias('d')
-    .description('Wind down the team. Stops everyone and removes the team.')
-    .option('--keep-logs', 'Keep teammate logs on disk (default: delete)')
-    .option('--json', 'Output JSON')
+    .description('Disband the team. Stops all teammates cleanly and removes the team registry entry.')
+    .option('--keep-logs', 'Keep all teammate logs on disk (default: delete them)')
+    .option('--json', 'Output machine-readable JSON')
     .action(async (team: string, opts: { keepLogs?: boolean; json?: boolean }) => {
       const mgr = new AgentManager();
       const stopRes = await handleStop(mgr, team);
@@ -717,9 +734,9 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
   teams
     .command('logs <teammate>')
     .alias('log')
-    .description("Read a teammate's raw log. Accepts a name ('alice'), UUID, or UUID prefix.")
-    .option('-n, --tail <n>', 'Show only the last N lines')
-    .option('--team <team>', 'Disambiguate when a name is used in multiple teams')
+    .description("Read a teammate's raw log output. Accepts name, UUID, or UUID prefix.")
+    .option('-n, --tail <n>', 'Show only the last N lines instead of the full log')
+    .option('--team <team>', 'Disambiguate when the same name appears in multiple teams')
     .action(async (ref: string, opts: { tail?: string; team?: string }) => {
       const base = await getAgentsDir();
       const resolved = await resolveTeammateAcrossTeams(base, ref, opts.team);
@@ -753,8 +770,8 @@ Name them with --name alice  to refer to them as 'alice' instead of a UUID.
   teams
     .command('doctor')
     .alias('dr')
-    .description('Check which agents are available to join a team')
-    .option('--json', 'Output JSON')
+    .description('Check which agents are installed and available to join a team. Verifies CLI paths.')
+    .option('--json', 'Output machine-readable JSON')
     .action(async (opts: { json?: boolean }) => {
       const info = checkAllClis();
       if (isJsonMode(opts)) {

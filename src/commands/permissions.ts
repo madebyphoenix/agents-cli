@@ -47,12 +47,36 @@ import {
 export function registerPermissionsCommands(program: Command): void {
   const permissionsCmd = program
     .command('permissions')
-    .description('Manage agent permissions');
+    .description('Control what agents can access with allow/deny rules for bash, tools, and filesystem')
+    .addHelpText('after', `
+Permissions define the boundary of what an agent can touch. Rules are organized into named sets stored in ~/.agents/permissions/ as YAML files. Apply sets to specific agent versions to reduce permission prompts or lock down behavior.
+
+Examples:
+  # List permission sets in central storage
+  agents permissions list
+
+  # Check active permissions for an agent
+  agents permissions list claude@2.1.112
+
+  # Import permissions from an existing agent config
+  agents permissions add ~/.claude/settings.json --agents claude
+
+  # Install a permission set from GitHub
+  agents permissions add gh:team/permissions --agents codex,claude
+
+  # Apply a stored set to multiple versions
+  agents permissions add --names default --agents claude@2.1.112,codex@0.116.0
+
+When to use:
+  - Reducing prompts: extract your allow list with 'agents permissions add ~/.claude/settings.json'
+  - Team sync: share permission sets via 'agents permissions add gh:team/perms'
+  - Version isolation: apply stricter permissions to experimental versions
+`);
 
   permissionsCmd
     .command('list [agent]')
-    .description('List permissions (central sets or agent-specific). Use agent@version for specific version, agent@default for default only.')
-    .option('-s, --scope <scope>', 'Filter by scope: user, project', 'user')
+    .description('Show permission sets in storage or active permissions for an agent version')
+    .option('-s, --scope <scope>', 'user (global) or project (repo-specific)', 'user')
     .action(async (agentArg, options) => {
       const cwd = process.cwd();
 
@@ -226,11 +250,25 @@ export function registerPermissionsCommands(program: Command): void {
 
   permissionsCmd
     .command('add [source]')
-    .description('Install permissions from a repo, YAML file, or agent config file')
-    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to apply to')
-    .option('--names <list>', 'Comma-separated permission set names from ~/.agents/permissions/')
-    .option('--all', 'Apply to all installed versions (not just default)')
-    .option('-y, --yes', 'Skip prompts and use defaults')
+    .description('Import permissions from an agent config, YAML, or GitHub, then apply to versions')
+    .option('-a, --agents <list>', 'Targets: claude, codex@0.116.0, or gemini@default')
+    .option('--names <list>', 'Permission set names from ~/.agents/permissions/ (comma-separated)')
+    .option('--all', 'Apply to all installed versions instead of just defaults')
+    .option('-y, --yes', 'Skip all prompts and confirmations')
+    .addHelpText('after', `
+Examples:
+  # Import from an existing agent config (merges into default.yml)
+  agents permissions add ~/.claude/settings.json --agents claude
+
+  # Install permission YAML from GitHub
+  agents permissions add gh:team/permissions --agents codex,claude
+
+  # Apply a stored set to specific versions
+  agents permissions add --names default --agents claude@2.1.112,codex@0.116.0
+
+  # Apply to all installed versions non-interactively
+  agents permissions add --names default --all --yes
+`)
     .action(async (source: string | undefined, options) => {
       try {
         const skipPrompts = options.yes || !isInteractiveTerminal();
@@ -634,7 +672,15 @@ export function registerPermissionsCommands(program: Command): void {
 
   permissionsCmd
     .command('remove [name]')
-    .description('Remove a permission set from central storage')
+    .description('Delete a permission set from ~/.agents/permissions/ (interactive picker if no name given)')
+    .addHelpText('after', `
+Examples:
+  # Remove a set by name
+  agents permissions remove default
+
+  # Interactive picker
+  agents permissions remove
+`)
     .action(async (name?: string) => {
       let setsToRemove: string[];
 
@@ -692,7 +738,15 @@ export function registerPermissionsCommands(program: Command): void {
 
   permissionsCmd
     .command('view [name]')
-    .description('Show permission set details')
+    .description('Read the allow and deny rules for a stored permission set')
+    .addHelpText('after', `
+Examples:
+  # View a specific permission set
+  agents permissions view default
+
+  # Interactive picker
+  agents permissions view
+`)
     .action(async (name?: string) => {
       const installedSets = listInstalledPermissions();
       if (installedSets.length === 0) {

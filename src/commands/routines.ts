@@ -147,16 +147,16 @@ Examples:
 
   routinesCmd
     .command('add [nameOrPath]')
-    .description('Add a job from YAML file or inline flags')
-    .option('-s, --schedule <cron>', 'Cron schedule (e.g., "0 9 * * 1-5")')
-    .option('-a, --agent <agent>', 'Agent to use (claude, codex, gemini, cursor, opencode)')
-    .option('-p, --prompt <prompt>', 'Prompt for the agent')
-    .option('-m, --mode <mode>', 'Mode: plan or edit', 'plan')
-    .option('-e, --effort <effort>', 'Effort level: fast, default, detailed', 'default')
-    .option('-t, --timeout <timeout>', 'Timeout (e.g., 30m, 2h)', '30m')
-    .option('--timezone <tz>', 'Timezone (e.g., America/Los_Angeles)')
-    .option('--at <time>', 'One-shot: run once at time (e.g., "14:30" or "2026-02-24 09:00")')
-    .option('--disabled', 'Create job in disabled state')
+    .description('Create a new routine from a YAML file or inline flags. Returns immediately; the daemon handles execution.')
+    .option('-s, --schedule <cron>', 'Cron schedule in standard format (5 fields: minute hour day month weekday)')
+    .option('-a, --agent <agent>', 'Which agent runs this routine: claude, codex, gemini, cursor, or opencode')
+    .option('-p, --prompt <prompt>', 'Task instruction for the agent')
+    .option('-m, --mode <mode>', 'Execution mode: plan (read-only) or edit (can write files)', 'plan')
+    .option('-e, --effort <effort>', 'Model tier: fast, default, or detailed', 'default')
+    .option('-t, --timeout <timeout>', 'Kill the agent if it runs longer than this (e.g., 30m, 2h)', '30m')
+    .option('--timezone <tz>', 'Interpret schedule in this timezone (e.g., America/Los_Angeles)')
+    .option('--at <time>', 'One-shot mode: run once at this time (e.g., "14:30" or "2026-02-24 09:00"), then disable')
+    .option('--disabled', 'Create the routine but keep it paused (enable later with resume)')
     .action(async (nameOrPath: string | undefined, options) => {
       // Check if inline mode (has flags) or file mode
       const hasInlineFlags = options.schedule || options.agent || options.prompt || options.at;
@@ -287,7 +287,7 @@ Examples:
 
   routinesCmd
     .command('remove [name]')
-    .description('Remove a job')
+    .description('Delete a routine. Stops scheduling future runs; past execution logs remain on disk.')
     .action(async (name: string | undefined) => {
       if (!name) {
         name = await pickJob('Select job to remove', undefined, ['agents routines remove <name>']) ?? undefined;
@@ -309,7 +309,7 @@ Examples:
 
   routinesCmd
     .command('view [name]')
-    .description('Show job configuration')
+    .description('Show the full YAML configuration for a routine')
     .action(async (name: string | undefined) => {
       if (!name) {
         name = await pickJob('Select job to view', undefined, ['agents routines view <name>']) ?? undefined;
@@ -328,7 +328,7 @@ Examples:
 
   routinesCmd
     .command('edit [name]')
-    .description('Edit job configuration in $EDITOR')
+    .description('Open a routine in $EDITOR. Creates a new YAML template if the routine does not exist.')
     .action(async (name: string | undefined) => {
       if (!name) {
         name = await pickJob('Select job to edit', undefined, ['agents routines edit <name>']) ?? undefined;
@@ -386,7 +386,7 @@ Examples:
 
   routinesCmd
     .command('runs [name]')
-    .description('Show execution history')
+    .description('See execution history: run IDs, completion status, and start times (up to last 10 runs)')
     .action(async (name: string | undefined) => {
       if (!name) {
         name = await pickJob('Select job to view runs', undefined, ['agents routines runs <name>']) ?? undefined;
@@ -412,7 +412,7 @@ Examples:
 
   routinesCmd
     .command('run [name]')
-    .description('Run a job immediately in the foreground')
+    .description('Execute a routine right now in the foreground. Ignores the schedule; useful for testing before enabling.')
     .action(async (name: string | undefined) => {
       if (!name) {
         name = await pickJob('Select job to run', undefined, ['agents routines run <name>']) ?? undefined;
@@ -454,8 +454,8 @@ Examples:
 
   routinesCmd
     .command('logs [name]')
-    .description('Show stdout from the latest (or specific) run')
-    .option('-r, --run <runId>', 'Specific run ID')
+    .description('Read stdout from the most recent execution. Use --run to see a specific past run.')
+    .option('-r, --run <runId>', 'Show logs from this run ID instead of the latest')
     .action(async (name: string | undefined, options) => {
       if (!name) {
         name = await pickJob('Select job to view logs', undefined, ['agents routines logs <name>', 'agents routines logs <name> --run <run-id>']) ?? undefined;
@@ -484,8 +484,8 @@ Examples:
 
   routinesCmd
     .command('report [name]')
-    .description('Show report from the latest (or specific) run')
-    .option('-r, --run <runId>', 'Specific run ID')
+    .description('Show the extracted report from the most recent execution. Reports are parsed from agent output on completion.')
+    .option('-r, --run <runId>', 'Show report from this run ID instead of the latest')
     .action(async (name: string | undefined, options) => {
       if (!name) {
         name = await pickJob('Select job to view report', undefined, ['agents routines report <name>', 'agents routines report <name> --run <run-id>']) ?? undefined;
@@ -515,7 +515,7 @@ Examples:
 
   routinesCmd
     .command('resume [name]')
-    .description('Resume a paused job')
+    .description('Re-enable a paused routine so the daemon schedules it again')
     .action(async (name: string | undefined) => {
       if (!name) {
         // Only show paused jobs
@@ -538,7 +538,7 @@ Examples:
 
   routinesCmd
     .command('pause [name]')
-    .description('Pause a job')
+    .description('Temporarily disable a routine. Stops scheduling future runs; enable again with resume.')
     .action(async (name: string | undefined) => {
       if (!name) {
         // Only show enabled jobs

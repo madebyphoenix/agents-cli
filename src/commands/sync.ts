@@ -6,12 +6,12 @@ import { isVersionInstalled, syncResourcesToVersion } from '../lib/versions.js';
 export function registerSyncCommand(program: Command): void {
   program
     .command('sync', { hidden: true })
-    .description('Sync resources into an agent version (used by shims for project resources)')
-    .requiredOption('--agent <agent>', 'Agent id (claude, codex, gemini, cursor, opencode, openclaw)')
-    .requiredOption('--version <version>', 'Agent version to sync')
-    .option('--project-dir <path>', 'Path to project-scoped .agents directory')
-    .option('--cwd <path>', 'Working directory for project discovery')
-    .option('--quiet', 'Suppress output', false)
+    .description('Internal: sync resources to a version home. Called by shims, not directly by users.')
+    .requiredOption('--agent <agent>', 'Agent identifier (claude, codex, gemini, cursor, opencode, openclaw)')
+    .requiredOption('--version <version>', 'Installed version to sync resources into')
+    .option('--project-dir <path>', 'Path to project-level .agents/ directory containing project-scoped resources')
+    .option('--cwd <path>', 'Working directory for discovering project manifest and resources')
+    .option('--quiet', 'Suppress all output (exit code indicates success)', false)
     .action((opts) => {
       const agentId = opts.agent as keyof typeof AGENTS;
       const version = opts.version as string;

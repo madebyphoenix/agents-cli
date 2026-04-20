@@ -37,9 +37,35 @@ import { isPromptCancelled } from './utils.js';
 export function registerPushCommand(program: Command): void {
   program
     .command('push')
-    .description('Push local config to your .agents repo')
-    .option('-m, --message <msg>', 'Commit message', 'Update agent configuration')
-    .option('--init', 'Initialize git repo if not exists')
+    .description('Save your local config changes to GitHub. Commits and pushes to your .agents repo.')
+    .option('-m, --message <msg>', 'Commit message describing what changed', 'Update agent configuration')
+    .option('--init', 'Initialize ~/.agents/ as a git repo if it is not already one')
+    .addHelpText('after', `
+Examples:
+  # Push your changes with default commit message
+  agents push
+
+  # Push with a descriptive commit message
+  agents push -m "Add custom skill for API testing"
+
+  # Initialize git and push (first push ever)
+  agents push --init
+
+When to use:
+  - After customizing commands, skills, hooks, or MCP configs
+  - After installing new agent versions you want to track in agents.yaml
+  - To sync your setup to another machine (push here, pull there)
+  - Before switching machines so you don't lose local changes
+
+What it pushes:
+  - All files in ~/.agents/ (commands, skills, hooks, memory, mcp, plugins)
+  - Updated agents.yaml with current CLI versions
+  - Updated MCP server configs from each agent's settings
+
+Blocked if:
+  - Origin is the default system repo (run 'agents fork' first to create your own fork)
+  - No GitHub remote configured (use --init to set one up)
+`)
     .action(async (options) => {
       try {
         const agentsDir = getAgentsDir();

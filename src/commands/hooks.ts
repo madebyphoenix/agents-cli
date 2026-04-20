@@ -42,13 +42,39 @@ import {
 } from './utils.js';
 
 export function registerHooksCommands(program: Command): void {
-  const hooksCmd = program.command('hooks').description('Manage agent hooks');
+  const hooksCmd = program.command('hooks')
+    .description('Automate workflows by running shell scripts in response to agent events')
+    .addHelpText('after', `
+Hooks are shell scripts that fire on agent events: when a session starts, when files are edited, when a task completes. Use them to trigger builds, sync logs, notify Slack, or integrate agents into existing tooling.
+
+Examples:
+  # List registered hooks
+  agents hooks list
+
+  # Check hooks for a specific agent
+  agents hooks list claude@2.1.112
+
+  # Install hooks from GitHub
+  agents hooks add gh:team/hooks --agents claude,codex
+
+  # Interactive: pick from ~/.agents/hooks/
+  agents hooks add
+
+  # Install a specific hook by name
+  agents hooks add --names post-edit --agents claude
+
+When to use:
+  - CI integration: hook into pre-commit events to block unsafe operations
+  - Logging: capture session transcripts with a post-session hook
+  - Notifications: ping Slack when agents complete long tasks
+  - Team workflows: sync hooks via 'agents hooks add gh:team/hooks'
+`);
 
   hooksCmd
     .command('list [agent]')
-    .description('List installed hooks. Use agent@version for specific version, agent@default for default only.')
-    .option('-a, --agent <agent>', 'Filter by agent')
-    .option('-s, --scope <scope>', 'Filter by scope: user, project, or all', 'all')
+    .description('Show which hooks are installed and which events they respond to')
+    .option('-a, --agent <agent>', 'Filter to a specific agent (alternative to positional arg)')
+    .option('-s, --scope <scope>', 'user (global), project (repo), or all', 'all')
     .action(async (agentArg, options) => {
       const spinner = ora({ text: 'Loading...', isSilent: !process.stdout.isTTY }).start();
       const cwd = process.cwd();
@@ -244,10 +270,24 @@ export function registerHooksCommands(program: Command): void {
 
   hooksCmd
     .command('add [source]')
-    .description('Install hooks from a repo or local path')
-    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to install to')
-    .option('--names <list>', 'Comma-separated hook names from ~/.agents/hooks/')
-    .option('-y, --yes', 'Skip prompts and use defaults')
+    .description('Install hooks from a source (GitHub, local) or pick from central storage')
+    .option('-a, --agents <list>', 'Targets: claude, codex@0.116.0, or gemini@default')
+    .option('--names <list>', 'Hook names from ~/.agents/hooks/ (comma-separated)')
+    .option('-y, --yes', 'Skip all prompts')
+    .addHelpText('after', `
+Examples:
+  # Interactive picker from ~/.agents/hooks/
+  agents hooks add
+
+  # Install specific hooks by name
+  agents hooks add --names post-edit --agents claude@2.1.112
+
+  # Clone and install from GitHub
+  agents hooks add gh:user/repo --agents claude,codex
+
+  # Add from local directory
+  agents hooks add ~/my-hooks --agents claude@default
+`)
     .action(async (source: string | undefined, options) => {
       try {
         let hooks: string[];
@@ -412,8 +452,16 @@ export function registerHooksCommands(program: Command): void {
 
   hooksCmd
     .command('remove [name]')
-    .description('Remove a hook')
-    .option('-a, --agents <list>', 'Comma-separated agents to remove from')
+    .description('Delete a hook from agents (interactive picker if no name given)')
+    .option('-a, --agents <list>', 'Limit removal to specific agents')
+    .addHelpText('after', `
+Examples:
+  # Remove a hook by name
+  agents hooks remove post-edit
+
+  # Interactive picker
+  agents hooks remove
+`)
     .action(async (name?: string, options?: { agents?: string }) => {
       let hooksToRemove: string[];
 
@@ -484,7 +532,15 @@ export function registerHooksCommands(program: Command): void {
 
   hooksCmd
     .command('view [name]')
-    .description('Show hook details')
+    .description('Read the shell script content for a hook')
+    .addHelpText('after', `
+Examples:
+  # View a specific hook
+  agents hooks view post-edit
+
+  # Interactive picker
+  agents hooks view
+`)
     .action(async (name?: string) => {
       const centralHooks = listCentralHooks();
       if (centralHooks.length === 0) {

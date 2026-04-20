@@ -654,6 +654,29 @@ export async function viewAction(agentArg?: string): Promise<void> {
 export function registerViewCommand(program: Command): void {
   program
     .command('view [agent]')
-    .description('View installed agent versions or resources. Use agent@version for detailed view.')
+    .description('Show what agent CLIs are installed and which versions you have. Inspect resources when you pass agent@version.')
+    .addHelpText('after', `
+Examples:
+  # Show all installed agents with versions, accounts, and usage
+  agents view
+
+  # Show versions for one agent
+  agents view claude
+
+  # Detailed view: resources, commands, skills, MCP servers for a specific version
+  agents view claude@2.1.112
+  agents view claude@default
+
+When to use:
+  - Checking which agents are installed and what their default versions are
+  - Seeing which account each version is logged into (useful for multi-account setups)
+  - Inspecting commands, skills, hooks, and MCP servers synced to a version
+  - Verifying a version is installed before running it
+
+Output:
+  - Without arguments: table of all agents with versions, emails, usage stats
+  - With agent name: versions for that agent, showing which is the default
+  - With agent@version: detailed breakdown of resources synced to that version
+`)
     .action(viewAction);
 }

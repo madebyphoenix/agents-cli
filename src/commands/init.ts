@@ -99,8 +99,31 @@ export async function runInit(program: Command, options: { force?: boolean } = {
 export function registerInitCommand(program: Command): void {
   program
     .command('init')
-    .description('First-time setup: pick a config source and install agents')
-    .option('-f, --force', 'Re-run even if ~/.agents/ is already set up')
+    .description('Set up agents-cli for the first time. Clones a config repo and installs agent CLIs.')
+    .option('-f, --force', 'Reinitialize even if ~/.agents/ already exists (use with caution)')
+    .addHelpText('after', `
+Examples:
+  # Interactive setup (asks where to pull config from)
+  agents init
+
+  # Re-initialize after corruption or to switch config sources
+  agents init --force
+
+When to use:
+  - First time running agents-cli: this is your starting point
+  - Onboarding a new machine: sync your existing setup from GitHub
+  - Switching to a different config repo
+
+What it does:
+  1. Asks if you want the default config or your own GitHub repo
+  2. Clones the chosen repo into ~/.agents/
+  3. Installs agent CLIs based on agents.yaml in the repo
+  4. Syncs commands, skills, hooks, and MCP servers to each version
+
+Non-interactive alternative:
+  If you're scripting or know your repo already, skip 'init' and use 'agents pull' directly:
+    agents pull gh:yourname/.agents
+`)
     .action(async (options) => {
       try {
         await runInit(program, options);

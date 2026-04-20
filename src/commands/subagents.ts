@@ -37,12 +37,41 @@ function formatPath(p: string): string {
 export function registerSubagentsCommands(program: Command): void {
   const subagentsCmd = program
     .command('subagents')
-    .description('Manage subagent definitions');
+    .description('Install specialized agent definitions that parent agents can spawn for focused tasks')
+    .addHelpText('after', `
+Subagents are lightweight agent definitions (AGENT.md files) that a parent agent can spawn for specific subtasks. Each subagent has its own model, mode, and instruction set, stored in ~/.agents/subagents/ and synced to agent homes on install.
+
+Examples:
+  # List all installed subagents by agent and version
+  agents subagents view
+
+  # View details for a specific subagent
+  agents subagents view code-reviewer
+
+  # Install subagents from GitHub
+  agents subagents add gh:team/subagents --agents claude,openclaw
+
+  # Add from a local directory
+  agents subagents add ~/my-subagent --agents claude
+
+When to use:
+  - Multi-agent workflows: install subagents that parent agents spawn for specialized work
+  - Version isolation: sync different subagent sets to different agent versions
+  - Team sharing: distribute subagent definitions via GitHub repos
+`);
 
   // agents subagents view [name]
   subagentsCmd
     .command('view [name]')
-    .description('View subagents (list all if no name given)')
+    .description('List all subagents or show details for a specific one')
+    .addHelpText('after', `
+Examples:
+  # List subagents by agent and version
+  agents subagents view
+
+  # View a specific subagent's details
+  agents subagents view code-reviewer
+`)
     .action(async (name?: string) => {
       if (name) {
         // Show details for a specific subagent
@@ -120,9 +149,20 @@ export function registerSubagentsCommands(program: Command): void {
   // agents subagents add <source>
   subagentsCmd
     .command('add <source>')
-    .description('Add subagent from source (gh:user/repo, URL, or local path)')
-    .option('-a, --agents <agents...>', 'Target agents (claude, openclaw)')
-    .option('-y, --yes', 'Skip confirmation prompts')
+    .description('Install subagents from a source (GitHub, local path) and sync to agent versions')
+    .option('-a, --agents <agents...>', 'Targets: claude, openclaw (defaults to all subagent-capable agents)')
+    .option('-y, --yes', 'Skip all prompts and confirmations')
+    .addHelpText('after', `
+Examples:
+  # Install from GitHub
+  agents subagents add gh:team/subagents --agents claude,openclaw
+
+  # Install from local directory (must contain subagents/*/AGENT.md)
+  agents subagents add ~/my-subagent --agents claude
+
+  # Install non-interactively
+  agents subagents add gh:user/repo --yes
+`)
     .action(async (source, options) => {
       const spinner = ora({ text: 'Fetching source...', isSilent: !process.stdout.isTTY }).start();
 
@@ -232,8 +272,16 @@ export function registerSubagentsCommands(program: Command): void {
   // agents subagents remove <name>
   subagentsCmd
     .command('remove <name>')
-    .description('Remove a subagent')
-    .option('-y, --yes', 'Skip confirmation')
+    .description('Delete a subagent from central storage and unsync from all agent versions')
+    .option('-y, --yes', 'Skip confirmation prompt')
+    .addHelpText('after', `
+Examples:
+  # Remove a subagent by name
+  agents subagents remove code-reviewer
+
+  # Remove without confirmation
+  agents subagents remove code-reviewer --yes
+`)
     .action(async (name, options) => {
       const subagent = getInstalledSubagent(name);
       if (!subagent) {
