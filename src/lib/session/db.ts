@@ -485,6 +485,11 @@ export function querySessions(options: QueryOptions = {}): SessionMeta[] {
     params.push(...options.agents);
   }
 
+  if (options.version) {
+    where.push('version = ?');
+    params.push(options.version);
+  }
+
   if (options.cwd) {
     where.push('cwd = ?');
     params.push(options.cwd);

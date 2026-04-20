@@ -32,6 +32,7 @@ let cachedOpenClawWorkspaces: Map<string, string> | null = null;
 
 export interface DiscoverOptions {
   agent?: SessionAgentId;
+  version?: string;
   project?: string;
   all?: boolean;
   cwd?: string;
@@ -124,6 +125,7 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
   const sessions = querySessions({
     agent: options?.agent,
     agents: options?.agent ? undefined : agents,
+    version: options?.version,
     cwd: cwdFilter,
     project: projectQuery,
     sinceMs,
