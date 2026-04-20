@@ -141,11 +141,15 @@ agents sessions <id> --first 10 --include user --json # Compose filters + format
 # Execution
 agents run <agent> <prompt> # Execute agent non-interactively
 
-# Automation
-agents routines              # Manage scheduled jobs
-agents daemon                # Manage the scheduler daemon
+# Schedule
+agents routines              # Manage scheduled jobs (add, list, run, pause, resume)
+agents routines start        # Start scheduler manually (auto-starts on first 'routines add')
+agents routines stop         # Stop scheduler
+agents routines status       # Scheduler status + upcoming runs
+agents routines scheduler-logs  # Scheduler log output
+# agents daemon ... is deprecated (removed in v2.0); use `agents routines` equivalents
 
-# PTY sessions
+# Helpers (PTY sessions)
 agents pty start             # Start interactive PTY session (returns ID)
 agents pty exec <id> <cmd>   # Run command (non-blocking, sentinel detection)
 agents pty screen <id>       # Render terminal as clean text (xterm-headless)

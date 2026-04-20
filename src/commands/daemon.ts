@@ -13,39 +13,35 @@ import {
 import { listJobs as listAllJobs } from '../lib/routines.js';
 import { JobScheduler } from '../lib/scheduler.js';
 
+function warnDeprecated(subcommand: string, replacement: string): void {
+  console.log(chalk.yellow(`\u26a0  'agents daemon ${subcommand}' is deprecated and will be removed in v2.0. Use '${replacement}' instead.\n`));
+}
+
 export function registerDaemonCommands(program: Command): void {
   const daemonCmd = program
-    .command('daemon')
-    .description('Control the background daemon that executes routines on schedule. Routines only fire when the daemon is running.')
+    .command('daemon', { hidden: true })
+    .description('[DEPRECATED] Use `agents routines start|stop|status|scheduler-logs` instead. Kept for backward compatibility; will be removed in v2.0.')
     .addHelpText(
       'after',
       `
-The daemon is a background process that watches your routines and executes them
-on schedule. It runs independently of your terminal session (safe to log out).
+DEPRECATED: The 'agents daemon' commands are scheduled for removal in v2.0.
 
-Start it once after boot or when you add your first routine. It reloads automatically
-when you add, edit, or remove routines.
+Migration:
+  agents daemon start    ->  agents routines start
+  agents daemon stop     ->  agents routines stop
+  agents daemon status   ->  agents routines status
+  agents daemon logs     ->  agents routines scheduler-logs
 
-Examples:
-  # Launch the daemon (required before routines will execute)
-  agents daemon start
-
-  # Check whether it's running and see upcoming routine executions
-  agents daemon status
-
-  # Stop the daemon (scheduled routines won't fire until you restart)
-  agents daemon stop
-
-  # Read daemon logs (useful when a routine behaves unexpectedly)
-  agents daemon logs
-  agents daemon logs --follow
+The scheduler now auto-starts when you run 'agents routines add', so in most cases
+you never need to start it manually.
 `
     );
 
   daemonCmd
     .command('start')
-    .description('Launch the daemon if not already running. Routines will begin firing on schedule.')
+    .description('[DEPRECATED] Use `agents routines start`.')
     .action(() => {
+      warnDeprecated('start', 'agents routines start');
       const result = startDaemon();
       if (result.method === 'already-running') {
         console.log(chalk.yellow(`Daemon already running (PID: ${result.pid})`));
@@ -56,8 +52,9 @@ Examples:
 
   daemonCmd
     .command('stop')
-    .description('Shut down the daemon. Scheduled routines will not execute until you start it again.')
+    .description('[DEPRECATED] Use `agents routines stop`.')
     .action(() => {
+      warnDeprecated('stop', 'agents routines stop');
       if (!isDaemonRunning()) {
         console.log(chalk.yellow('Daemon is not running'));
         return;
@@ -68,8 +65,9 @@ Examples:
 
   daemonCmd
     .command('status')
-    .description('Show whether the daemon is running, how many routines are enabled, and when they fire next')
+    .description('[DEPRECATED] Use `agents routines status`.')
     .action(() => {
+      warnDeprecated('status', 'agents routines status');
       const running = isDaemonRunning();
       const pid = readDaemonPid();
 
@@ -96,10 +94,11 @@ Examples:
 
   daemonCmd
     .command('logs')
-    .description('Read daemon log output. Use --follow to stream new entries as they arrive.')
+    .description('[DEPRECATED] Use `agents routines scheduler-logs`.')
     .option('-n, --lines <number>', 'Show this many recent lines (default: 50)', '50')
     .option('-f, --follow', 'Stream log output in real time (like tail -f)')
     .action(async (options) => {
+      warnDeprecated('logs', 'agents routines scheduler-logs');
       if (options.follow) {
         const { exec: execCb } = await import('child_process');
         const { getAgentsDir } = await import('../lib/state.js');

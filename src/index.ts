@@ -96,15 +96,16 @@ Packages:
   search <query>                  Find MCP servers and skills in registries
   install <pkg>                   Install from registry (mcp:name, skill:user/repo)
 
-Sessions:
-  sessions                        List and view past sessions across all agents
+Run agents:
+  run <agent> <prompt>            One-shot run (non-interactive)
+  teams                           Coordinate multiple agents on shared work
+  sessions                        Browse and replay past runs
 
-Automation:
-  routines                        Schedule agents to run on a timer
-  daemon                          Start/stop the routines scheduler
-  run <agent> <prompt>            Run an agent non-interactively
-  teams                           Put AI agents on a team (create, add, status, disband)
-  pty                             Interactive PTY sessions for AI agents
+Schedule:
+  routines                        Run agents on a cron schedule (scheduler auto-starts)
+
+Helpers:
+  pty                             Drive interactive terminal programs (REPLs, TUIs)
 
 Automation tips:
   Pass explicit names/IDs         Avoid pickers: agents sessions <id> --markdown

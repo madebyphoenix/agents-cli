@@ -8,6 +8,10 @@ import * as yaml from 'yaml';
 import {
   isDaemonRunning,
   signalDaemonReload,
+  startDaemon,
+  stopDaemon,
+  readDaemonPid,
+  readDaemonLog,
 } from '../lib/daemon.js';
 import {
   listJobs as listAllJobs,
@@ -27,6 +31,21 @@ import { getRoutinesDir } from '../lib/state.js';
 import { executeJob } from '../lib/runner.js';
 import { JobScheduler } from '../lib/scheduler.js';
 import { isInteractiveTerminal, requireInteractiveSelection } from './utils.js';
+
+function ensureSchedulerRunning(): void {
+  if (isDaemonRunning()) {
+    signalDaemonReload();
+    console.log(chalk.gray('Scheduler reloaded'));
+    return;
+  }
+  const result = startDaemon();
+  if (result.pid) {
+    console.log(chalk.green(`Scheduler started (PID: ${result.pid}). It will run in the background and fire routines on schedule.`));
+    console.log(chalk.gray(`Stop anytime with: agents routines stop`));
+  } else {
+    console.log(chalk.yellow('Could not start the scheduler. Start it manually with: agents routines start'));
+  }
+}
 
 function isPromptCancelled(err: unknown): boolean {
   return (
@@ -77,7 +96,7 @@ async function pickJob(
 export function registerRoutinesCommands(program: Command): void {
   const routinesCmd = program
     .command('routines')
-    .description('Schedule agents to run on a cron schedule or at a specific time. Routines are YAML files; the daemon executes them in the background.')
+    .description('Schedule agents to run on a cron schedule or at a specific time. The scheduler auto-starts on first add.')
     .addHelpText(
       'after',
       `
@@ -87,10 +106,11 @@ A routine is a YAML file that schedules an agent invocation. It specifies:
   - what task to give the agent (the prompt)
   - execution constraints (mode, effort, timeout)
 
-Routines only fire when the daemon is running. Start it with 'agents daemon start'.
+A background scheduler fires routines on their schedule. It auto-starts the first
+time you add a routine; control it manually with 'agents routines start|stop|status'.
 
 Examples:
-  # Create a routine that runs Claude every weekday at 9 AM
+  # Create a routine that runs Claude every weekday at 9 AM (scheduler auto-starts)
   agents routines add daily-standup --schedule "0 9 * * 1-5" --agent claude --prompt "Draft standup update from git log"
 
   # One-shot routine: run Codex tomorrow at 2:30 PM, then never again
@@ -101,6 +121,9 @@ Examples:
 
   # See all routines and their next run times
   agents routines list
+
+  # Check whether the scheduler is running
+  agents routines status
 
   # Test a routine immediately in the foreground (ignores schedule)
   agents routines run daily-standup
@@ -227,10 +250,7 @@ Examples:
           console.log(chalk.gray(`One-shot job scheduled for: ${options.at}`));
         }
 
-        if (isDaemonRunning()) {
-          signalDaemonReload();
-          console.log(chalk.gray('Daemon reloaded'));
-        }
+        ensureSchedulerRunning();
       } else {
         // File mode: load from YAML file
         if (!nameOrPath) {
@@ -278,10 +298,7 @@ Examples:
         writeJob(config);
         console.log(chalk.green(`Job '${name}' added`));
 
-        if (isDaemonRunning()) {
-          signalDaemonReload();
-          console.log(chalk.gray('Daemon reloaded'));
-        }
+        ensureSchedulerRunning();
       }
     });
 
@@ -551,11 +568,94 @@ Examples:
         console.log(chalk.green(`Job '${name}' paused`));
         if (isDaemonRunning()) {
           signalDaemonReload();
-          console.log(chalk.gray('Daemon reloaded'));
+          console.log(chalk.gray('Scheduler reloaded'));
         }
       } catch (err) {
         console.log(chalk.red((err as Error).message));
         process.exit(1);
+      }
+    });
+
+  // Scheduler lifecycle — usually auto-managed by `routines add`, exposed here for manual control.
+
+  routinesCmd
+    .command('start')
+    .description('Start the background scheduler. Usually unnecessary — it auto-starts when you add your first routine.')
+    .action(() => {
+      const result = startDaemon();
+      if (result.method === 'already-running') {
+        console.log(chalk.yellow(`Scheduler already running (PID: ${result.pid})`));
+      } else {
+        console.log(chalk.green(`Scheduler started (PID: ${result.pid})`));
+      }
+    });
+
+  routinesCmd
+    .command('stop')
+    .description('Stop the background scheduler. Routines will not fire until you start it again.')
+    .action(() => {
+      if (!isDaemonRunning()) {
+        console.log(chalk.yellow('Scheduler is not running'));
+        return;
+      }
+      stopDaemon();
+      console.log(chalk.green('Scheduler stopped'));
+    });
+
+  routinesCmd
+    .command('status')
+    .description('Show scheduler status, enabled routines, and when each one fires next.')
+    .action(() => {
+      const running = isDaemonRunning();
+      const pid = readDaemonPid();
+
+      console.log(chalk.bold('Scheduler\n'));
+      console.log(`  Status:    ${running ? chalk.green('running') : chalk.gray('stopped')}`);
+      if (pid) console.log(`  PID:       ${pid}`);
+
+      const jobs = listAllJobs();
+      const enabled = jobs.filter((j) => j.enabled);
+      console.log(`  Routines:  ${enabled.length} enabled / ${jobs.length} total`);
+
+      if (running && enabled.length > 0) {
+        const scheduler = new JobScheduler(async () => {});
+        scheduler.loadAll();
+        const scheduled = scheduler.listScheduled();
+        console.log(chalk.bold('\n  Upcoming Runs\n'));
+        for (const job of scheduled) {
+          const next = job.nextRun ? job.nextRun.toLocaleString() : 'unknown';
+          console.log(`    ${chalk.cyan(job.name.padEnd(24))} next: ${chalk.gray(next)}`);
+        }
+        scheduler.stopAll();
+      } else if (!running && jobs.length > 0) {
+        console.log(chalk.gray('\n  Start the scheduler to begin firing routines: agents routines start'));
+      }
+    });
+
+  routinesCmd
+    .command('scheduler-logs')
+    .description('Read scheduler log output (for debugging why a routine did not fire). Use --follow to stream.')
+    .option('-n, --lines <number>', 'Show this many recent lines (default: 50)', '50')
+    .option('-f, --follow', 'Stream log output in real time (like tail -f)')
+    .action(async (options) => {
+      if (options.follow) {
+        const { exec: execCb } = await import('child_process');
+        const { getAgentsDir } = await import('../lib/state.js');
+        const logPath = path.join(getAgentsDir(), 'daemon.log');
+        const child = execCb(`tail -f "${logPath}"`);
+        child.stdout?.pipe(process.stdout);
+        child.stderr?.pipe(process.stderr);
+        child.on('exit', () => process.exit(0));
+        process.on('SIGINT', () => { child.kill(); process.exit(0); });
+        return;
+      }
+
+      const lines = parseInt(options.lines, 10);
+      const output = readDaemonLog(lines);
+      if (output) {
+        console.log(output);
+      } else {
+        console.log(chalk.gray('No scheduler logs'));
       }
     });
 }
