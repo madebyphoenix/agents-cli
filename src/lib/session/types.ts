@@ -65,3 +65,12 @@ export interface SessionMeta {
 }
 
 export type ViewMode = 'summary' | 'markdown' | 'json';
+
+export interface SessionArtifact {
+  path: string;
+  tool: string;
+  timestamp: string;
+  exists: boolean;
+  sizeBytes?: number;
+  sessionId: string;
+}
