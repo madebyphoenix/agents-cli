@@ -51,18 +51,25 @@ export function parseExecEnv(entries: string[]): Record<string, string> | undefi
 }
 
 export function buildExecEnv(options: ExecOptions): NodeJS.ProcessEnv {
-  const managedEnv: NodeJS.ProcessEnv = {};
+  const result: NodeJS.ProcessEnv = { ...process.env };
+
+  // CLAUDE_CONFIG_DIR is Claude-specific. When the caller is running inside
+  // a Claude-managed shell, process.env already carries it; spreading into a
+  // non-Claude agent's env would leak a config pointer that the target CLI
+  // doesn't understand. Strip it unless we're actually invoking Claude, and
+  // when we are, pin it to the resolved version's home.
   if (options.agent === 'claude') {
     const cwd = options.cwd || process.cwd();
     const version = options.version || resolveVersion('claude', cwd);
     if (version && isVersionInstalled('claude', version)) {
-      managedEnv.CLAUDE_CONFIG_DIR = path.join(getVersionHomePath('claude', version), '.claude');
+      result.CLAUDE_CONFIG_DIR = path.join(getVersionHomePath('claude', version), '.claude');
     }
+  } else {
+    delete result.CLAUDE_CONFIG_DIR;
   }
 
   return {
-    ...process.env,
-    ...managedEnv,
+    ...result,
     ...options.env,
   };
 }

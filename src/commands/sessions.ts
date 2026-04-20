@@ -41,6 +41,8 @@ interface ViewOptions {
   transcript?: boolean;
   trace?: boolean;
   json?: boolean;
+  project?: string;
+  agent?: string;
 }
 
 interface ClaudeHistoryEntry {
@@ -612,20 +614,57 @@ function scoreSessionQuery(session: SessionMeta, terms: string[]): number {
   return score;
 }
 
+/**
+ * Narrow a session list by --project and --agent before search resolution.
+ * Without this, a query like "scoped search" could match sessions in BOTH
+ * the project you specified AND elsewhere, producing an ambiguity error
+ * even though the user already pointed at the correct scope.
+ */
+function applyViewFilters(sessions: SessionMeta[], options: ViewOptions): SessionMeta[] {
+  let filtered = sessions;
+
+  if (options.project) {
+    const projectQuery = options.project.toLowerCase();
+    filtered = filtered.filter((s) => {
+      const project = (s.project || '').toLowerCase();
+      const cwd = (s.cwd || '').toLowerCase();
+      return project.includes(projectQuery) || cwd.includes(projectQuery);
+    });
+  }
+
+  if (options.agent) {
+    // Accept "claude" or "claude@2.1.112". Version suffix narrows further.
+    const [wantAgent, wantVersion] = options.agent.split('@');
+    filtered = filtered.filter((s) => {
+      if (s.agent !== wantAgent) return false;
+      if (wantVersion && s.version !== wantVersion) return false;
+      return true;
+    });
+  }
+
+  return filtered;
+}
+
 async function viewAction(idQuery: string, options: ViewOptions): Promise<void> {
+  console.error('[DEBUG] viewAction options:', JSON.stringify(options), 'idQuery:', idQuery);
   const mode = resolveViewMode(options);
 
   const spinner = ora().start();
   const tracker = createScanProgressTracker(FIND_VERBS, 'session', spinner);
 
   try {
-    const allSessions = await discoverSessions({
+    const discovered = await discoverSessions({
       all: true,
       cwd: process.cwd(),
       limit: 5000,
       onProgress: tracker.onProgress,
     });
     tracker.stop();
+
+    // Apply --project / --agent narrowing BEFORE any query resolution so an
+    // ambiguous-looking search ("scoped search") collapses to the single
+    // candidate inside the user's declared project / agent scope.
+    const allSessions = applyViewFilters(discovered, options);
     let session: SessionMeta | undefined;
 
     const matches = resolveSessionById(allSessions, idQuery);
@@ -734,8 +773,18 @@ export function registerSessionsCommands(program: Command): void {
     .option('--transcript', 'Show full conversation transcript')
     .option('--trace', 'Show reasoning trace as markdown')
     .option('--json', 'Output normalized events as JSON')
-    .action(async (id: string, options: ViewOptions) => {
-      await viewAction(id, options);
+    .option('-a, --agent <agent>', 'Narrow the search to one agent, e.g. claude or claude@2.1.112')
+    .option('--project <name>', 'Narrow the search to sessions in a specific project directory')
+    .action(async (id: string, options: ViewOptions, command) => {
+      // When the same flag is declared on both the parent (`sessions`) and
+      // the child (`view`), Commander routes it to the first one that
+      // declared it — the parent. Merge parent opts so --project / --agent /
+      // --transcript etc. reach viewAction regardless of which level parsed
+      // them.
+      const parentOptions = typeof command?.parent?.opts === 'function'
+        ? command.parent.opts()
+        : {};
+      await viewAction(id, { ...parentOptions, ...options });
     });
 }
 

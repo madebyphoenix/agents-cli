@@ -402,13 +402,13 @@ describe('agents sessions', () => {
       expect(result.status).toBe(0);
 
       const output = outputOf(result);
-      expect(output).toContain('Msgs');
-      expect(output).toContain('Tokens');
-
+      // Core intent of this test: topic rendering skips the Claude
+      // local-command preamble ("Caveat: ...") and shows the real prompt.
+      // The Msgs/Tokens column assertion was dropped when the session table
+      // was simplified to ID / agent / project / topic / when.
       const row = output.split('\n').find(line => line.includes(sessionId.slice(0, 8))) || '';
       expect(row).toContain('Inspect session stats');
       expect(row).not.toContain('Caveat:');
-      expect(row).toMatch(/\b2\s+35\s+Inspect session stats\b/);
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
@@ -488,7 +488,7 @@ describe('agents sessions', () => {
     }
   });
 
-  it('shows Codex CLI versions in the agent column', () => {
+  it('lists Codex sessions when filtered by --agent', () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-codex-version-'));
 
     try {
@@ -507,13 +507,17 @@ describe('agents sessions', () => {
       expect(result.status).toBe(0);
 
       const output = outputOf(result);
-      expect(output).toContain('codex@0.113.0');
+      // Table simplification dropped the "codex@<version>" suffix from the
+      // agent column; still verify the codex session is discovered & listed.
+      expect(output).toContain('codex');
+      expect(output).toContain('Show codex versions in the session list');
+      expect(output).toContain('abababab');
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  it('shows Gemini CLI versions in the agent column when sessions come from a managed version home', () => {
+  it('lists Gemini sessions from a managed version home', () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-gemini-version-'));
 
     try {
@@ -532,7 +536,11 @@ describe('agents sessions', () => {
       expect(result.status).toBe(0);
 
       const output = outputOf(result);
-      expect(output).toContain('gemini@0.29.5');
+      // Version suffix in the agent column was removed by the table
+      // simplification. Still verify the session is discovered & listed.
+      expect(output).toContain('gemini');
+      expect(output).toContain('Show gemini versions in the session list');
+      expect(output).toContain('f0f0f0f0');
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
@@ -549,7 +557,9 @@ describe('agents sessions', () => {
       expect(result.status).toBe(0);
 
       const output = outputOf(result);
-      expect(output).toContain('openclaw@2026.3.');
+      // The "openclaw@<version>" suffix was dropped with the table
+      // simplification; the workspace discovery (Sergey / session id) is the
+      // actual behavior this test guards.
       expect(output).toContain('Sergey');
       expect(output).toContain('12345678');
       expect(output).not.toContain('No sessions found');
@@ -687,7 +697,9 @@ describe('agents sessions view', () => {
       expect(result.status).toBe(0);
 
       const output = outputOf(result);
-      expect(output).toContain(`Resolved Claude history entry ${historyOnlyId} to transcript ${transcriptId}.`);
+      // The informational "Resolved Claude history entry ... to transcript ..."
+      // status line was removed; the behavior (history ID → transcript
+      // content) still works, so we assert on the loaded transcript instead.
       expect(output).toContain('Loaded resumed transcript');
       expect(output).not.toContain(`No transcript session found matching: ${historyOnlyId}`);
     } finally {
