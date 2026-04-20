@@ -164,6 +164,7 @@ const SYSTEM_MESSAGE_PATTERNS = [
   /^\s*<collaboration_mode>/i,
   /^\s*<local-command-caveat>/i,
   /^\s*# AGENTS\.md instructions for\b/i,
+  /^\s*<command-(message|name|args)>/i,
 ];
 
 /** Strip XML/HTML tags and clean up content for display. */

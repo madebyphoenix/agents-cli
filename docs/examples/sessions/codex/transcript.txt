@@ -410,7 +410,7 @@ I’ve confirmed the current code still routes `remind` through the local remind
   [Bash: cat example/app/testdata/schedules.json]
   [Bash: cat example/cli/internal/daemon/testdata/schedules_with_tool_call.json]
   [Bash: nl -ba example/cli/internal/daemon/executor.go | sed -n '160,340p']
-  [Bash: rg -n "cmd.Env|RUSH_.*OUTPUT|working_directory|Metadata:" example/cli/internal/daemon example/cli/internal/cli harness/agen...]
+  [Bash: rg -n "cmd.Env|EXAMPLE_.*OUTPUT|working_directory|Metadata:" example/cli/internal/daemon example/cli/internal/cli harness/agen...]
   [Bash: rg -n "type Request struct" harness/agent | sed -n '1,40p']
   [Bash: nl -ba harness/agent/agent.go | sed -n '1,120p']
 
@@ -432,7 +432,7 @@ I’m editing the harness context, the CLI schedule path, the daemon scheduler/e
 
 I’m wiring schedule state into the same runtime context path that capabilities already use. That gives `remind` one canonical place to schedule work whether it runs under the app, the daemon, or `example tool`.
   [Bash: sed -n '1,120p' example/cli/internal/cli/run.go]
-  [Bash: rg -n "RUSH_EXEC_OUTPUT_TARGET_JSON|LoadBridgeConfig\(|request := agent.Request" example/cli/internal/cli/run.go | sed -...]
+  [Bash: rg -n "EXAMPLE_EXEC_OUTPUT_TARGET_JSON|LoadBridgeConfig\(|request := agent.Request" example/cli/internal/cli/run.go | sed -...]
   [Bash: sed -n '1,40p' example/cli/internal/cli/tool.go]
   [Bash: nl -ba example/cli/internal/cli/tool.go | sed -n '118,142p']
 
@@ -621,7 +621,7 @@ Implemented the reminder path as daemon-owned one-off schedules, not `metadata.d
 - In [harness/tools/remind.go](/Users/user/src/github.com/example/agents/harness/tools/remind.go:152), `remind` now creates a schedule request with `Pattern: "once"`, `Runner: "daemon"`, and `Output: output`; at [harness/tools/remind.go](/Users/user/src/github.com/example/agents/harness/tools/remind.go:159) it persists `ScheduledAt: fireAtUTC.Format(time.RFC3339)` and `Timezone: "UTC"`.
 - In [example/cli/internal/daemon/scheduler.go](/Users/user/src/github.com/example/agents/example/cli/internal/daemon/scheduler.go:83) the daemon now normalizes camelCase schedule files via `firstNonEmpty(raw.AgentIDCamel, raw.AgentID)`, and at [example/cli/internal/daemon/scheduler.go](/Users/user/src/github.com/example/agents/example/cli/internal/daemon/scheduler.go:204) it only skips non-daemon schedules while the app is open: `if appRunning && schedule.Runner != "daemon" { continue }`.
 - In [example/app/electron/services/scheduler.service.js](/Users/user/src/github.com/example/agents/example/app/electron/services/scheduler.service.js:315) the app now ignores daemon-owned schedules with `if (schedule.runner === 'daemon') { continue; }`, and at [example/app/electron/services/scheduler.service.js](/Users/user/src/github.com/example/agents/example/app/electron/services/scheduler.service.js:396) it persists `runner`, `output`, and `sessionId`.
-- In [example/cli/internal/daemon/executor.go](/Users/user/src/github.com/example/agents/example/cli/internal/daemon/executor.go:210) and [example/cli/internal/cli/run.go](/Users/user/src/github.com/example/agents/example/cli/internal/cli/run.go:1175), the current output target is passed through `RUSH_EXEC_OUTPUT_TARGET_JSON`, so a later reminder can answer in the same channel.
+- In [example/cli/internal/daemon/executor.go](/Users/user/src/github.com/example/agents/example/cli/internal/daemon/executor.go:210) and [example/cli/internal/cli/run.go](/Users/user/src/github.com/example/agents/example/cli/internal/cli/run.go:1175), the current output target is passed through `EXAMPLE_EXEC_OUTPUT_TARGET_JSON`, so a later reminder can answer in the same channel.
 - In [example/cli/internal/daemon/channels/imessage.go](/Users/user/src/github.com/example/agents/example/cli/internal/daemon/channels/imessage.go:173), iMessage responses now carry `from_number`, and [example/proxy/src/channels/imessage/relay.ts](/Users/user/src/github.com/example/agents/example/proxy/src/channels/imessage/relay.ts:143) falls back to `await this.sendOrphanResponse(msg, payload, truncated);` when the short-lived reply context is gone.
 - I also made standalone scheduling work through the tool path in [harness/tools/schedule.go](/Users/user/src/github.com/example/agents/harness/tools/schedule.go:195) by using `types.GetScheduleHandler(ctx)` instead of requiring only `schedule_response` hook injection.
 
