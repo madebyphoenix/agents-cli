@@ -569,9 +569,9 @@ describe('agents sessions', () => {
   });
 });
 
-describe('agents sessions view', () => {
+describe('agents sessions (render-mode)', () => {
   it('resolves explicit IDs across directories even when the default listing is scoped to cwd', () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-view-global-'));
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-render-global-'));
 
     try {
       writeUpdateCache(tempHome);
@@ -597,7 +597,7 @@ describe('agents sessions view', () => {
         '2026-04-17T19:36:30.000Z'
       );
 
-      const result = runAgents(['sessions', 'view', siblingSessionId, '--transcript'], swarmifyDir, tempHome);
+      const result = runAgents(['sessions', siblingSessionId, '--transcript'], swarmifyDir, tempHome);
       expect(result.status).toBe(0);
 
       const output = outputOf(result);

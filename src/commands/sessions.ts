@@ -33,6 +33,20 @@ interface SessionsOptions extends SessionFilterOptions {
   timeline?: boolean;
 }
 
+interface ListOptions extends SessionFilterOptions {
+  limit?: string;
+  json?: boolean;
+}
+
+interface ViewOptions {
+  transcript?: boolean;
+  trace?: boolean;
+  timeline?: boolean;
+  json?: boolean;
+  project?: string;
+  agent?: string;
+}
+
 interface ClaudeHistoryEntry {
   sessionId: string;
   display?: string;
@@ -691,61 +705,22 @@ async function renderOneSession(
 }
 
 export function registerSessionsCommands(program: Command): void {
-  const sessionsCmd = program
+  program
     .command('sessions')
     .argument('[query]', 'Session ID, search query, or path (., ../, /path) to filter by project')
-    .description('Browse, search, and resume agent sessions')
+    .description('Browse, search, resume, and render agent sessions')
     .option('-a, --agent <agent>', SESSION_AGENT_FILTER_HELP)
     .option('--all', 'Show sessions from every directory')
     .option('--project <name>', 'Filter by project name across all directories')
     .option('--since <time>', 'Filter sessions newer than time (e.g., "2h", "7d", "4w", ISO date)')
     .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
     .option('-n, --limit <n>', 'Max sessions to show', '50')
-    .option('--transcript', 'Show full conversation transcript (with ID)')
-    .option('--trace', 'Show reasoning trace as markdown (with ID)')
-    .option('--timeline', 'Show chronological timeline of narration + tool clusters (with ID)')
-    .option('--json', 'Output as JSON')
+    .option('--transcript', 'Render full conversation transcript (requires query)')
+    .option('--trace', 'Render reasoning trace as markdown (requires query)')
+    .option('--timeline', 'Render chronological timeline of narration + tool clusters (requires query)')
+    .option('--json', 'Output as JSON (session list, or event array when query resolves to one session)')
     .action(async (query: string | undefined, options: SessionsOptions) => {
       await sessionsAction(query, options);
-    });
-
-  sessionsCmd
-    .command('list')
-    .argument('[query]', 'Search query or path (., ../, /path) to filter by project')
-    .description('List sessions (non-interactive, for scripts and AI agents)')
-    .option('-a, --agent <agent>', SESSION_AGENT_FILTER_HELP)
-    .option('--all', 'Show sessions from every directory')
-    .option('--project <name>', 'Filter by project name across all directories')
-    .option('--since <time>', 'Filter sessions newer than time (e.g., "2h", "7d", "4w", ISO date)')
-    .option('--until <time>', 'Filter sessions older than time (ISO timestamp)')
-    .option('-n, --limit <n>', 'Max sessions to show', '50')
-    .option('--json', 'Output sessions as JSON array')
-    .action(async (query: string | undefined, options: ListOptions, command) => {
-      const parentOptions = typeof command?.parent?.opts === 'function'
-        ? command.parent.opts()
-        : {};
-      await listAction(query, { ...parentOptions, ...options });
-    });
-
-  sessionsCmd
-    .command('view <id>')
-    .description('Render a session by ID (non-interactive)')
-    .option('--transcript', 'Show full conversation transcript')
-    .option('--trace', 'Show reasoning trace as markdown')
-    .option('--timeline', 'Show chronological timeline of narration + tool clusters')
-    .option('--json', 'Output normalized events as JSON')
-    .option('-a, --agent <agent>', 'Narrow the search to one agent, e.g. claude or claude@2.1.112')
-    .option('--project <name>', 'Narrow the search to sessions in a specific project directory')
-    .action(async (id: string, options: ViewOptions, command) => {
-      // When the same flag is declared on both the parent (`sessions`) and
-      // the child (`view`), Commander routes it to the first one that
-      // declared it — the parent. Merge parent opts so --project / --agent /
-      // --transcript etc. reach viewAction regardless of which level parsed
-      // them.
-      const parentOptions = typeof command?.parent?.opts === 'function'
-        ? command.parent.opts()
-        : {};
-      await viewAction(id, { ...parentOptions, ...options });
     });
 }
 
