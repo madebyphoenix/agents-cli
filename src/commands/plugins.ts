@@ -14,7 +14,14 @@ import {
   getVersionHomePath,
 } from '../lib/versions.js';
 import { isPluginSynced } from '../lib/plugins.js';
-import { isPromptCancelled } from './utils.js';
+import {
+  isPromptCancelled,
+  isInteractiveTerminal,
+  requireDestructiveArg,
+  requireInteractiveSelection,
+} from './utils.js';
+import { itemPicker } from '../lib/picker.js';
+import type { DiscoveredPlugin } from '../lib/types.js';
 
 function formatPath(p: string): string {
   const home = process.env.HOME || '';
@@ -107,16 +114,59 @@ Note: Running 'agents plugins' with no subcommand lists all installed plugins.
       }
     });
 
-  // agents plugins info <name>
+  // agents plugins info [name]
   pluginsCmd
-    .command('info <name>')
+    .command('info [name]')
     .description('Show plugin metadata, resources, and installation status across agent versions')
     .addHelpText('after', `
 Examples:
   # View details for a plugin
   agents plugins info rush-toolkit
 `)
-    .action((name: string) => {
+    .action(async (nameArg?: string) => {
+      let name = nameArg;
+
+      // No name → pick one from the installed plugins.
+      if (!name) {
+        const discovered = discoverPlugins();
+        if (discovered.length === 0) {
+          console.log(chalk.gray('No plugins installed in ~/.agents/plugins/'));
+          return;
+        }
+        if (!isInteractiveTerminal()) {
+          requireInteractiveSelection('Picking a plugin for `agents plugins info`', [
+            'agents plugins info <name>',
+            'agents plugins  # to see installed plugins',
+          ]);
+        }
+        try {
+          const picked = await itemPicker<DiscoveredPlugin>({
+            message: 'Select a plugin:',
+            items: discovered,
+            filter: (q) => {
+              const t = q.trim().toLowerCase();
+              if (!t) return discovered;
+              return discovered.filter((p) =>
+                `${p.name} ${p.manifest.description || ''}`.toLowerCase().includes(t)
+              );
+            },
+            labelFor: (p) => {
+              const desc = p.manifest.description ? ` — ${chalk.gray(p.manifest.description)}` : '';
+              return `${chalk.cyan(p.name)} ${chalk.gray(`v${p.manifest.version}`)}${desc}`;
+            },
+            shortIdFor: (p) => p.name,
+            pageSize: 10,
+            emptyMessage: 'No plugins match.',
+            enterHint: 'view info',
+          });
+          if (!picked) return;
+          name = picked.item.name;
+        } catch (err) {
+          if (isPromptCancelled(err)) return;
+          throw err;
+        }
+      }
+
       const plugin = getPlugin(name);
       if (!plugin) {
         console.log(chalk.red(`Plugin '${name}' not found`));

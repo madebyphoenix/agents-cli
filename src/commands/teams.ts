@@ -29,6 +29,8 @@ import type { SessionMeta } from '../lib/session/types.js';
 import { buildPreview as buildSessionPreview } from './sessions-picker.js';
 import { parseExecEnv } from '../lib/exec.js';
 import { teamPicker, printTeamTable, type TeamRow } from './teams-picker.js';
+import { itemPicker } from '../lib/picker.js';
+import type { AgentProcess } from '../lib/teams/agents.js';
 import {
   isPromptCancelled,
   isInteractiveTerminal,
@@ -352,6 +354,57 @@ async function loadTeamRows(
     })
   );
   return { rows, names: merged.map((t) => t.task_name) };
+}
+
+// Picker fallback for `teams logs` when the teammate ref is omitted. Shows a
+// flat list of every teammate with their team context; Enter picks one.
+async function pickTeammateOr(
+  mgr: AgentManager,
+  command: string
+): Promise<{ agentId: string; team: string } | null> {
+  if (!isInteractiveTerminal()) {
+    requireInteractiveSelection(`Picking a teammate for \`${command}\``, [
+      `${command} <teammate>`,
+      `agents teams list  # to see teammates per team`,
+    ]);
+  }
+  const all = await mgr.listAll();
+  if (all.length === 0) {
+    console.log(chalk.gray('No teammates on any team yet.'));
+    console.log(chalk.gray('  Add one with:  agents teams add <team> <agent> <task>'));
+    return null;
+  }
+  const nameW = Math.max(8, ...all.map((a) => (a.name || shortId(a.agentId)).length));
+  const teamW = Math.max(6, ...all.map((a) => a.taskName.length));
+  try {
+    const picked = await itemPicker<AgentProcess>({
+      message: 'Select a teammate:',
+      items: all,
+      filter: (query) => {
+        const q = query.trim().toLowerCase();
+        if (!q) return all;
+        return all.filter((a) => {
+          const hay = [a.name ?? '', a.agentId, a.taskName, a.agentType, a.status].join(' ').toLowerCase();
+          return hay.includes(q);
+        });
+      },
+      labelFor: (a) => {
+        const h = (a.name || shortId(a.agentId)).padEnd(nameW);
+        const team = a.taskName.padEnd(teamW);
+        const who = fullName(a.agentType as AgentType, a.version);
+        return `${chalk.cyan(h)}  ${chalk.gray(team)}  ${who}  ${statusColor(a.status)(a.status)}`;
+      },
+      shortIdFor: (a) => a.name || shortId(a.agentId),
+      pageSize: 10,
+      emptyMessage: 'No teammates match.',
+      enterHint: 'view log',
+    });
+    if (!picked) return null;
+    return { agentId: picked.item.agentId, team: picked.item.taskName };
+  } catch (err) {
+    if (isPromptCancelled(err)) return null;
+    throw err;
+  }
 }
 
 // Fallback for read-only / constructive subcommands when the user omits the
@@ -804,13 +857,35 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
 
   // remove
   teams
-    .command('remove <team> <teammate>')
+    .command('remove [team] [teammate]')
     .alias('rm')
     .description("Remove a teammate from the team. Stops them cleanly if still working. Accepts name, UUID, or UUID prefix.")
     .option('--keep-logs', 'Keep their log files on disk (default: delete them)')
     .option('--json', 'Output machine-readable JSON')
-    .action(async (team: string, ref: string, opts: { keepLogs?: boolean; json?: boolean }) => {
+    .action(async (team: string | undefined, ref: string | undefined, opts: { keepLogs?: boolean; json?: boolean }) => {
       const mgr = new AgentManager();
+
+      if (!team) {
+        const { names } = await loadTeamRows(mgr);
+        requireDestructiveArg({
+          argName: 'team',
+          command: 'agents teams remove',
+          itemNoun: 'team',
+          available: names,
+          emptyHint: "You don't have any teams yet.",
+        });
+      }
+      if (!ref) {
+        const roster = await mgr.listByTask(team);
+        requireDestructiveArg({
+          argName: 'teammate',
+          command: `agents teams remove ${team}`,
+          itemNoun: 'teammate',
+          available: roster.map((a) => a.name || shortId(a.agentId)),
+          emptyHint: `Team ${team} has no teammates.`,
+        });
+      }
+
       const lookup = await mgr.resolveAgentIdInTask(team, ref);
       if (lookup.kind === 'none') {
         die(`No teammate matching '${ref}' in team ${team}`, 2);
@@ -901,26 +976,38 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
 
   // logs
   teams
-    .command('logs <teammate>')
+    .command('logs [teammate]')
     .alias('log')
     .description("Read a teammate's raw log output. Accepts name, UUID, or UUID prefix.")
     .option('-n, --tail <n>', 'Show only the last N lines instead of the full log')
     .option('--team <team>', 'Disambiguate when the same name appears in multiple teams')
-    .action(async (ref: string, opts: { tail?: string; team?: string }) => {
+    .action(async (ref: string | undefined, opts: { tail?: string; team?: string }) => {
       const base = await getAgentsDir();
-      const resolved = await resolveTeammateAcrossTeams(base, ref, opts.team);
-      if (resolved.kind === 'none') {
-        die(`No notes on record for teammate '${ref}'`, 2);
+
+      // No teammate → picker in TTY, hard fail outside.
+      let agentId: string;
+      if (!ref) {
+        const mgr = new AgentManager();
+        const picked = await pickTeammateOr(mgr, 'agents teams logs');
+        if (!picked) return;
+        agentId = picked.agentId;
+      } else {
+        const resolved = await resolveTeammateAcrossTeams(base, ref, opts.team);
+        if (resolved.kind === 'none') {
+          die(`No notes on record for teammate '${ref}'`, 2);
+        }
+        if (resolved.kind === 'ambiguous') {
+          const hints = resolved.candidates.map((c) => `${c.team}/${c.display}`).join(', ');
+          die(
+            `'${ref}' matches multiple teammates: ${hints}.\n` +
+              `  Narrow it with --team <team>, or pass a UUID prefix.`,
+            2
+          );
+        }
+        agentId = resolved.agentId;
       }
-      if (resolved.kind === 'ambiguous') {
-        const hints = resolved.candidates.map((c) => `${c.team}/${c.display}`).join(', ');
-        die(
-          `'${ref}' matches multiple teammates: ${hints}.\n` +
-            `  Narrow it with --team <team>, or pass a UUID prefix.`,
-          2
-        );
-      }
-      const logPath = path.join(base, resolved.agentId, 'stdout.log');
+
+      const logPath = path.join(base, agentId, 'stdout.log');
       try {
         const content = await fs.readFile(logPath, 'utf-8');
         if (!opts.tail) {
@@ -931,7 +1018,7 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
         const lines = content.split('\n');
         process.stdout.write(lines.slice(-n).join('\n'));
       } catch {
-        die(`No notes on record for teammate '${ref}' (looked in ${logPath})`, 2);
+        die(`No notes on record for teammate '${ref ?? agentId}' (looked in ${logPath})`, 2);
       }
     });
 
