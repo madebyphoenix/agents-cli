@@ -12,7 +12,7 @@ import {
   setRemoteUrl,
   getRemoteUrl,
 } from '../lib/git.js';
-import { DEFAULT_SYSTEM_REPO } from '../lib/types.js';
+import { DEFAULT_SYSTEM_REPO, systemRepoSlug } from '../lib/types.js';
 import { isPromptCancelled } from './utils.js';
 
 export function registerForkCommand(program: Command): void {
@@ -61,10 +61,12 @@ export function registerForkCommand(program: Command): void {
         const { promisify } = await import('util');
         const execAsync = promisify(exec);
 
+        const repoSlug = systemRepoSlug(DEFAULT_SYSTEM_REPO);
+
         try {
           // gh repo fork creates a fork and optionally clones it
           // We just want to create the fork on GitHub, not clone
-          await execAsync(`gh repo fork muqsitnawaz/.agents --clone=false`);
+          await execAsync(`gh repo fork ${repoSlug} --clone=false`);
           forkSpinner.succeed(`Forked to ${username}/.agents`);
         } catch (err) {
           const errorMsg = (err as Error).message;
@@ -81,14 +83,14 @@ export function registerForkCommand(program: Command): void {
         const remoteSpinner = ora('Reconfiguring remotes...').start();
 
         // Set current origin as upstream
-        await setUpstreamRemote(agentsDir, 'https://github.com/muqsitnawaz/.agents.git');
+        await setUpstreamRemote(agentsDir, `https://github.com/${repoSlug}.git`);
 
         // Set user's fork as new origin
         await setRemoteUrl(agentsDir, `https://github.com/${username}/.agents.git`);
 
         remoteSpinner.succeed('Reconfigured remotes');
         console.log(chalk.gray(`  origin   -> ${username}/.agents`));
-        console.log(chalk.gray(`  upstream -> muqsitnawaz/.agents`));
+        console.log(chalk.gray(`  upstream -> ${repoSlug}`));
 
         // Commit any local changes
         if (await hasLocalChanges(agentsDir)) {

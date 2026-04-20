@@ -122,7 +122,12 @@ export interface RepoInfo {
   lastSync: string;
 }
 
-export const DEFAULT_SYSTEM_REPO = 'gh:muqsitnawaz/.agents';
+export const DEFAULT_SYSTEM_REPO = 'gh:phnx-labs/.agents';
+export const LEGACY_SYSTEM_REPO = 'gh:muqsitnawaz/.agents';
+
+export function systemRepoSlug(repo: string = DEFAULT_SYSTEM_REPO): string {
+  return repo.replace(/^gh:/, '').replace(/\.git$/, '');
+}
 
 // Registry types
 export type RegistryType = 'mcp' | 'skill';
