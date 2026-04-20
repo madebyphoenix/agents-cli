@@ -70,13 +70,14 @@ program.helpInformation = function () {
   if (this.name() === 'agents' && !this.parent) {
     return `Usage: agents [command] [options]
 
-Install, configure, and sync AI coding agents from one place.
-Works with Claude, Codex, Gemini, Cursor, OpenCode, and OpenClaw.
+Install, configure, run, and dispatch AI coding agents from one place.
+Works with Claude, Codex, Gemini, Cursor, OpenCode, OpenClaw, and Droid.
 
 Quick start:
   agents init                     First-time setup (interactive)
   agents view                     See what's installed
   agents run <agent> ["prompt"]   Run an agent (interactive without prompt, headless with)
+  agents cloud run <prompt>       Dispatch a task to the cloud (Rush, Codex, Factory)
   agents sessions                 Browse past sessions across all agents
 
 Agent versions:

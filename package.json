@@ -1,7 +1,7 @@
 {
   "name": "@phnx-labs/agents-cli",
   "version": "0.1.0",
-  "description": "One CLI for all your AI coding agents - versions, skills, MCP servers, rules, hooks, and permissions",
+  "description": "One CLI for all your AI coding agents - versions, config, cloud dispatch, sessions, and teams",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

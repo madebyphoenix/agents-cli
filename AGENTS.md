@@ -1,12 +1,13 @@
 # agents-cli
 
-CLI for managing AI coding agent versions, config, and sessions (Claude, Codex, Gemini, Cursor, OpenCode, OpenClaw).
+CLI for managing AI coding agent versions, config, sessions, and cloud dispatch (Claude, Codex, Gemini, Cursor, OpenCode, OpenClaw).
 
 ## Core Concepts
 
 **Version Management** - Install/switch agent CLI versions like `nvm` for Node.js
 **Config Sync** - Backup agent config (commands, skills, hooks, rules) to git, restore across machines
 **Session Reading** - Unified view of session logs across Claude, Codex, and Gemini
+**Cloud Dispatch** - Run agents on cloud infrastructure (Rush Cloud, Codex Cloud, Factory/Droid) from one interface
 
 ### Directory Structure
 
@@ -27,6 +28,7 @@ CLI for managing AI coding agent versions, config, and sessions (Claude, Codex, 
   plugins/                    # Agent plugins (discovery via agents plugins)
   subagents/                  # Subagent definitions
   runs/                       # Execution history for scheduled jobs
+  cloud/                      # Cloud task index (tasks.db SQLite)
 ```
 
 ### Version Switching
@@ -82,6 +84,14 @@ src/
       render.ts      # Transcript, summary, trace, JSON renderers
       prompt.ts      # Prompt cleaning and topic extraction from raw session messages
       team-filter.ts # Classify and filter team-spawned sessions
+    cloud/           # Cloud dispatch (multi-provider)
+      types.ts       # CloudProvider interface, CloudTask, CloudEvent
+      registry.ts    # Provider resolution from agents.yaml config
+      store.ts       # SQLite task index (~/.agents/cloud/tasks.db)
+      stream.ts      # SSE parser + terminal renderer
+      rush.ts        # Rush Cloud provider (api.prix.dev -> Factory Floor)
+      codex.ts       # Codex Cloud provider (wraps codex CLI)
+      factory.ts     # Factory/Droid provider (stub, Phase 2)
 ```
 
 ## Key Types
@@ -152,6 +162,17 @@ agents profiles remove <name>         # delete a profile (keychain item preserve
 # Execution
 agents run <agent|profile> <prompt>   # Execute agent non-interactively (profile name resolves to host CLI + env)
 
+# Cloud Dispatch (multi-provider)
+agents cloud run <prompt> --provider rush --repo owner/repo   # Dispatch to Rush Cloud (Factory Floor)
+agents cloud run <prompt> --provider codex --env env_abc123   # Dispatch to Codex Cloud
+agents cloud run task.md --repo owner/repo                    # Read prompt from file, default provider
+agents cloud list [--provider rush|codex] [--refresh]         # List tasks (local DB; --refresh queries provider)
+agents cloud status <id>                                      # Task detail + latest status from provider
+agents cloud logs <id> [-f]                                   # Stream live SSE output from running task
+agents cloud cancel <id>                                      # Cancel a running task
+agents cloud message <id> "follow up text"                    # Send follow-up to finished/needs_review task
+agents cloud providers                                        # List configured providers + availability
+
 # Schedule
 agents routines              # Manage scheduled jobs (add, list, run, pause, resume)
 agents routines start        # Start scheduler manually (auto-starts on first 'routines add')
@@ -188,6 +209,44 @@ Sessions are stored differently by each agent. `agents sessions` normalizes all 
 | Gemini | Single JSON | `~/.gemini/tmp/{project-hash}/chats/session-{ts}-{uuid}.json` |
 
 All formats normalize to `SessionEvent` with types: message, tool_use, tool_result, thinking, error, init, result.
+
+## Cloud Dispatch
+
+Unified interface for dispatching tasks to cloud agent providers. Local SQLite DB (`~/.agents/cloud/tasks.db`) tracks all tasks across providers.
+
+### Providers
+
+| Provider | Backend | Auth | Status |
+|----------|---------|------|--------|
+| Rush Cloud | Factory Floor (agents.427yosemite.com) via api.prix.dev | `~/.rush/user.yaml` session token | Ready |
+| Codex Cloud | OpenAI Codex Cloud API via `codex` CLI | `~/.codex/` auth | Ready |
+| Factory/Droid | droid daemon (remote machine) | `~/.factory/` auth | Phase 2 |
+
+### Config
+
+```yaml
+# ~/.agents/agents.yaml
+cloud:
+  default_provider: rush        # Used when --provider is omitted
+  providers:
+    rush: {}                    # Auth from ~/.rush/user.yaml
+    codex:
+      env: env_abc123           # Default Codex Cloud environment ID
+    factory:
+      computer: mac-mini        # Default droid computer target
+```
+
+### Provider Interface
+
+All providers implement `CloudProvider` (src/lib/cloud/types.ts): `dispatch()`, `status()`, `list()`, `stream()`, `cancel()`, `message()`. Provider registry resolves by ID from config.
+
+### Task Lifecycle
+
+```
+dispatch -> queued -> allocating -> running -> completed | failed | input_required | cancelled
+                                       |
+                                  message() -> running (new agent process, same pod)
+```
 
 ## Rules
 
