@@ -14,13 +14,15 @@ import {
   computeSummaryStats,
   renderSummaryHeader,
   renderSummary,
-  filterByRole,
+  filterEvents,
+  parseRoleList,
+  renderConversationMarkdown,
 } from '../render.js';
 import type { SessionEvent } from '../types.js';
 
-// ── filterByRole ──────────────────────────────────────────────────────────────
+// ── filterEvents ──────────────────────────────────────────────────────────────
 
-describe('filterByRole', () => {
+describe('filterEvents', () => {
   const events: SessionEvent[] = [
     { type: 'message', agent: 'claude', timestamp: '2024-01-01T00:00:00Z', role: 'user', content: 'Hello' },
     { type: 'message', agent: 'claude', timestamp: '2024-01-01T00:00:01Z', role: 'assistant', content: 'Hi there' },
@@ -30,53 +32,147 @@ describe('filterByRole', () => {
     { type: 'error', agent: 'claude', timestamp: '2024-01-01T00:00:05Z', content: 'fail' },
   ];
 
-  it('filters to user messages only', () => {
-    const result = filterByRole(events, 'user');
+  it('include: keeps only whitelisted roles', () => {
+    const result = filterEvents(events, { include: ['user'] });
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe('user');
-    expect(result[0].content).toBe('Hello');
   });
 
-  it('filters to assistant messages only', () => {
-    const result = filterByRole(events, 'assistant');
-    expect(result).toHaveLength(1);
-    expect(result[0].role).toBe('assistant');
-    expect(result[0].content).toBe('Hi there');
+  it('include: supports multiple roles', () => {
+    const result = filterEvents(events, { include: ['user', 'assistant'] });
+    expect(result).toHaveLength(2);
+    expect(result.every(e => e.type === 'message')).toBe(true);
   });
 
-  it('filters to thinking events only', () => {
-    const result = filterByRole(events, 'thinking');
-    expect(result).toHaveLength(1);
-    expect(result[0].type).toBe('thinking');
-    expect(result[0].content).toBe('Let me think');
-  });
-
-  it('filters to tool_use and tool_result events only', () => {
-    const result = filterByRole(events, 'tools');
+  it('include: tools captures both tool_use and tool_result', () => {
+    const result = filterEvents(events, { include: ['tools'] });
     expect(result).toHaveLength(2);
     expect(result.every(e => e.type === 'tool_use' || e.type === 'tool_result')).toBe(true);
   });
 
-  it('returns empty array when no events match the role', () => {
-    const onlyUser: SessionEvent[] = [
-      { type: 'message', agent: 'claude', timestamp: '2024-01-01T00:00:00Z', role: 'user', content: 'Hello' },
+  it('exclude: drops listed roles, keeps non-role events', () => {
+    // error has no role, so it stays.
+    const result = filterEvents(events, { exclude: ['thinking', 'tools'] });
+    expect(result.some(e => e.type === 'message' && e.role === 'user')).toBe(true);
+    expect(result.some(e => e.type === 'message' && e.role === 'assistant')).toBe(true);
+    expect(result.some(e => e.type === 'error')).toBe(true);
+    expect(result.every(e => e.type !== 'thinking' && e.type !== 'tool_use' && e.type !== 'tool_result')).toBe(true);
+  });
+
+  it('throws when include and exclude are both passed', () => {
+    expect(() => filterEvents(events, { include: ['user'], exclude: ['tools'] })).toThrow(/mutually exclusive/);
+  });
+
+  it('first: keeps events up to the Nth user turn', () => {
+    const twoTurns: SessionEvent[] = [
+      { type: 'message', agent: 'claude', timestamp: 't0', role: 'user', content: 'q1' },
+      { type: 'message', agent: 'claude', timestamp: 't1', role: 'assistant', content: 'a1' },
+      { type: 'message', agent: 'claude', timestamp: 't2', role: 'user', content: 'q2' },
+      { type: 'message', agent: 'claude', timestamp: 't3', role: 'assistant', content: 'a2' },
     ];
-    expect(filterByRole(onlyUser, 'thinking')).toHaveLength(0);
+    const result = filterEvents(twoTurns, { first: 1 });
+    expect(result).toHaveLength(2);
+    expect(result[0].content).toBe('q1');
+    expect(result[1].content).toBe('a1');
   });
 
-  it('throws on invalid role listing all valid values', () => {
-    expect(() => filterByRole(events, 'foo')).toThrow(/Invalid --role "foo"/);
-    expect(() => filterByRole(events, 'foo')).toThrow(/user, assistant, thinking, tools/);
+  it('last: keeps events from the start of the (M-N+1)th user turn', () => {
+    const twoTurns: SessionEvent[] = [
+      { type: 'message', agent: 'claude', timestamp: 't0', role: 'user', content: 'q1' },
+      { type: 'message', agent: 'claude', timestamp: 't1', role: 'assistant', content: 'a1' },
+      { type: 'message', agent: 'claude', timestamp: 't2', role: 'user', content: 'q2' },
+      { type: 'message', agent: 'claude', timestamp: 't3', role: 'assistant', content: 'a2' },
+    ];
+    const result = filterEvents(twoTurns, { last: 1 });
+    expect(result).toHaveLength(2);
+    expect(result[0].content).toBe('q2');
+    expect(result[1].content).toBe('a2');
   });
 
-  it('does not include error events when filtering by tools', () => {
-    const result = filterByRole(events, 'tools');
-    expect(result.every(e => e.type !== 'error')).toBe(true);
+  it('first with N >= total turns returns all events', () => {
+    const result = filterEvents(events, { first: 100 });
+    expect(result).toHaveLength(events.length);
   });
 
-  it('does not include tool events when filtering by user', () => {
-    const result = filterByRole(events, 'user');
-    expect(result.every(e => e.type === 'message' && e.role === 'user')).toBe(true);
+  it('throws when first and last are both passed', () => {
+    expect(() => filterEvents(events, { first: 1, last: 1 })).toThrow(/mutually exclusive/);
+  });
+
+  it('turn slice and role filter compose: last 1 turn, user only', () => {
+    const twoTurns: SessionEvent[] = [
+      { type: 'message', agent: 'claude', timestamp: 't0', role: 'user', content: 'q1' },
+      { type: 'message', agent: 'claude', timestamp: 't1', role: 'assistant', content: 'a1' },
+      { type: 'message', agent: 'claude', timestamp: 't2', role: 'user', content: 'q2' },
+      { type: 'message', agent: 'claude', timestamp: 't3', role: 'assistant', content: 'a2' },
+    ];
+    const result = filterEvents(twoTurns, { last: 1, include: ['user'] });
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe('q2');
+  });
+
+  it('no filters is a passthrough', () => {
+    const result = filterEvents(events, {});
+    expect(result).toEqual(events);
+  });
+});
+
+// ── parseRoleList ─────────────────────────────────────────────────────────────
+
+describe('parseRoleList', () => {
+  it('parses a comma-separated list', () => {
+    expect(parseRoleList('user,assistant', '--include')).toEqual(['user', 'assistant']);
+  });
+
+  it('trims whitespace', () => {
+    expect(parseRoleList(' user , thinking ', '--exclude')).toEqual(['user', 'thinking']);
+  });
+
+  it('rejects unknown roles with the flag name', () => {
+    expect(() => parseRoleList('user,foo', '--include')).toThrow(/"foo" for --include/);
+    expect(() => parseRoleList('user,foo', '--include')).toThrow(/user, assistant, thinking, tools/);
+  });
+
+  it('rejects empty input', () => {
+    expect(() => parseRoleList('', '--include')).toThrow(/at least one role/);
+  });
+});
+
+// ── renderConversationMarkdown ────────────────────────────────────────────────
+
+describe('renderConversationMarkdown', () => {
+  it('includes user, assistant, thinking, and tool calls in event order', () => {
+    const events: SessionEvent[] = [
+      { type: 'message', agent: 'claude', timestamp: 't0', role: 'user', content: 'Read foo.ts' },
+      { type: 'thinking', agent: 'claude', timestamp: 't1', content: 'I should open the file first.' },
+      { type: 'message', agent: 'claude', timestamp: 't2', role: 'assistant', content: 'Reading now.' },
+      { type: 'tool_use', agent: 'claude', timestamp: 't3', tool: 'Read', args: { file_path: '/x/foo.ts' }, path: '/x/foo.ts' },
+    ];
+    const out = renderConversationMarkdown(events);
+    expect(out).toContain('## User');
+    expect(out).toContain('Read foo.ts');
+    expect(out).toContain('### Thinking');
+    expect(out).toContain('I should open the file first.');
+    expect(out).toContain('## Assistant');
+    expect(out).toContain('Reading now.');
+    expect(out).toContain('### Tool: Read');
+    expect(out).toContain('/x/foo.ts');
+    // Order: user before thinking before assistant before tool
+    const userIdx = out.indexOf('## User');
+    const thinkIdx = out.indexOf('### Thinking');
+    const asstIdx = out.indexOf('## Assistant');
+    const toolIdx = out.indexOf('### Tool: Read');
+    expect(userIdx).toBeLessThan(thinkIdx);
+    expect(thinkIdx).toBeLessThan(asstIdx);
+    expect(asstIdx).toBeLessThan(toolIdx);
+  });
+
+  it('renders bash commands inside a code fence', () => {
+    const events: SessionEvent[] = [
+      { type: 'tool_use', agent: 'claude', timestamp: 't0', tool: 'Bash', args: { command: 'ls -la' }, command: 'ls -la' },
+    ];
+    const out = renderConversationMarkdown(events);
+    expect(out).toContain('```bash');
+    expect(out).toContain('ls -la');
   });
 });
 

@@ -126,8 +126,11 @@ function resolvePathFilter(query: string): string {
 }
 
 async function sessionsAction(query: string | undefined, options: SessionsOptions): Promise<void> {
-  if (options.role && !VALID_ROLE_VALUES.includes(options.role as any)) {
-    console.error(chalk.red(`Invalid --role "${options.role}". Valid values: ${VALID_ROLE_VALUES.join(', ')}`));
+  let filterOpts: FilterOptions;
+  try {
+    filterOpts = buildFilterOptions(options);
+  } catch (err: any) {
+    console.error(chalk.red(err.message));
     process.exit(1);
   }
 
@@ -148,14 +151,14 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     searchQuery = query;
   }
 
-  const mode = resolveViewMode(options);
-  // --transcript/--trace/--timeline always request a single-session render.
-  const wantsRender = mode === 'transcript' || mode === 'trace' || mode === 'timeline';
+  const mode = resolveViewMode(options, filterOpts);
+  // --markdown or any filter flag forces single-session render.
+  const wantsRender = mode === 'markdown' || hasAnyFilter(filterOpts);
 
   // When the user explicitly asks to render (via mode flag), resolve the
   // query globally so sessions outside the default cwd/30d window are found.
   if (wantsRender && searchQuery) {
-    await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project, role: options.role });
+    await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project, filter: filterOpts });
     return;
   }
 
@@ -202,11 +205,11 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     if (searchQuery) {
       const idMatches = resolveSessionById(sessions, searchQuery);
       if (idMatches.length === 1) {
-        await renderSession(idMatches[0], mode, options.role);
+        await renderSession(idMatches[0], mode, filterOpts);
         return;
       }
       if (idMatches.length === 0 && looksLikeSessionId(searchQuery)) {
-        await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project, role: options.role });
+        await renderOneSession(searchQuery, mode, { agent: options.agent, project: options.project, filter: filterOpts });
         return;
       }
     }
@@ -292,15 +295,45 @@ function printSessionTable(sessions: SessionMeta[], hiddenCount = 0): void {
   }
 }
 
-function resolveViewMode(options: { transcript?: boolean; trace?: boolean; timeline?: boolean; json?: boolean }): ViewMode {
-  if (options.transcript) return 'transcript';
-  if (options.trace) return 'trace';
-  if (options.timeline) return 'timeline';
+function buildFilterOptions(options: SessionsOptions): FilterOptions {
+  const opts: FilterOptions = {};
+  if (options.include) opts.include = parseRoleList(options.include, '--include');
+  if (options.exclude) opts.exclude = parseRoleList(options.exclude, '--exclude');
+  if (opts.include && opts.exclude) {
+    throw new Error('--include and --exclude are mutually exclusive');
+  }
+  const parseCount = (raw: string, flag: string): number => {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+      throw new Error(`${flag} expects a positive integer, got "${raw}"`);
+    }
+    return n;
+  };
+  if (options.first !== undefined) opts.first = parseCount(options.first, '--first');
+  if (options.last !== undefined) opts.last = parseCount(options.last, '--last');
+  if (opts.first !== undefined && opts.last !== undefined) {
+    throw new Error('--first and --last are mutually exclusive');
+  }
+  return opts;
+}
+
+function hasAnyFilter(opts: FilterOptions): boolean {
+  return !!(opts.include?.length || opts.exclude?.length || opts.first !== undefined || opts.last !== undefined);
+}
+
+/**
+ * Default is summary. Any explicit format flag wins. When filters are present
+ * without a format, default to markdown since summary is an aggregate view
+ * that filters don't meaningfully narrow.
+ */
+function resolveViewMode(options: SessionsOptions, filters: FilterOptions): ViewMode {
+  if (options.markdown) return 'markdown';
   if (options.json) return 'json';
+  if (hasAnyFilter(filters)) return 'markdown';
   return 'summary';
 }
 
-async function renderSession(session: SessionMeta, mode: ViewMode, role?: string): Promise<void> {
+async function renderSession(session: SessionMeta, mode: ViewMode, filters: FilterOptions): Promise<void> {
   // OpenCode stores sessions in SQLite; filePath is "db_path#session_id"
   const realPath = session.filePath.split('#')[0];
   if (!fs.existsSync(realPath)) {
@@ -317,14 +350,12 @@ async function renderSession(session: SessionMeta, mode: ViewMode, role?: string
   let events = parseSession(session.filePath, session.agent);
   spinner.stop();
 
-  if (role) {
-    events = filterByRole(events, role);
-  }
+  events = filterEvents(events, filters);
 
   const agentColor = colorAgent(session.agent);
   console.log('');
 
-  if (mode === 'summary' || mode === 'timeline') {
+  if (mode === 'summary') {
     const stats = computeSummaryStats(events);
     const modelStr = stats.models.length > 0 ? chalk.yellow(`  ${stats.models.join(', ')}`) : '';
     const branchStr = session.gitBranch ? chalk.gray(` (${session.gitBranch})`) : '';
@@ -342,27 +373,25 @@ async function renderSession(session: SessionMeta, mode: ViewMode, role?: string
     if (statsLine) console.log(chalk.gray(statsLine));
     console.log(chalk.gray('─'.repeat(60)));
 
-    process.stdout.write(renderSummary(events, session.cwd, { timeline: mode === 'timeline' }));
+    process.stdout.write(renderSummary(events, session.cwd));
     return;
   }
 
-  console.log(
-    agentColor(session.agent) +
-    (session.version ? chalk.yellow(` ${session.version}`) : '') +
-    (session.project ? chalk.cyan(` ${session.project}`) : '') +
-    chalk.gray(` ${formatRelativeTime(session.timestamp)}`) +
-    (session.account ? chalk.gray(` (${session.account})`) : '')
-  );
-  console.log(chalk.gray('─'.repeat(60)));
-
-  let output: string;
-  switch (mode) {
-    case 'transcript': output = renderTranscript(events); break;
-    case 'trace': output = renderMarkdown(renderTrace(events)); break;
-    case 'json': output = renderJson(events); break;
-    default: output = '';
+  if (mode === 'markdown') {
+    console.log(
+      agentColor(session.agent) +
+      (session.version ? chalk.yellow(` ${session.version}`) : '') +
+      (session.project ? chalk.cyan(` ${session.project}`) : '') +
+      chalk.gray(` ${formatRelativeTime(session.timestamp)}`) +
+      (session.account ? chalk.gray(` (${session.account})`) : '')
+    );
+    console.log(chalk.gray('─'.repeat(60)));
+    process.stdout.write(renderMarkdown(renderConversationMarkdown(events)));
+    return;
   }
-  process.stdout.write(output);
+
+  // json — no header, raw events only (pipeable)
+  process.stdout.write(renderJson(events));
 }
 
 function renderTopicCell(
@@ -454,7 +483,7 @@ async function pickSessionInteractive(
 
 async function handlePickedSession(picked: PickedSession): Promise<void> {
   if (picked.action === 'view') {
-    await renderSession(picked.session, 'summary');
+    await renderSession(picked.session, 'summary', {});
     return;
   }
 
@@ -463,7 +492,7 @@ async function handlePickedSession(picked: PickedSession): Promise<void> {
     console.log(chalk.yellow(
       `Resume is not supported for ${picked.session.agent} sessions yet. Showing summary instead.`
     ));
-    await renderSession(picked.session, 'summary');
+    await renderSession(picked.session, 'summary', {});
     return;
   }
 
@@ -652,7 +681,7 @@ function applyScopeFilters(
 async function renderOneSession(
   query: string,
   mode: ViewMode,
-  scope: { agent?: string; project?: string; role?: string },
+  scope: { agent?: string; project?: string; filter: FilterOptions },
 ): Promise<void> {
   const spinner = ora().start();
   const tracker = createScanProgressTracker(FIND_VERBS, 'session', spinner);
@@ -722,7 +751,7 @@ async function renderOneSession(
     }
 
     spinner.stop();
-    await renderSession(session, mode, scope.role);
+    await renderSession(session, mode, scope.filter);
   } catch (err: any) {
     if (isPromptCancelled(err)) return;
     tracker.stop();
@@ -744,17 +773,18 @@ export function registerSessionsCommands(program: Command): void {
     .option('--since <time>', 'Only sessions newer than this (e.g., 2h, 7d, 4w, or ISO date)')
     .option('--until <time>', 'Only sessions older than this (ISO timestamp)')
     .option('-n, --limit <n>', 'Maximum number of sessions to return', '50')
-    .option('--transcript', 'Show the full conversation (requires a query that resolves to one session)')
-    .option('--trace', 'Show reasoning trace as markdown (requires a query that resolves to one session)')
-    .option('--timeline', 'Show chronological timeline with tool clusters (requires a query that resolves to one session)')
+    .option('--markdown', 'Render the session as markdown (user, assistant, thinking, tool calls)')
     .option('--json', 'Output JSON (session list when browsing, event array when rendering one session)')
-    .option('--role <role>', 'Filter events by role: user, assistant, thinking, or tools')
+    .option('--include <roles>', 'Only include these roles (comma-separated): user, assistant, thinking, tools')
+    .option('--exclude <roles>', 'Exclude these roles (comma-separated): user, assistant, thinking, tools')
+    .option('--first <n>', 'Keep only the first N turns (a turn starts at each user message)')
+    .option('--last <n>', 'Keep only the last N turns (a turn starts at each user message)')
     .addHelpText('after', `
 Examples:
   # Interactive picker: browse and search recent sessions (TTY only)
   agents sessions
 
-  # List sessions from current project (default: last 30 days, piped output shows table)
+  # List sessions from current project (last 30 days, piped output shows table)
   agents sessions | head -20
 
   # Search sessions by text (topic, file paths, commands)
@@ -769,20 +799,26 @@ Examples:
   # Filter sessions in a specific directory
   agents sessions /Users/muqsit/src/my-project
 
-  # View full transcript of one session (by ID, or query that resolves to one)
-  agents sessions a1b2c3d4 --transcript
+  # Default summary view for one session
+  agents sessions a1b2c3d4
 
-  # View reasoning trace (thinking blocks) as markdown
-  agents sessions a1b2c3d4 --trace
+  # Full conversation (user + assistant + thinking + tools) as markdown
+  agents sessions a1b2c3d4 --markdown
 
-  # Show only user messages from a session
-  agents sessions a1b2c3d4 --role user
+  # Same conversation as structured JSON events
+  agents sessions a1b2c3d4 --json
 
-  # Show only thinking blocks as JSON
-  agents sessions a1b2c3d4 --role thinking --json
+  # Only user messages (filter flags auto-select markdown)
+  agents sessions a1b2c3d4 --include user
 
-  # Show only tool calls from a transcript
-  agents sessions a1b2c3d4 --role tools --transcript
+  # Everything except thinking, as markdown
+  agents sessions a1b2c3d4 --exclude thinking --markdown
+
+  # Last 3 turns as markdown
+  agents sessions a1b2c3d4 --last 3
+
+  # First 10 turns, user messages only, as JSON
+  agents sessions a1b2c3d4 --first 10 --include user --json
 
   # Export all recent sessions as JSON for analysis
   agents sessions --since 30d --limit 200 --json > sessions.json
@@ -790,9 +826,10 @@ Examples:
   # Include team-spawned sessions in results
   agents sessions --teams
 
-Note: Without a query, sessions defaults to current directory + last 30 days.
-Pass --all to see sessions from every directory, or a path to filter by location.
---role filters events before rendering and works with all format flags (--transcript, --trace, --timeline, --json).
+Notes:
+  - --include and --exclude are mutually exclusive.
+  - --first and --last are mutually exclusive.
+  - A filter flag without --markdown/--json defaults to --markdown output.
 `)
     .action(async (query: string | undefined, options: SessionsOptions) => {
       await sessionsAction(query, options);

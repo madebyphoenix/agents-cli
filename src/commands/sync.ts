@@ -8,13 +8,13 @@ export function registerSyncCommand(program: Command): void {
     .command('sync', { hidden: true })
     .description('Internal: sync resources to a version home. Called by shims, not directly by users.')
     .requiredOption('--agent <agent>', 'Agent identifier (claude, codex, gemini, cursor, opencode, openclaw)')
-    .requiredOption('--version <version>', 'Installed version to sync resources into')
+    .requiredOption('--agent-version <version>', 'Installed version to sync resources into')
     .option('--project-dir <path>', 'Path to project-level .agents/ directory containing project-scoped resources')
     .option('--cwd <path>', 'Working directory for discovering project manifest and resources')
     .option('--quiet', 'Suppress all output (exit code indicates success)', false)
     .action((opts) => {
       const agentId = opts.agent as keyof typeof AGENTS;
-      const version = opts.version as string;
+      const version = opts.agentVersion as string;
       const projectDir = opts.projectDir as string | undefined;
       const cwd = opts.cwd as string | undefined;
       const quiet = !!opts.quiet;
