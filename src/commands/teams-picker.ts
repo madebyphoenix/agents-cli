@@ -62,6 +62,25 @@ function displayAgent(agent: string, version?: string | null): string {
   return version ? `${label}@${version}` : label;
 }
 
+// Aggregated status cell: a single colored label when the team is uniform
+// (everyone done / everyone working), or a dotted breakdown when mixed.
+function statusCell(t: TaskInfo): string {
+  if (t.agent_count === 0) return chalk.gray('empty');
+  const states: Array<[number, (s: string) => string, string]> = [
+    [t.pending, chalk.blue, 'pending'],
+    [t.running, chalk.yellow, 'working'],
+    [t.completed, chalk.green, 'done'],
+    [t.failed, chalk.red, 'failed'],
+    [t.stopped, chalk.gray, 'stopped'],
+  ];
+  const nonzero = states.filter(([n]) => n > 0);
+  if (nonzero.length === 1) {
+    const [, color, label] = nonzero[0];
+    return color(label);
+  }
+  return nonzero.map(([n, color, label]) => color(`${n} ${label}`)).join(chalk.gray(' · '));
+}
+
 function statusSummaryParts(t: TaskInfo): string[] {
   const parts: string[] = [];
   if (t.pending) parts.push(chalk.blue(`${t.pending} pending`));
@@ -72,13 +91,65 @@ function statusSummaryParts(t: TaskInfo): string[] {
   return parts;
 }
 
-export function formatTeamRow(row: TeamRow, nameWidth: number): string {
+// "claude×4" for a homogeneous team; "claude×2 codex" when mixed. Counts only
+// show when > 1 — "codex" alone is cleaner than "codex×1".
+function formatComposition(agents: AgentStatusDetail[]): string {
+  if (agents.length === 0) return '';
+  const counts = new Map<string, number>();
+  for (const a of agents) {
+    counts.set(a.agent_type, (counts.get(a.agent_type) || 0) + 1);
+  }
+  const parts = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([type, n]) => (n === 1 ? type : `${type}×${n}`));
+  return parts.join(' ');
+}
+
+function humanDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  if (h < 24) return mm ? `${h}h${mm}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  const hh = h % 24;
+  return hh ? `${d}d${hh}h` : `${d}d`;
+}
+
+function runtimeSpan(t: TaskInfo): string {
+  const startMs = new Date(t.created_at).getTime();
+  const endMs = new Date(t.modified_at).getTime();
+  const ms = Math.max(0, endMs - startMs);
+  if (ms < 1000) return '';
+  return humanDuration(ms);
+}
+
+// Prefer "files modified" as the work signal — it answers "what did this cost
+// me in change footprint". Fall back to tool count for read-only teams so the
+// column never disappears silently.
+function workCell(agents: AgentStatusDetail[]): string {
+  const files = agents.reduce((n, a) => n + a.files_modified.length, 0);
+  if (files > 0) return `${files} file${files === 1 ? '' : 's'}`;
+  const tools = agents.reduce((n, a) => n + a.tool_count, 0);
+  if (tools > 0) return `${tools} tool${tools === 1 ? '' : 's'}`;
+  return '';
+}
+
+export function formatTeamRow(row: TeamRow, nameWidth: number, compositionWidth: number): string {
   const t = row.team;
-  const summary = statusSummaryParts(t).join(' ') || chalk.gray(t.agent_count === 0 ? 'empty' : '-');
-  const members = `${t.agent_count} member${t.agent_count === 1 ? '' : 's'}`;
-  const when = chalk.gray(relTime(t.modified_at));
-  const main = `${chalk.cyan(t.task_name.padEnd(nameWidth))}  ${chalk.gray(members.padEnd(11))}  ${summary.padEnd(40)}`;
-  return `${main} ${when}`;
+  const name = chalk.cyan(t.task_name.padEnd(nameWidth));
+  const composition = chalk.white(formatComposition(row.agents).padEnd(compositionWidth));
+  const status = statusCell(t);
+  const work = workCell(row.agents);
+  const runtime = runtimeSpan(t);
+  const age = chalk.gray(relTime(t.modified_at));
+
+  const middleParts = [status, work, runtime].filter(Boolean);
+  const middle = middleParts.join(chalk.gray(' · '));
+
+  return `${name}  ${composition}  ${middle}${middle ? chalk.gray(' · ') : ''}${age}`;
 }
 
 function handle(a: AgentStatusDetail): string {
