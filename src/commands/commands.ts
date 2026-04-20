@@ -46,13 +46,37 @@ import {
 export function registerCommandsCommands(program: Command): void {
   const commandsCmd = program
     .command('commands')
-    .description('Manage slash commands');
+    .description('Extend agents with custom slash commands that ship behavior in markdown files')
+    .addHelpText('after', `
+Slash commands are markdown files that agents can invoke mid-session. They add capabilities without modifying the agent CLI itself — perfect for team workflows, project patterns, or personal shortcuts.
+
+Examples:
+  # See what commands are available
+  agents commands list
+
+  # Check commands installed for a specific version
+  agents commands list claude@2.1.112
+
+  # Install a command from GitHub to multiple agents
+  agents commands add gh:anthropics/commands --agents claude,codex
+
+  # Pick commands from ~/.agents/commands/ interactively
+  agents commands add
+
+  # Install specific commands by name
+  agents commands add --names README,debug --agents codex@0.116.0
+
+When to use:
+  - Project setup: 'agents commands add gh:team/commands' to sync everyone's workflow
+  - New version: 'agents commands add --agents claude@2.1.112' to carry commands forward
+  - Custom tooling: write a command markdown file, test it, then share via 'agents commands add ~/my-cmd.md'
+`);
 
   commandsCmd
     .command('list [agent]')
-    .description('List installed commands. Use agent@version for specific version, agent@default for default only.')
-    .option('-a, --agent <agent>', 'Filter by agent')
-    .option('-s, --scope <scope>', 'Filter by scope: user, project, or all', 'all')
+    .description('Show which slash commands are installed across agents or versions')
+    .option('-a, --agent <agent>', 'Filter to a specific agent (alternative to positional arg)')
+    .option('-s, --scope <scope>', 'user (global), project (repo), or all', 'all')
     .action(async (agentArg, options) => {
       const spinner = ora({ text: 'Loading...', isSilent: !process.stdout.isTTY }).start();
       const cwd = process.cwd();
@@ -212,10 +236,24 @@ export function registerCommandsCommands(program: Command): void {
 
   commandsCmd
     .command('add [source]')
-    .description('Install commands from a repo or local path')
-    .option('-a, --agents <list>', 'Comma-separated agent or agent@version targets to install to')
-    .option('--names <list>', 'Comma-separated command names from ~/.agents/commands/')
-    .option('-y, --yes', 'Skip prompts and use defaults')
+    .description('Install commands from a source (GitHub, local) or pick from central storage')
+    .option('-a, --agents <list>', 'Targets: claude, codex@0.116.0, or gemini@default')
+    .option('--names <list>', 'Command names from ~/.agents/commands/ (comma-separated)')
+    .option('-y, --yes', 'Skip all prompts')
+    .addHelpText('after', `
+Examples:
+  # Interactive picker from ~/.agents/commands/
+  agents commands add
+
+  # Install specific commands to a single version
+  agents commands add --names README,debug --agents codex@0.116.0
+
+  # Pull commands from GitHub and sync to all installed agents
+  agents commands add gh:user/repo --agents claude,codex,gemini
+
+  # Add a local command directory
+  agents commands add ~/my-commands --agents claude@default
+`)
     .action(async (source: string | undefined, options) => {
       try {
         let commands: { name: string; description: string; sourcePath?: string }[];

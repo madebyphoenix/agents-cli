@@ -75,11 +75,41 @@ async function pickJob(
 }
 
 export function registerRoutinesCommands(program: Command): void {
-  const routinesCmd = program.command('routines').description('Manage scheduled jobs');
+  const routinesCmd = program
+    .command('routines')
+    .description('Schedule agents to run on a cron schedule or at a specific time. Routines are YAML files; the daemon executes them in the background.')
+    .addHelpText(
+      'after',
+      `
+A routine is a YAML file that schedules an agent invocation. It specifies:
+  - which agent to run (claude, codex, gemini, etc.)
+  - when to run (cron schedule or one-shot time)
+  - what task to give the agent (the prompt)
+  - execution constraints (mode, effort, timeout)
+
+Routines only fire when the daemon is running. Start it with 'agents daemon start'.
+
+Examples:
+  # Create a routine that runs Claude every weekday at 9 AM
+  agents routines add daily-standup --schedule "0 9 * * 1-5" --agent claude --prompt "Draft standup update from git log"
+
+  # One-shot routine: run Codex tomorrow at 2:30 PM, then never again
+  agents routines add hotfix-review --at "14:30" --agent codex --prompt "Review hotfix PR #42"
+
+  # Create from a YAML file (for complex routines with multiple settings)
+  agents routines add weekly-report.yml
+
+  # See all routines and their next run times
+  agents routines list
+
+  # Test a routine immediately in the foreground (ignores schedule)
+  agents routines run daily-standup
+`
+    );
 
   routinesCmd
     .command('list')
-    .description('List all jobs')
+    .description('See all scheduled jobs, when they run next, and their last execution status')
     .action(() => {
       const jobs = listAllJobs();
       if (jobs.length === 0) {

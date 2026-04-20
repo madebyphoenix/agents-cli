@@ -34,28 +34,48 @@ function isValidAgent(agent: string): agent is AgentId {
 export function registerRunCommand(program: Command): void {
   program
     .command('run <agent> <prompt>')
-    .description('Run an agent non-interactively')
-    .option('-m, --mode <mode>', 'Execution mode: plan (read-only), edit (write), or full (full autonomy)', 'plan')
-    .option('-e, --effort <effort>', 'Effort level: fast, default, detailed', 'default')
-    .option('--model <model>', 'Override model selection')
+    .description('Execute an agent non-interactively from scripts, scheduled jobs, or automation pipelines. Returns when the agent finishes.')
+    .option('-m, --mode <mode>', 'How much the agent can do: plan (read-only), edit (can write files), full (writes + all permissions)', 'plan')
+    .option('-e, --effort <effort>', 'Model tier to use: fast (haiku), default (sonnet), detailed (opus)', 'default')
+    .option('--model <model>', 'Override the model directly (e.g., claude-opus-4-6)')
     .option(
       '--env <key=value>',
-      'Pass an environment variable to the spawned agent process (can repeat)',
+      'Pass environment variable to the agent (repeatable, e.g., --env DEBUG=1 --env API_KEY=xyz)',
       (val: string, prev: string[]) => [...prev, val],
       []
     )
-    .option('--cwd <dir>', 'Working directory')
+    .option('--cwd <dir>', 'Working directory for the agent (defaults to current directory)')
     .option(
       '--add-dir <dir>',
-      'Add directory access (Claude only, can repeat)',
+      'Grant access to an additional directory outside the project (Claude only, repeatable)',
       (val: string, prev: string[]) => [...prev, val],
       []
     )
-    .option('--json', 'Output JSON events')
-    .option('--headless', 'Non-interactive mode (default for exec)', true)
-    .option('--session-id <id>', 'Session ID for conversation continuity (Claude only)')
-    .option('--verbose', 'Enable verbose output')
-    .option('--timeout <duration>', 'Timeout duration (e.g., 30m, 1h)')
+    .option('--json', 'Stream events as JSON lines (for parsing by other tools)')
+    .option('--headless', 'Non-interactive mode (default for run)', true)
+    .option('--session-id <id>', 'Resume a previous conversation (Claude only)')
+    .option('--verbose', 'Show detailed execution logs')
+    .option('--timeout <duration>', 'Kill the agent after this duration (e.g., 30m, 1h, 2h30m)')
+    .addHelpText('after', `
+Examples:
+  # Quick read-only analysis (plan mode, fast model)
+  agents run claude "summarize recent git commits" --mode plan --effort fast
+
+  # Edit files with default model (sonnet)
+  agents run codex@0.116.0 "fix linting errors in src/" --mode edit
+
+  # Full autonomy with opus model for complex task
+  agents run claude "refactor auth to use JWT" --mode full --effort detailed
+
+  # Resume a previous conversation to continue work
+  agents run claude "now add rate limiting" --session-id a1b2c3d4 --mode edit
+
+  # Automated cron job: generate daily report with 10-minute timeout
+  agents run claude "generate sales report for yesterday" --mode plan --timeout 10m --json > report.jsonl
+
+Note: 'agents run' executes non-interactively (no TTY). To work interactively with
+the agent, launch it directly (e.g., 'claude', 'codex') instead of using 'run'.
+`)
     .action(async (agentSpec: string, prompt: string, options: ExecCommandActionOptions) => {
       // Parse agent@version
       const [agent, version] = agentSpec.split('@');

@@ -482,9 +482,29 @@ Notes:
 
   program
     .command('use <agent> [version]')
-    .description('Set the default agent CLI version')
-    .option('-p, --project', 'Set in project manifest instead of global default')
-    .option('-y, --yes', 'Skip prompts and use defaults')
+    .description('Switch the active version for an agent. This is how you set defaults globally or per-project.')
+    .option('-p, --project', 'Pin to this project directory only (stored in .agents/agents.yaml)')
+    .option('-y, --yes', 'Auto-sync resources without prompting')
+    .addHelpText('after', `
+Examples:
+  # Set global default (interactive picker if version omitted)
+  agents use claude
+  agents use claude@2.1.112
+
+  # Lock this project to a specific version (overrides global default when in this directory)
+  agents use claude@2.1.100 --project
+
+  # Switch accounts (each version can be logged into a different account)
+  agents use claude@2.1.50
+
+When to use:
+  - After installing: 'agents add' does NOT set the default; 'use' does
+  - Switching accounts: each installed version has separate auth; 'use' switches which one is active
+  - Project overrides: set a different version for a specific project with --project
+  - Testing: quickly switch between versions without reinstalling
+
+Important: This is the ONLY command that sets the default version. If you want a version to be active, you must run 'agents use'.
+`)
     .action(async (agentArg: string, versionArg: string | undefined, options) => {
       try {
         const skipPrompts = options.yes || !isInteractiveTerminal();
