@@ -78,6 +78,7 @@ src/
       parse.ts       # Parse stored session formats into normalized events
       render.ts      # Transcript, summary, trace, JSON renderers
       prompt.ts      # Prompt cleaning and topic extraction from raw session messages
+      team-filter.ts # Classify and filter team-spawned sessions
 ```
 
 ## Key Types
@@ -126,8 +127,9 @@ agents search <query>        # Search MCP servers
 agents install <pkg>         # Install mcp:name or skill:user/repo
 
 # Sessions
-agents sessions                       # Interactive picker (TTY) or table (piped)
+agents sessions                       # Interactive picker (TTY) or table (piped); team-spawned sessions hidden by default
 agents sessions <query>               # Search by text, path, or session ID
+agents sessions --teams               # Include team-spawned sessions with [team/handle · mode] tag
 agents sessions <id> --transcript     # Full conversation transcript
 agents sessions <id> --trace          # Reasoning trace as markdown
 agents sessions <id> --timeline       # Chronological timeline

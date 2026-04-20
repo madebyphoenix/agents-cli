@@ -19,9 +19,12 @@ const NOISE_LINE_PATTERNS = [
 
 const LOCAL_COMMAND_PREFIX = '<local-command-caveat>';
 
+// Prefix prepended to every Claude-in-plan-mode team spawn prompt.
+// Ends at a blank line before the real user task.
+export const HEADLESS_PLAN_MODE_PREFIX = 'You are running in HEADLESS PLAN MODE.';
+
 // Wrappers added to team-spawned prompts in src/lib/teams/agents.ts.
 // Stripped before topic extraction so the picker shows what the user actually typed.
-const HEADLESS_PLAN_MODE_PREFIX = 'You are running in HEADLESS PLAN MODE.';
 const TEAM_PROMPT_SUFFIX_MARKER = "When you're done, provide a brief summary of:";
 
 function stripTeamWrappers(raw: string): string {
@@ -52,7 +55,17 @@ export function cleanSessionPrompt(raw: string): string {
 
 export function extractSessionTopic(raw: string): string | undefined {
   if (!raw.trim()) return undefined;
-  if (WHOLE_MESSAGE_SKIP_PATTERNS.some(pattern => pattern.test(raw))) {
+
+  // Strip the HEADLESS PLAN MODE header so team sessions show their real task.
+  // The header ends at the first blank line (\n\n) before the actual prompt.
+  let text = raw;
+  if (text.trimStart().startsWith(HEADLESS_PLAN_MODE_PREFIX)) {
+    const blankLine = text.indexOf('\n\n');
+    if (blankLine === -1) return undefined;
+    text = text.slice(blankLine + 2);
+  }
+
+  if (WHOLE_MESSAGE_SKIP_PATTERNS.some(pattern => pattern.test(text))) {
     return undefined;
   }
 

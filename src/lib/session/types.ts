@@ -27,6 +27,13 @@ export interface SessionEvent {
   sizeBytes?: number;
 }
 
+export interface TeamOrigin {
+  /** Teammate name if set, otherwise first 8 chars of the agent UUID. */
+  handle?: string;
+  /** Agent mode: 'plan', 'edit', or 'full'. */
+  mode?: string;
+}
+
 export interface SessionMeta {
   id: string;
   shortId: string;
@@ -43,6 +50,8 @@ export interface SessionMeta {
   topic?: string;
   /** Custom name the user gave the session (e.g. Claude Code /rename). */
   label?: string;
+  /** Set when this session was spawned by `agents teams`. */
+  teamOrigin?: TeamOrigin;
   /** Terms that matched the current search query */
   _matchedTerms?: string[];
   /** BM25 relevance score from the most recent content-index search */
