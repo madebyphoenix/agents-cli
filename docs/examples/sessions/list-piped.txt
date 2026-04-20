@@ -1,0 +1,7 @@
+63353178  claude    agents-cli      You are running in HEADLESS PLAN MODE. This mode .  24 min ago
+aec34167  claude    agents-cli      You are running in HEADLESS PLAN MODE. This mode .  24 min ago
+b776f35c  claude    agents-cli      You are running in HEADLESS PLAN MODE. This mode .  24 min ago
+71eae44a  claude    agents-cli      You are running in HEADLESS PLAN MODE. This mode .  24 min ago
+cca6c454  claude    agents-cli      You are running in HEADLESS PLAN MODE. This mode .  24 min ago
+
+5 sessions.
