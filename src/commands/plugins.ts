@@ -46,11 +46,11 @@ export function registerPluginsCommands(program: Command): void {
 Plugins are directories in ~/.agents/plugins/ that bundle skills, hooks, and permission sets into a single installable unit. Each plugin declares which agents it supports and what resources it provides. When you sync a version, agents-cli installs the plugin's contents to that agent's home.
 
 Examples:
-  # List all plugins and show which versions have them installed
-  agents plugins
+  # Interactive picker (TTY) or sync-status table (piped)
+  agents plugins list
 
   # View details for a specific plugin
-  agents plugins info rush-toolkit
+  agents plugins view rush-toolkit
 
   # Sync a plugin to specific agents
   agents plugins sync rush-toolkit claude
@@ -64,37 +64,46 @@ When to use:
   - Team onboarding: distribute a full toolkit via a single plugin directory
 `);
 
-  // agents plugins (default: list)
-  pluginsCmd
-    .addHelpText('after', `
-Note: Running 'agents plugins' with no subcommand opens the plugins picker (TTY) or prints a sync-status table (piped).
-`)
-    .action(async () => {
-      const plugins = discoverPlugins();
+  // Shared list implementation — reused by `list` and the bare `agents plugins` default.
+  const runList = async () => {
+    const plugins = discoverPlugins();
 
-      if (plugins.length === 0) {
-        console.log(chalk.gray('No plugins found in ~/.agents/plugins/'));
-        console.log(chalk.gray('Plugins are directories with .claude-plugin/plugin.json'));
-        return;
-      }
+    if (plugins.length === 0) {
+      console.log(chalk.gray('No plugins found in ~/.agents/plugins/'));
+      console.log(chalk.gray('Plugins are directories with .claude-plugin/plugin.json'));
+      return;
+    }
 
-      await showResourceList({
-        resourcePlural: 'plugins',
-        resourceSingular: 'plugin',
-        extraLabel: 'Version',
-        rows: buildPluginRows(plugins),
-        emptyMessage: 'No plugins in ~/.agents/plugins/.',
-        centralPath: getPluginsDir(),
-      });
+    await showResourceList({
+      resourcePlural: 'plugins',
+      resourceSingular: 'plugin',
+      extraLabel: 'Version',
+      rows: buildPluginRows(plugins),
+      emptyMessage: 'No plugins in ~/.agents/plugins/.',
+      centralPath: getPluginsDir(),
     });
+  };
+
+  // Bare `agents plugins` → same as `list`.
+  pluginsCmd.action(runList);
+
+  // agents plugins list
+  pluginsCmd
+    .command('list')
+    .description('Show plugins in a table with sync status across agent versions')
+    .action(runList);
 
   // agents plugins info [name]
   pluginsCmd
     .command('info [name]')
+    .alias('view')
     .description('Show plugin metadata, resources, and installation status across agent versions')
     .addHelpText('after', `
 Examples:
   # View details for a plugin
+  agents plugins view rush-toolkit
+
+  # 'info' is kept as an alias
   agents plugins info rush-toolkit
 `)
     .action(async (nameArg?: string) => {

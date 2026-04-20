@@ -53,8 +53,8 @@ export function registerSubagentsCommands(program: Command): void {
 Subagents are lightweight agent definitions (AGENT.md files) that a parent agent can spawn for specific subtasks. Each subagent has its own model, mode, and instruction set, stored in ~/.agents/subagents/ and synced to agent homes on install.
 
 Examples:
-  # List all installed subagents by agent and version
-  agents subagents view
+  # Interactive picker (TTY) or sync-status table (piped)
+  agents subagents list
 
   # View details for a specific subagent
   agents subagents view code-reviewer
@@ -71,41 +71,56 @@ When to use:
   - Team sharing: distribute subagent definitions via GitHub repos
 `);
 
-  // agents subagents view [name]
+  // Shared list implementation, registered as `list` and hidden `view` alias.
+  const runList = async () => {
+    const rows = buildSubagentRows();
+    await showResourceList({
+      resourcePlural: 'subagents',
+      resourceSingular: 'subagent',
+      extraLabel: 'Files',
+      rows,
+      emptyMessage: 'No subagents in ~/.agents/subagents/. Add one with: agents subagents add gh:user/repo',
+      centralPath: getSubagentsDir(),
+    });
+  };
+
+  // agents subagents list
   subagentsCmd
-    .command('view [name]')
-    .description('Show subagents in a table with sync status across agent versions (or details for one)')
+    .command('list')
+    .description('Show subagents in a table with sync status across agent versions')
     .addHelpText('after', `
 Examples:
   # Interactive picker (TTY) or sync-status table (piped)
-  agents subagents view
+  agents subagents list
+`)
+    .action(runList);
 
+  // agents subagents view <name>
+  subagentsCmd
+    .command('view [name]')
+    .description('Show details for a specific subagent (use "list" to see all)')
+    .addHelpText('after', `
+Examples:
   # View a specific subagent's details
   agents subagents view code-reviewer
+
+  # No name → same as "agents subagents list"
+  agents subagents view
 `)
     .action(async (name?: string) => {
-      if (name) {
-        // Show details for a specific subagent
-        const subagent = getInstalledSubagent(name);
-        if (!subagent) {
-          console.log(chalk.red(`Subagent '${name}' not found`));
-          console.log(chalk.gray(`Run 'agents subagents view' to list all installed subagents`));
-          process.exit(1);
-        }
-
-        console.log(formatSubagentDetail(subagent, buildSubagentTargets(subagent.name)));
+      if (!name) {
+        await runList();
         return;
       }
 
-      const rows = buildSubagentRows();
-      await showResourceList({
-        resourcePlural: 'subagents',
-        resourceSingular: 'subagent',
-        extraLabel: 'Files',
-        rows,
-        emptyMessage: 'No subagents in ~/.agents/subagents/. Add one with: agents subagents add gh:user/repo',
-        centralPath: getSubagentsDir(),
-      });
+      const subagent = getInstalledSubagent(name);
+      if (!subagent) {
+        console.log(chalk.red(`Subagent '${name}' not found`));
+        console.log(chalk.gray(`Run 'agents subagents list' to list all installed subagents`));
+        process.exit(1);
+      }
+
+      console.log(formatSubagentDetail(subagent, buildSubagentTargets(subagent.name)));
     });
 
   // agents subagents add <source>
