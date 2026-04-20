@@ -13,10 +13,14 @@ import {
   registerMcpToTargets,
   unregisterMcpFromTargets,
   listInstalledMcpsWithScope,
+  parseMcpConfig,
+  getMcpConfigPathForHome,
   agentLabel,
 } from '../lib/agents.js';
 import type { AgentId, McpServerConfig } from '../lib/types.js';
 import { readManifest, writeManifest, createDefaultManifest } from '../lib/manifest.js';
+import { listMcpServerConfigs, type InstalledMcpServer } from '../lib/mcp.js';
+import { getMcpDir } from '../lib/state.js';
 import {
   getEffectiveHome,
   getGlobalDefault,
@@ -27,6 +31,12 @@ import {
 } from '../lib/versions.js';
 import { getAgentsDir } from '../lib/state.js';
 import { isPromptCancelled, isInteractiveTerminal, requireInteractiveSelection } from './utils.js';
+import {
+  showResourceList,
+  buildTargetsSection,
+  type ResourceRow,
+  type SyncTarget,
+} from './resource-view.js';
 
 function parseMcpAgentTargets(value: string): {
   agents: AgentId[];
@@ -133,191 +143,43 @@ When to use:
 
   mcpCmd
     .command('list [agent]')
-    .description('Show which MCP servers are registered for agents or versions')
+    .description('Show which MCP servers are registered and which agent versions they are synced to')
     .option('-a, --agent <agent>', 'Filter to a specific agent (alternative to positional arg)')
-    .option('-s, --scope <scope>', 'user (global), project (repo), or all', 'all')
     .action(async (agentArg, options) => {
       const spinner = ora({ text: 'Loading...', isSilent: !process.stdout.isTTY }).start();
-      const cwd = process.cwd();
 
-      // Parse agent input - handle agent@version syntax
       const agentInput = agentArg || options.agent;
-      let agentId: AgentId | null = null;
-      let requestedVersion: string | null = null;
+      let filterAgent: AgentId | undefined;
+      let filterVersion: string | undefined;
 
       if (agentInput) {
         const parts = agentInput.split('@');
-        const agentName = parts[0];
-        requestedVersion = parts[1] || null;
-
-        agentId = resolveAgentName(agentName);
-        if (!agentId) {
+        const resolved = resolveAgentName(parts[0]);
+        if (!resolved) {
           spinner.stop();
-          console.log(chalk.red(formatAgentError(agentName)));
+          console.log(chalk.red(formatAgentError(parts[0], MCP_CAPABLE_AGENTS)));
           process.exit(1);
         }
+        filterAgent = resolved;
+        filterVersion = parts[1] || undefined;
       }
 
-      const showPaths = !!agentInput;
-      const cliStates = await getAllCliStates();
-
-      // Helper to render MCP servers for a specific version
-      const renderVersionMcps = (
-        agentId: AgentId,
-        version: string,
-        isDefault: boolean,
-        home: string
-      ) => {
-        const agent = AGENTS[agentId];
-        if (!agent.capabilities.mcp) {
-          const defaultLabel = isDefault ? ' default' : '';
-          console.log(`  ${chalk.bold(agentLabel(agent.id))} (${version}${defaultLabel}): ${chalk.gray('mcp not supported')}`);
-          console.log();
-          return;
-        }
-
-        const mcps = listInstalledMcpsWithScope(agentId, cwd, { home }).filter(
-          (m) => options.scope === 'all' || m.scope === options.scope
-        );
-
-        const defaultLabel = isDefault ? ' default' : '';
-        const versionStr = chalk.gray(` (${version}${defaultLabel})`);
-
-        if (mcps.length === 0) {
-          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}: ${chalk.gray('none')}`);
-        } else {
-          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}:`);
-
-          const userMcps = mcps.filter((m) => m.scope === 'user');
-          const projectMcps = mcps.filter((m) => m.scope === 'project');
-
-          if (userMcps.length > 0 && (options.scope === 'all' || options.scope === 'user')) {
-            console.log(`    ${chalk.gray('User:')}`);
-            for (const mcp of userMcps) {
-              console.log(`      ${chalk.cyan(mcp.name.padEnd(20))}`);
-              if (showPaths && mcp.command) console.log(chalk.gray(`        ${mcp.command}`));
-            }
-          }
-
-          if (projectMcps.length > 0 && (options.scope === 'all' || options.scope === 'project')) {
-            console.log(`    ${chalk.gray('Project:')}`);
-            for (const mcp of projectMcps) {
-              console.log(`      ${chalk.yellow(mcp.name.padEnd(20))}`);
-              if (showPaths && mcp.command) console.log(chalk.gray(`        ${mcp.command}`));
-            }
-          }
-        }
-        console.log();
-      };
+      const rows = buildMcpRows({ filterAgent, filterVersion });
 
       spinner.stop();
 
-      // Single agent specified - show versions based on requestedVersion
-      if (agentId) {
-        const agent = AGENTS[agentId];
-        const installedVersions = listInstalledVersions(agentId);
-        const defaultVer = getGlobalDefault(agentId);
-
-        if (!agent.capabilities.mcp) {
-          console.log(chalk.bold(`MCP Servers for ${agentLabel(agent.id)}\n`));
-          console.log(`  ${chalk.gray('mcp not supported')}`);
-          return;
-        }
-
-        if (installedVersions.length === 0) {
-          // Not version-managed
-          console.log(chalk.bold(`MCP Servers for ${agentLabel(agent.id)}\n`));
-          if (!cliStates[agentId]?.installed) {
-            console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('CLI not installed')}`);
-          } else {
-            const mcps = listInstalledMcpsWithScope(agentId, cwd, { home: getEffectiveHome(agentId) }).filter(
-              (m) => options.scope === 'all' || m.scope === options.scope
-            );
-            if (mcps.length === 0) {
-              console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('none')}`);
-            } else {
-              console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
-              const userMcps = mcps.filter((m) => m.scope === 'user');
-              if (userMcps.length > 0) {
-                console.log(`    ${chalk.gray('User:')}`);
-                for (const mcp of userMcps) {
-                  console.log(`      ${chalk.cyan(mcp.name.padEnd(20))}`);
-                  if (showPaths && mcp.command) console.log(chalk.gray(`        ${mcp.command}`));
-                }
-              }
-            }
-          }
-          return;
-        }
-
-        console.log(chalk.bold(`MCP Servers for ${agentLabel(agent.id)}\n`));
-
-        let versionsToShow: string[];
-        if (requestedVersion === 'default') {
-          if (!defaultVer) {
-            console.log(chalk.yellow(`  No default version set for ${agent.name}. Run: agents use ${agentId}@<version>`));
-            return;
-          }
-          versionsToShow = [defaultVer];
-        } else if (requestedVersion) {
-          if (!installedVersions.includes(requestedVersion)) {
-            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agent.name}.`));
-            console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
-            return;
-          }
-          versionsToShow = [requestedVersion];
-        } else {
-          versionsToShow = [...installedVersions].sort((a, b) => {
-            if (a === defaultVer) return -1;
-            if (b === defaultVer) return 1;
-            return 0;
-          });
-        }
-
-        for (const version of versionsToShow) {
-          const home = getVersionHomePath(agentId, version);
-          renderVersionMcps(agentId, version, version === defaultVer, home);
-        }
-        return;
-      }
-
-      // No agent specified - show default version for each MCP-capable agent
-      console.log(chalk.bold('MCP Servers\n'));
-
-      for (const aid of MCP_CAPABLE_AGENTS) {
-        const agent = AGENTS[aid];
-        const installedVersions = listInstalledVersions(aid);
-        const defaultVer = getGlobalDefault(aid);
-
-        if (installedVersions.length > 0 && defaultVer) {
-          const home = getVersionHomePath(aid, defaultVer);
-          renderVersionMcps(aid, defaultVer, true, home);
-        } else {
-          // Not version-managed or no default
-          if (!cliStates[aid]?.installed) {
-            console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('CLI not installed')}`);
-          } else if (!agent.capabilities.mcp) {
-            console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('mcp not supported')}`);
-          } else {
-            const mcps = listInstalledMcpsWithScope(aid, cwd, { home: getEffectiveHome(aid) }).filter(
-              (m) => options.scope === 'all' || m.scope === options.scope
-            );
-            if (mcps.length === 0) {
-              console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('none')}`);
-            } else {
-              console.log(`  ${chalk.bold(agentLabel(aid))}:`);
-              const userMcps = mcps.filter((m) => m.scope === 'user');
-              if (userMcps.length > 0) {
-                console.log(`    ${chalk.gray('User:')}`);
-                for (const mcp of userMcps) {
-                  console.log(`      ${chalk.cyan(mcp.name)}`);
-                }
-              }
-            }
-          }
-          console.log();
-        }
-      }
+      await showResourceList({
+        resourcePlural: 'MCP servers',
+        resourceSingular: 'MCP server',
+        extraLabel: 'Source',
+        rows,
+        emptyMessage: filterAgent
+          ? `No MCP servers registered for ${agentLabel(filterAgent)}.`
+          : 'No MCP servers registered. Add one with: agents mcp add <name> -- <command>',
+        centralPath: getMcpDir(),
+        filterAgent,
+        filterVersion,
+      });
     });
 
   mcpCmd
@@ -655,4 +517,178 @@ Examples:
         }
       }
     });
+}
+
+interface McpTargetPair {
+  agent: AgentId;
+  version: string;
+  home: string;
+}
+
+/** Enumerate (agent, version) pairs that support MCP and have a version home. */
+function iterMcpCapableVersions(filter?: { agent?: AgentId; version?: string }): McpTargetPair[] {
+  const out: McpTargetPair[] = [];
+  const agents = filter?.agent ? [filter.agent] : MCP_CAPABLE_AGENTS;
+  for (const agent of agents) {
+    if (!MCP_CAPABLE_AGENTS.includes(agent)) continue;
+    const versions = listInstalledVersions(agent);
+    for (const version of versions) {
+      if (filter?.version && filter.version !== version) continue;
+      out.push({ agent, version, home: getVersionHomePath(agent, version) });
+    }
+  }
+  return out;
+}
+
+type McpSource = 'central' | 'manifest' | 'unmanaged';
+
+/**
+ * Build the row data for `agents mcp list`. Rows come from three sources,
+ * in priority order:
+ *   1. central  — ~/.agents/mcp/*.yaml (primary source of truth)
+ *   2. manifest — agents.yaml#mcp (legacy/alternate declaration)
+ *   3. unmanaged — found only in an agent's own config file
+ *
+ * Sync targets reflect the physical state: whether the server is actually
+ * registered in each (agent, version) config.
+ */
+function buildMcpRows(opts: {
+  filterAgent?: AgentId;
+  filterVersion?: string;
+}): ResourceRow[] {
+  const centralServers = new Map<string, InstalledMcpServer>();
+  for (const s of listMcpServerConfigs()) centralServers.set(s.name, s);
+
+  const manifest = readManifest(getAgentsDir());
+  const manifestEntries = manifest?.mcp || {};
+
+  const targetPairs = iterMcpCapableVersions({
+    agent: opts.filterAgent,
+    version: opts.filterVersion,
+  });
+
+  // Read each target's config once.
+  const installedByTarget = new Map<string, Record<string, { command?: string; url?: string }>>();
+  for (const { agent, version, home } of targetPairs) {
+    const configPath = getMcpConfigPathForHome(agent, home);
+    const parsed = parseMcpConfig(agent, configPath);
+    const normalized: Record<string, { command?: string; url?: string }> = {};
+    for (const [name, entry] of Object.entries(parsed)) {
+      const command = entry.command && entry.args?.length
+        ? `${entry.command} ${entry.args.join(' ')}`
+        : entry.command || (entry.args ? entry.args.join(' ') : undefined);
+      normalized[name] = { command, url: (entry as any).url };
+    }
+    installedByTarget.set(`${agent}@${version}`, normalized);
+  }
+
+  // Union: central + manifest + anything found in a target config.
+  const allNames = new Set<string>();
+  for (const name of centralServers.keys()) allNames.add(name);
+  for (const name of Object.keys(manifestEntries)) allNames.add(name);
+  for (const entries of installedByTarget.values()) {
+    for (const name of Object.keys(entries)) allNames.add(name);
+  }
+
+  if (allNames.size === 0) return [];
+
+  const defaultByAgent = new Map<AgentId, string | null>();
+  for (const { agent } of targetPairs) {
+    if (!defaultByAgent.has(agent)) defaultByAgent.set(agent, getGlobalDefault(agent));
+  }
+
+  const rows: ResourceRow[] = [];
+  for (const name of allNames) {
+    const centralConfig = centralServers.get(name);
+    const manifestConfig = manifestEntries[name];
+    const source: McpSource = centralConfig ? 'central' : manifestConfig ? 'manifest' : 'unmanaged';
+
+    const targets: SyncTarget[] = [];
+    let firstCommand: string | undefined;
+    for (const { agent, version } of targetPairs) {
+      const installed = installedByTarget.get(`${agent}@${version}`)![name];
+      const status: SyncTarget['status'] = installed ? 'synced' : 'missing';
+      if (installed && !firstCommand) firstCommand = installed.command || installed.url;
+      targets.push({
+        agent,
+        version,
+        isDefault: defaultByAgent.get(agent) === version,
+        status,
+      });
+    }
+
+    // Prefer the declared command/url from central or manifest over whatever
+    // happened to land in some version's config.
+    const declaredCommand = centralConfig
+      ? formatCentralCommand(centralConfig)
+      : manifestConfig?.command || manifestConfig?.url;
+    const displayCommand = declaredCommand || firstCommand;
+
+    rows.push({
+      name,
+      description: displayCommand ? truncateString(displayCommand, 60) : '',
+      extra: source,
+      targets,
+      buildDetail: () => formatMcpDetail(name, source, centralConfig, manifestConfig, displayCommand, targets),
+    });
+  }
+
+  rows.sort((a, b) => {
+    const aSynced = a.targets.filter((t) => t.status === 'synced').length;
+    const bSynced = b.targets.filter((t) => t.status === 'synced').length;
+    if (aSynced !== bSynced) return bSynced - aSynced;
+    return a.name.localeCompare(b.name);
+  });
+
+  return rows;
+}
+
+function formatCentralCommand(server: InstalledMcpServer): string {
+  if (server.config.transport === 'http') return server.config.url || '';
+  const cmd = server.config.command || '';
+  const args = server.config.args?.join(' ') || '';
+  return args ? `${cmd} ${args}` : cmd;
+}
+
+function formatMcpDetail(
+  name: string,
+  source: McpSource,
+  centralConfig: InstalledMcpServer | undefined,
+  manifestConfig: McpServerConfig | undefined,
+  command: string | undefined,
+  targets: SyncTarget[]
+): string {
+  const lines: string[] = [];
+  lines.push(chalk.bold.cyan(name));
+
+  const tag =
+    source === 'central' ? chalk.green('declared in ~/.agents/mcp/') :
+    source === 'manifest' ? chalk.gray('declared in agents.yaml') :
+    chalk.yellow('unmanaged (not in central or manifest)');
+  lines.push('  ' + tag);
+  lines.push('');
+
+  if (centralConfig) {
+    lines.push(`  transport: ${chalk.white(centralConfig.config.transport)}`);
+    lines.push('  ' + chalk.gray(centralConfig.path));
+  } else if (manifestConfig) {
+    const transport = manifestConfig.transport || 'stdio';
+    const scope = manifestConfig.scope || 'user';
+    lines.push(`  transport: ${chalk.white(transport)}   scope: ${chalk.white(scope)}`);
+  }
+
+  if (command) {
+    lines.push(`  ${chalk.gray('command:')} ${chalk.white(command)}`);
+  }
+
+  lines.push('');
+  lines.push(chalk.bold('  Synced to'));
+  lines.push(buildTargetsSection(targets));
+
+  return lines.join('\n');
+}
+
+function truncateString(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '…';
 }

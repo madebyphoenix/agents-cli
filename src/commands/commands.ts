@@ -29,7 +29,15 @@ import {
   installCommandToVersion,
   removeCommandFromVersion,
   iterCommandsCapableVersions,
+  type VersionCommandDiff,
 } from '../lib/commands.js';
+import { getCommandsDir } from '../lib/state.js';
+import {
+  showResourceList,
+  buildTargetsSection,
+  type ResourceRow,
+  type SyncTarget,
+} from './resource-view.js';
 import {
   listInstalledVersions,
   getGlobalDefault,
@@ -79,164 +87,42 @@ When to use:
 
   commandsCmd
     .command('list [agent]')
-    .description('Show which slash commands are installed across agents or versions')
+    .description('Show which slash commands are installed and which agent versions they are synced to')
     .option('-a, --agent <agent>', 'Filter to a specific agent (alternative to positional arg)')
-    .option('-s, --scope <scope>', 'user (global), project (repo), or all', 'all')
     .action(async (agentArg, options) => {
       const spinner = ora({ text: 'Loading...', isSilent: !process.stdout.isTTY }).start();
-      const cwd = process.cwd();
 
-      // Parse agent input - handle agent@version syntax
       const agentInput = agentArg || options.agent;
-      let agentId: AgentId | null = null;
-      let requestedVersion: string | null = null;
+      let filterAgent: AgentId | undefined;
+      let filterVersion: string | undefined;
 
       if (agentInput) {
         const parts = agentInput.split('@');
-        const agentName = parts[0];
-        requestedVersion = parts[1] || null;
-
-        agentId = resolveAgentName(agentName);
-        if (!agentId) {
+        const resolved = resolveAgentName(parts[0]);
+        if (!resolved) {
           spinner.stop();
-          console.log(chalk.red(formatAgentError(agentName)));
+          console.log(chalk.red(formatAgentError(parts[0])));
           process.exit(1);
         }
+        filterAgent = resolved;
+        filterVersion = parts[1] || undefined;
       }
 
-      const showPaths = !!agentInput;
-
-      // Helper to render commands for a specific version
-      const renderVersionCommands = (
-        agentId: AgentId,
-        version: string,
-        isDefault: boolean,
-        home: string
-      ) => {
-        const agent = AGENTS[agentId];
-        const commands = listInstalledCommandsWithScope(agentId, cwd, { home }).filter(
-          (c) => options.scope === 'all' || c.scope === options.scope
-        );
-
-        const defaultLabel = isDefault ? ' default' : '';
-        const versionStr = chalk.gray(` (${version}${defaultLabel})`);
-
-        if (commands.length === 0) {
-          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}: ${chalk.gray('none')}`);
-        } else {
-          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}:`);
-
-          const userCommands = commands.filter((c) => c.scope === 'user');
-          const projectCommands = commands.filter((c) => c.scope === 'project');
-
-          if (userCommands.length > 0 && (options.scope === 'all' || options.scope === 'user')) {
-            console.log(`    ${chalk.gray('User:')}`);
-            for (const cmd of userCommands) {
-              console.log(`      ${chalk.cyan(cmd.name.padEnd(20))} ${chalk.gray(formatPath(cmd.path, cwd))}`);
-            }
-          }
-
-          if (projectCommands.length > 0 && (options.scope === 'all' || options.scope === 'project')) {
-            console.log(`    ${chalk.gray('Project:')}`);
-            for (const cmd of projectCommands) {
-              console.log(`      ${chalk.yellow(cmd.name.padEnd(20))} ${chalk.gray(formatPath(cmd.path, cwd))}`);
-            }
-          }
-        }
-        console.log();
-      };
+      const rows = buildCommandRows({ filterAgent, filterVersion });
 
       spinner.stop();
 
-      // Single agent specified - show versions based on requestedVersion
-      if (agentId) {
-        const agent = AGENTS[agentId];
-        const installedVersions = listInstalledVersions(agentId);
-        const defaultVer = getGlobalDefault(agentId);
-
-        if (installedVersions.length === 0) {
-          // Not version-managed, show from effective home
-          console.log(chalk.bold(`Installed Commands for ${agentLabel(agent.id)}\n`));
-          const commands = listInstalledCommandsWithScope(agentId, cwd).filter(
-            (c) => options.scope === 'all' || c.scope === options.scope
-          );
-          if (commands.length === 0) {
-            console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('none')}`);
-          } else {
-            console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
-            const userCommands = commands.filter((c) => c.scope === 'user');
-            if (userCommands.length > 0) {
-              console.log(`    ${chalk.gray('User:')}`);
-              for (const cmd of userCommands) {
-                console.log(`      ${chalk.cyan(cmd.name.padEnd(20))} ${chalk.gray(formatPath(cmd.path, cwd))}`);
-              }
-            }
-          }
-          return;
-        }
-
-        console.log(chalk.bold(`Installed Commands for ${agentLabel(agent.id)}\n`));
-
-        let versionsToShow: string[];
-        if (requestedVersion === 'default') {
-          if (!defaultVer) {
-            console.log(chalk.yellow(`  No default version set for ${agentLabel(agent.id)}. Run: agents use ${agentId}@<version>`));
-            return;
-          }
-          versionsToShow = [defaultVer];
-        } else if (requestedVersion) {
-          if (!installedVersions.includes(requestedVersion)) {
-            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agentLabel(agent.id)}.`));
-            console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
-            return;
-          }
-          versionsToShow = [requestedVersion];
-        } else {
-          versionsToShow = [...installedVersions].sort((a, b) => {
-            if (a === defaultVer) return -1;
-            if (b === defaultVer) return 1;
-            return 0;
-          });
-        }
-
-        for (const version of versionsToShow) {
-          const home = getVersionHomePath(agentId, version);
-          renderVersionCommands(agentId, version, version === defaultVer, home);
-        }
-        return;
-      }
-
-      // No agent specified - show default version for each agent
-      console.log(chalk.bold('Installed Commands\n'));
-
-      for (const aid of ALL_AGENT_IDS) {
-        const agent = AGENTS[aid];
-        const installedVersions = listInstalledVersions(aid);
-        const defaultVer = getGlobalDefault(aid);
-
-        if (installedVersions.length > 0 && defaultVer) {
-          const home = getVersionHomePath(aid, defaultVer);
-          renderVersionCommands(aid, defaultVer, true, home);
-        } else if (installedVersions.length > 0) {
-          // Version managed but no default
-          const commands = listInstalledCommandsWithScope(aid, cwd).filter(
-            (c) => options.scope === 'all' || c.scope === options.scope
-          );
-          if (commands.length === 0) {
-            console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('none')}`);
-          } else {
-            console.log(`  ${chalk.bold(agentLabel(aid))}:`);
-            const userCommands = commands.filter((c) => c.scope === 'user');
-            if (userCommands.length > 0) {
-              console.log(`    ${chalk.gray('User:')}`);
-              for (const cmd of userCommands) {
-                console.log(`      ${chalk.cyan(cmd.name.padEnd(20))} ${chalk.gray(formatPath(cmd.path, cwd))}`);
-              }
-            }
-          }
-          console.log();
-        }
-      }
+      await showResourceList({
+        resourcePlural: 'commands',
+        resourceSingular: 'command',
+        rows,
+        emptyMessage: filterAgent
+          ? `No commands in central storage for ${agentLabel(filterAgent)}.`
+          : 'No commands in ~/.agents/commands/. Add one with: agents commands add gh:user/repo',
+        centralPath: getCommandsDir(),
+        filterAgent,
+        filterVersion,
+      });
     });
 
   commandsCmd
@@ -752,4 +638,86 @@ Examples:
         printWithPager(rendered, contentLines.length);
       }
     });
+}
+
+/**
+ * Build the row data for `agents commands list`. Each row = one central
+ * command with a sync-status target per (agent, version) in scope.
+ */
+function buildCommandRows(opts: {
+  filterAgent?: AgentId;
+  filterVersion?: string;
+}): ResourceRow[] {
+  const names = listCentralCommands();
+  if (names.length === 0) return [];
+
+  const targetPairs = iterCommandsCapableVersions({
+    agent: opts.filterAgent,
+    version: opts.filterVersion,
+  });
+
+  const diffByTarget = new Map<string, VersionCommandDiff>();
+  const defaultByAgent = new Map<AgentId, string | null>();
+  for (const { agent, version } of targetPairs) {
+    if (!defaultByAgent.has(agent)) defaultByAgent.set(agent, getGlobalDefault(agent));
+    diffByTarget.set(`${agent}@${version}`, diffVersionCommands(agent, version));
+  }
+
+  const rows: ResourceRow[] = [];
+  for (const name of names) {
+    const info = getCommandInfo(name);
+    const description = info?.description || '';
+
+    const targets: SyncTarget[] = [];
+    for (const { agent, version } of targetPairs) {
+      const diff = diffByTarget.get(`${agent}@${version}`)!;
+      let status: SyncTarget['status'];
+      if (diff.matched.includes(name)) status = 'synced';
+      else if (diff.toUpdate.includes(name)) status = 'stale';
+      else status = 'missing';
+      targets.push({
+        agent,
+        version,
+        isDefault: defaultByAgent.get(agent) === version,
+        status,
+      });
+    }
+
+    rows.push({
+      name,
+      description,
+      targets,
+      buildDetail: () => formatCommandDetail(name, info, targets),
+    });
+  }
+
+  rows.sort((a, b) => {
+    const aSynced = a.targets.filter((t) => t.status === 'synced').length;
+    const bSynced = b.targets.filter((t) => t.status === 'synced').length;
+    if (aSynced !== bSynced) return bSynced - aSynced;
+    return a.name.localeCompare(b.name);
+  });
+
+  return rows;
+}
+
+function formatCommandDetail(
+  name: string,
+  info: { description: string; path: string; content: string } | null,
+  targets: SyncTarget[]
+): string {
+  const lines: string[] = [];
+  lines.push(chalk.bold.cyan(name));
+  if (info?.description) {
+    lines.push(chalk.gray(info.description));
+  }
+  if (info?.path) {
+    lines.push('  ' + chalk.gray(info.path));
+  }
+
+  lines.push('');
+  lines.push(chalk.bold('  Synced to'));
+  lines.push(buildTargetsSection(targets));
+
+  return lines.join('\n');
 }

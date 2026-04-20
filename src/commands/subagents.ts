@@ -30,6 +30,12 @@ import {
   requireInteractiveSelection,
   requireDestructiveArg,
 } from './utils.js';
+import {
+  showResourceList,
+  buildTargetsSection,
+  type ResourceRow,
+  type SyncTarget,
+} from './resource-view.js';
 
 function formatPath(p: string): string {
   const home = process.env.HOME || '';
@@ -68,10 +74,10 @@ When to use:
   // agents subagents view [name]
   subagentsCmd
     .command('view [name]')
-    .description('List all subagents or show details for a specific one')
+    .description('Show subagents in a table with sync status across agent versions (or details for one)')
     .addHelpText('after', `
 Examples:
-  # List subagents by agent and version
+  # Interactive picker (TTY) or sync-status table (piped)
   agents subagents view
 
   # View a specific subagent's details
@@ -87,68 +93,19 @@ Examples:
           process.exit(1);
         }
 
-        console.log(chalk.bold(`\n${subagent.name}`));
-        console.log(chalk.gray(`  Path: ${formatPath(subagent.path)}`));
-        console.log(chalk.gray(`  Description: ${subagent.frontmatter.description}`));
-        if (subagent.frontmatter.model) {
-          console.log(chalk.gray(`  Model: ${subagent.frontmatter.model}`));
-        }
-        if (subagent.frontmatter.color) {
-          console.log(chalk.gray(`  Color: ${subagent.frontmatter.color}`));
-        }
-        console.log(chalk.gray(`\n  Files:`));
-        for (const file of subagent.files) {
-          const filePath = path.join(subagent.path, file);
-          const stat = fs.statSync(filePath);
-          const size = stat.size < 1024 ? `${stat.size}B` : `${(stat.size / 1024).toFixed(1)}KB`;
-          console.log(`    ${chalk.cyan(file)} ${chalk.gray(`(${size})`)}`);
-        }
-        console.log();
-      } else {
-        // List subagents per agent (like `agents view` shows versions)
-        console.log(chalk.bold('\nInstalled Subagents\n'));
-
-        let hasAny = false;
-
-        for (const agentId of SUBAGENT_CAPABLE_AGENTS) {
-          const versions = listInstalledVersions(agentId);
-          if (versions.length === 0) continue;
-
-          const defaultVer = getGlobalDefault(agentId);
-          const agent = AGENTS[agentId];
-
-          console.log(`  ${chalk.bold(agentLabel(agent.id))}`);
-
-          for (const version of versions) {
-            const isDefault = version === defaultVer;
-            const home = getVersionHomePath(agentId, version);
-            const subagents = listSubagentsForAgent(agentId, home);
-
-            const versionLabel = isDefault ? `${version} ${chalk.green('(default)')}` : version;
-            console.log(`    ${versionLabel}`);
-
-            if (subagents.length === 0) {
-              console.log(chalk.gray('      (none)'));
-            } else {
-              hasAny = true;
-              const maxNameLen = Math.max(...subagents.map(s => s.name.length));
-              for (const sub of subagents) {
-                const files = sub.files.length === 1 ? '1 file' : `${sub.files.length} files`;
-                const desc = sub.frontmatter.description.slice(0, 40) || '';
-                console.log(
-                  `      ${chalk.cyan(sub.name.padEnd(maxNameLen))}  ${chalk.gray(desc)}  ${chalk.gray(`(${files})`)}`
-                );
-              }
-            }
-          }
-          console.log();
-        }
-
-        if (!hasAny) {
-          console.log(chalk.gray('  No subagents installed'));
-          console.log(chalk.gray(`  Run 'agents subagents add <source>' to add one\n`));
-        }
+        console.log(formatSubagentDetail(subagent, buildSubagentTargets(subagent.name)));
+        return;
       }
+
+      const rows = buildSubagentRows();
+      await showResourceList({
+        resourcePlural: 'subagents',
+        resourceSingular: 'subagent',
+        extraLabel: 'Files',
+        rows,
+        emptyMessage: 'No subagents in ~/.agents/subagents/. Add one with: agents subagents add gh:user/repo',
+        centralPath: getSubagentsDir(),
+      });
     });
 
   // agents subagents add <source>
@@ -322,4 +279,115 @@ Examples:
 
       spinner.succeed(`Removed subagent '${name}'`);
     });
+}
+
+import type { InstalledSubagent } from '../lib/types.js';
+
+/** Every (agent, version) that supports subagents and is installed. */
+function iterSubagentCapableVersions(): Array<{ agent: AgentId; version: string; home: string }> {
+  const out: Array<{ agent: AgentId; version: string; home: string }> = [];
+  for (const agent of SUBAGENT_CAPABLE_AGENTS) {
+    for (const version of listInstalledVersions(agent)) {
+      out.push({ agent, version, home: getVersionHomePath(agent, version) });
+    }
+  }
+  return out;
+}
+
+/** Compute sync targets for a single subagent by name across all capable versions. */
+function buildSubagentTargets(name: string): SyncTarget[] {
+  const targets: SyncTarget[] = [];
+  for (const { agent, version, home } of iterSubagentCapableVersions()) {
+    const installed = listSubagentsForAgent(agent, home).some((s) => s.name === name);
+    targets.push({
+      agent,
+      version,
+      isDefault: getGlobalDefault(agent) === version,
+      status: installed ? 'synced' : 'missing',
+    });
+  }
+  return targets;
+}
+
+function buildSubagentRows(): ResourceRow[] {
+  const central = listInstalledSubagents();
+  if (central.length === 0) return [];
+
+  const pairs = iterSubagentCapableVersions();
+
+  // Read each target's installed subagents once; lookup by name per row.
+  const installedByTarget = new Map<string, Set<string>>();
+  for (const { agent, version, home } of pairs) {
+    const names = new Set(listSubagentsForAgent(agent, home).map((s) => s.name));
+    installedByTarget.set(`${agent}@${version}`, names);
+  }
+
+  const rows: ResourceRow[] = [];
+  for (const sub of central) {
+    const targets: SyncTarget[] = [];
+    for (const { agent, version } of pairs) {
+      const set = installedByTarget.get(`${agent}@${version}`)!;
+      targets.push({
+        agent,
+        version,
+        isDefault: getGlobalDefault(agent) === version,
+        status: set.has(sub.name) ? 'synced' : 'missing',
+      });
+    }
+
+    rows.push({
+      name: sub.name,
+      description: sub.frontmatter.description,
+      extra: String(sub.files.length),
+      targets,
+      buildDetail: () => formatSubagentDetail(sub, targets),
+    });
+  }
+
+  rows.sort((a, b) => {
+    const aSynced = a.targets.filter((t) => t.status === 'synced').length;
+    const bSynced = b.targets.filter((t) => t.status === 'synced').length;
+    if (aSynced !== bSynced) return bSynced - aSynced;
+    return a.name.localeCompare(b.name);
+  });
+
+  return rows;
+}
+
+function formatSubagentDetail(sub: InstalledSubagent, targets: SyncTarget[]): string {
+  const lines: string[] = [];
+  lines.push(chalk.bold.cyan(sub.name));
+  if (sub.frontmatter.description) {
+    lines.push(chalk.gray(sub.frontmatter.description));
+  }
+
+  const meta: string[] = [];
+  if (sub.frontmatter.model) meta.push(`model ${chalk.white(sub.frontmatter.model)}`);
+  if (sub.frontmatter.color) meta.push(`color ${chalk.white(sub.frontmatter.color)}`);
+  meta.push(`${chalk.white(sub.files.length)} file${sub.files.length === 1 ? '' : 's'}`);
+  lines.push('  ' + meta.join(chalk.gray(' · ')));
+  lines.push('  ' + chalk.gray(formatPath(sub.path)));
+
+  if (sub.files.length > 0) {
+    lines.push('');
+    lines.push(chalk.bold('  Files'));
+    for (const file of sub.files) {
+      const filePath = path.join(sub.path, file);
+      try {
+        const stat = fs.statSync(filePath);
+        const size = stat.size < 1024 ? `${stat.size}B` : `${(stat.size / 1024).toFixed(1)}KB`;
+        lines.push(`    ${chalk.cyan(file)} ${chalk.gray(`(${size})`)}`);
+      } catch {
+        lines.push(`    ${chalk.cyan(file)}`);
+      }
+    }
+  }
+
+  if (targets.length > 0) {
+    lines.push('');
+    lines.push(chalk.bold('  Synced to'));
+    lines.push(buildTargetsSection(targets));
+  }
+
+  return lines.join('\n');
 }

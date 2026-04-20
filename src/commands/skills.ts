@@ -24,6 +24,7 @@ import {
   listInstalledSkillsWithScope,
   getSkillInfo,
   getSkillRules,
+  getSkillsDir,
   tryParseSkillMetadata,
   diffVersionSkills,
   installSkillToVersion,
@@ -48,6 +49,12 @@ import {
   printWithPager,
   requireInteractiveSelection,
 } from './utils.js';
+import {
+  showResourceList,
+  buildTargetsSection,
+  type ResourceRow,
+  type SyncTarget,
+} from './resource-view.js';
 
 export function registerSkillsCommands(program: Command): void {
   const skillsCmd = program
@@ -80,263 +87,43 @@ When to use:
 
   skillsCmd
     .command('list [agent]')
-    .description('Show which skills are installed for agents or versions')
+    .description('Show which skills are installed and which agent versions they are synced to')
     .option('-a, --agent <agent>', 'Filter to a specific agent (alternative to positional arg)')
-    .option('-s, --scope <scope>', 'user (global), project (repo), or all', 'all')
     .action(async (agentArg, options) => {
       const spinner = ora({ text: 'Loading...', isSilent: !process.stdout.isTTY }).start();
-      const cwd = process.cwd();
 
-      // Parse agent input - handle agent@version syntax
       const agentInput = agentArg || options.agent;
-      let agentId: AgentId | null = null;
-      let requestedVersion: string | null = null; // null = all versions, 'default' = default only, 'x.y.z' = specific
+      let filterAgent: AgentId | undefined;
+      let filterVersion: string | undefined;
 
       if (agentInput) {
         const parts = agentInput.split('@');
-        const agentName = parts[0];
-        requestedVersion = parts[1] || null; // null means show all versions
-
-        agentId = resolveAgentName(agentName);
-        if (!agentId) {
+        const resolved = resolveAgentName(parts[0]);
+        if (!resolved) {
           spinner.stop();
-          console.log(chalk.red(formatAgentError(agentName, SKILLS_CAPABLE_AGENTS)));
+          console.log(chalk.red(formatAgentError(parts[0], SKILLS_CAPABLE_AGENTS)));
           process.exit(1);
         }
+        filterAgent = resolved;
+        filterVersion = parts[1] || undefined;
       }
 
-      const showPaths = !!agentInput;
-
-      // Get CLI states to determine managed vs unmanaged
-      const cliStates = await getAllCliStates();
-
-      // Helper to render skills for a specific version
-      const renderVersionSkills = (
-        agentId: AgentId,
-        version: string,
-        isDefault: boolean,
-        home: string
-      ) => {
-        const agent = AGENTS[agentId];
-        const errors: SkillParseError[] = [];
-        const skills = listInstalledSkillsWithScope(agentId, cwd, { home, errors }).filter(
-          (s) => options.scope === 'all' || s.scope === options.scope
-        );
-
-        const defaultLabel = isDefault ? ' default' : '';
-        const versionStr = chalk.gray(` (${version}${defaultLabel})`);
-
-        if (skills.length === 0) {
-          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}: ${chalk.gray('none')}`);
-        } else {
-          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}:`);
-
-          const userSkills = skills.filter((s) => s.scope === 'user');
-          const projectSkills = skills.filter((s) => s.scope === 'project');
-
-          if (userSkills.length > 0 && (options.scope === 'all' || options.scope === 'user')) {
-            console.log(`    ${chalk.gray('User:')}`);
-            for (const skill of userSkills) {
-              const desc = skill.metadata.description ? ` ${chalk.gray(skill.metadata.description)}` : '';
-              const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
-              console.log(`      ${chalk.cyan(skill.name.padEnd(20))}${desc}${ruleInfo}`);
-              if (showPaths) console.log(chalk.gray(`        ${skill.path}`));
-            }
-          }
-
-          if (projectSkills.length > 0 && (options.scope === 'all' || options.scope === 'project')) {
-            console.log(`    ${chalk.gray('Project:')}`);
-            for (const skill of projectSkills) {
-              const desc = skill.metadata.description ? ` ${chalk.gray(skill.metadata.description)}` : '';
-              const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
-              console.log(`      ${chalk.yellow(skill.name.padEnd(20))}${desc}${ruleInfo}`);
-              if (showPaths) console.log(chalk.gray(`        ${skill.path}`));
-            }
-          }
-        }
-
-        // Show skills with parse errors
-        if (errors.length > 0) {
-          console.log(`    ${chalk.red('Errors:')}`);
-          for (const err of errors) {
-            console.log(`      ${chalk.red(err.name.padEnd(20))} ${chalk.gray(err.error)}`);
-            if (showPaths) console.log(chalk.gray(`        ${err.path}`));
-          }
-        }
-        console.log();
-      };
-
-      // Helper to render skills for an agent (default version only, for multi-agent view)
-      const renderAgentSkillsDefault = (agentId: AgentId) => {
-        const agent = AGENTS[agentId];
-        if (!agent.capabilities.skills) {
-          console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('skills not supported')}`);
-          console.log();
-          return;
-        }
-
-        const defaultVer = getGlobalDefault(agentId);
-        if (defaultVer) {
-          const home = getVersionHomePath(agentId, defaultVer);
-          renderVersionSkills(agentId, defaultVer, true, home);
-        } else {
-          // No default set, show from effective home
-          const errors: SkillParseError[] = [];
-          const skills = listInstalledSkillsWithScope(agentId, cwd, { errors }).filter(
-            (s) => options.scope === 'all' || s.scope === options.scope
-          );
-          if (skills.length === 0 && errors.length === 0) {
-            console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('none')}`);
-          } else {
-            console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
-            const userSkills = skills.filter((s) => s.scope === 'user');
-            if (userSkills.length > 0) {
-              console.log(`    ${chalk.gray('User:')}`);
-              for (const skill of userSkills) {
-                const desc = skill.metadata.description ? ` ${chalk.gray(skill.metadata.description)}` : '';
-                const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
-                console.log(`      ${chalk.cyan(skill.name.padEnd(20))}${desc}${ruleInfo}`);
-              }
-            }
-            if (errors.length > 0) {
-              console.log(`    ${chalk.red('Errors:')}`);
-              for (const err of errors) {
-                console.log(`      ${chalk.red(err.name.padEnd(20))} ${chalk.gray(err.error)}`);
-              }
-            }
-          }
-          console.log();
-        }
-      };
+      const rows = await buildSkillRows({ filterAgent, filterVersion });
 
       spinner.stop();
 
-      // Single agent specified - show versions based on requestedVersion
-      if (agentId) {
-        const agent = AGENTS[agentId];
-        if (!agent.capabilities.skills) {
-          console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('skills not supported')}`);
-          return;
-        }
-
-        const installedVersions = listInstalledVersions(agentId);
-        const defaultVer = getGlobalDefault(agentId);
-
-        if (installedVersions.length === 0) {
-          // Not version-managed, check if globally installed
-          const cliState = cliStates[agentId];
-          if (cliState?.installed) {
-            console.log(chalk.bold('Not Managed by Agents CLI\n'));
-            const skills = listInstalledSkillsWithScope(agentId, cwd).filter(
-              (s) => options.scope === 'all' || s.scope === options.scope
-            );
-            if (skills.length === 0) {
-              console.log(`  ${chalk.bold(agentLabel(agent.id))}: ${chalk.gray('none')}`);
-            } else {
-              console.log(`  ${chalk.bold(agentLabel(agent.id))}:`);
-              const userSkills = skills.filter((s) => s.scope === 'user');
-              if (userSkills.length > 0) {
-                console.log(`    ${chalk.gray('User:')}`);
-                for (const skill of userSkills) {
-                  const desc = skill.metadata.description ? ` - ${chalk.gray(skill.metadata.description)}` : '';
-                  const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
-                  console.log(`      ${chalk.cyan(skill.name)}${desc}${ruleInfo}`);
-                  if (showPaths) console.log(chalk.gray(`        ${skill.path}`));
-                }
-              }
-            }
-          } else {
-            console.log(chalk.gray(`  ${agentLabel(agent.id)} is not installed.`));
-          }
-          return;
-        }
-
-        console.log(chalk.bold(`Installed Agent Skills for ${agentLabel(agent.id)}\n`));
-
-        // Determine which versions to show
-        let versionsToShow: string[];
-        if (requestedVersion === 'default') {
-          // Show only default version
-          if (!defaultVer) {
-            console.log(chalk.yellow(`  No default version set for ${agentLabel(agent.id)}. Run: agents use ${agentId}@<version>`));
-            return;
-          }
-          versionsToShow = [defaultVer];
-        } else if (requestedVersion) {
-          // Show specific version
-          if (!installedVersions.includes(requestedVersion)) {
-            console.log(chalk.red(`  Version ${requestedVersion} not installed for ${agentLabel(agent.id)}.`));
-            console.log(chalk.gray(`  Installed versions: ${installedVersions.join(', ')}`));
-            return;
-          }
-          versionsToShow = [requestedVersion];
-        } else {
-          // Show all versions, default first
-          versionsToShow = [...installedVersions].sort((a, b) => {
-            if (a === defaultVer) return -1;
-            if (b === defaultVer) return 1;
-            return 0;
-          });
-        }
-
-        for (const version of versionsToShow) {
-          const home = getVersionHomePath(agentId, version);
-          renderVersionSkills(agentId, version, version === defaultVer, home);
-        }
-        return;
-      }
-
-      // No agent specified - show default version for each agent
-      const versionManaged: AgentId[] = [];
-      const globallyInstalled: AgentId[] = [];
-
-      for (const aid of SKILLS_CAPABLE_AGENTS) {
-        const versions = listInstalledVersions(aid);
-        const cliState = cliStates[aid];
-
-        if (versions.length > 0) {
-          versionManaged.push(aid);
-        } else if (cliState?.installed) {
-          globallyInstalled.push(aid);
-        }
-      }
-
-      if (versionManaged.length > 0) {
-        console.log(chalk.bold('Installed Agent Skills\n'));
-        for (const aid of versionManaged) {
-          renderAgentSkillsDefault(aid);
-        }
-      }
-
-      if (globallyInstalled.length > 0) {
-        console.log(chalk.bold('Not Managed by Agents CLI\n'));
-        for (const aid of globallyInstalled) {
-          const agent = AGENTS[aid];
-          const skills = listInstalledSkillsWithScope(aid, cwd).filter(
-            (s) => options.scope === 'all' || s.scope === options.scope
-          );
-          if (skills.length === 0) {
-            console.log(`  ${chalk.bold(agentLabel(aid))}: ${chalk.gray('none')}`);
-          } else {
-            console.log(`  ${chalk.bold(agentLabel(aid))}:`);
-            const userSkills = skills.filter((s) => s.scope === 'user');
-            if (userSkills.length > 0) {
-              console.log(`    ${chalk.gray('User:')}`);
-              for (const skill of userSkills) {
-                const desc = skill.metadata.description ? ` ${chalk.gray(skill.metadata.description)}` : '';
-                const ruleInfo = skill.ruleCount > 0 ? chalk.gray(` (${skill.ruleCount} rules)`) : '';
-                console.log(`      ${chalk.cyan(skill.name.padEnd(20))}${desc}${ruleInfo}`);
-              }
-            }
-          }
-          console.log();
-        }
-      }
-
-      if (versionManaged.length === 0 && globallyInstalled.length === 0) {
-        console.log(chalk.gray('  No agents with skills installed.'));
-        console.log();
-      }
+      await showResourceList({
+        resourcePlural: 'skills',
+        resourceSingular: 'skill',
+        extraLabel: 'Rules',
+        rows,
+        emptyMessage: filterAgent
+          ? `No skills in central storage for ${agentLabel(filterAgent)}.`
+          : 'No skills in ~/.agents/skills/. Add one with: agents skills add gh:user/repo',
+        centralPath: getSkillsDir(),
+        filterAgent,
+        filterVersion,
+      });
     });
 
   skillsCmd
@@ -923,4 +710,100 @@ Examples:
       // Re-execute view command logic
       await skillsCmd.commands.find((c) => c.name() === 'view')?.parseAsync(['view', ...(name ? [name] : [])], { from: 'user' });
     });
+}
+
+/**
+ * Build the row data for `agents skills list`. Each row = one central skill
+ * with a sync-status target per (agent, version) in scope.
+ */
+async function buildSkillRows(opts: {
+  filterAgent?: AgentId;
+  filterVersion?: string;
+}): Promise<ResourceRow[]> {
+  const central = listInstalledSkills(); // Map<name, DiscoveredSkill>
+  if (central.size === 0) return [];
+
+  const targetPairs = iterSkillsCapableVersions({
+    agent: opts.filterAgent,
+    version: opts.filterVersion,
+  });
+
+  // Precompute per-(agent, version) diffs so we can look up each skill's
+  // status without re-diffing 16 times per skill.
+  const diffByTarget = new Map<string, VersionSkillDiff>();
+  const defaultByAgent = new Map<AgentId, string | null>();
+  for (const { agent, version } of targetPairs) {
+    if (!defaultByAgent.has(agent)) defaultByAgent.set(agent, getGlobalDefault(agent));
+    diffByTarget.set(`${agent}@${version}`, diffVersionSkills(agent, version));
+  }
+
+  const rows: ResourceRow[] = [];
+  for (const [name, skill] of central) {
+    const targets: SyncTarget[] = [];
+    for (const { agent, version } of targetPairs) {
+      const diff = diffByTarget.get(`${agent}@${version}`)!;
+      let status: SyncTarget['status'];
+      if (diff.matched.includes(name)) status = 'synced';
+      else if (diff.toUpdate.includes(name)) status = 'stale';
+      else status = 'missing';
+      targets.push({
+        agent,
+        version,
+        isDefault: defaultByAgent.get(agent) === version,
+        status,
+      });
+    }
+
+    rows.push({
+      name,
+      description: skill.metadata.description,
+      extra: skill.ruleCount > 0 ? `${skill.ruleCount}` : '-',
+      targets,
+      buildDetail: () => formatSkillDetail(name, skill, targets),
+    });
+  }
+
+  // Sort: fully-synced first, then partial, then missing — stable by name within each tier.
+  rows.sort((a, b) => {
+    const aSynced = a.targets.filter((t) => t.status === 'synced').length;
+    const bSynced = b.targets.filter((t) => t.status === 'synced').length;
+    if (aSynced !== bSynced) return bSynced - aSynced;
+    return a.name.localeCompare(b.name);
+  });
+
+  return rows;
+}
+
+function formatSkillDetail(
+  name: string,
+  skill: { metadata: { description?: string; author?: string; version?: string; license?: string }; ruleCount: number; path: string },
+  targets: SyncTarget[]
+): string {
+  const lines: string[] = [];
+  lines.push(chalk.bold.cyan(name));
+  if (skill.metadata.description) {
+    lines.push(chalk.gray(skill.metadata.description));
+  }
+  lines.push('');
+
+  const meta: string[] = [];
+  if (skill.metadata.author) meta.push(`author ${chalk.white(skill.metadata.author)}`);
+  if (skill.metadata.version) meta.push(`v${chalk.white(skill.metadata.version)}`);
+  if (skill.metadata.license) meta.push(`license ${chalk.white(skill.metadata.license)}`);
+  meta.push(`${chalk.white(skill.ruleCount)} rule${skill.ruleCount === 1 ? '' : 's'}`);
+  lines.push('  ' + meta.join(chalk.gray(' · ')));
+  lines.push('  ' + chalk.gray(skill.path));
+
+  const rules = getSkillRules(name);
+  if (rules.length > 0) {
+    lines.push('');
+    lines.push(chalk.bold('  Rules'));
+    lines.push('  ' + rules.map((r) => chalk.gray(r)).join(', '));
+  }
+
+  lines.push('');
+  lines.push(chalk.bold('  Synced to'));
+  lines.push(buildTargetsSection(targets));
+
+  return lines.join('\n');
 }

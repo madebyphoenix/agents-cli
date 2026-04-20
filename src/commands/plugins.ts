@@ -22,6 +22,13 @@ import {
 } from './utils.js';
 import { itemPicker } from '../lib/picker.js';
 import type { DiscoveredPlugin } from '../lib/types.js';
+import {
+  showResourceList,
+  buildTargetsSection,
+  type ResourceRow,
+  type SyncTarget,
+} from './resource-view.js';
+import { getPluginsDir } from '../lib/state.js';
 
 function formatPath(p: string): string {
   const home = process.env.HOME || '';
@@ -60,9 +67,9 @@ When to use:
   // agents plugins (default: list)
   pluginsCmd
     .addHelpText('after', `
-Note: Running 'agents plugins' with no subcommand lists all installed plugins.
+Note: Running 'agents plugins' with no subcommand opens the plugins picker (TTY) or prints a sync-status table (piped).
 `)
-    .action(() => {
+    .action(async () => {
       const plugins = discoverPlugins();
 
       if (plugins.length === 0) {
@@ -71,47 +78,14 @@ Note: Running 'agents plugins' with no subcommand lists all installed plugins.
         return;
       }
 
-      console.log(chalk.bold('\nPlugins'));
-      console.log();
-
-      for (const plugin of plugins) {
-        const agents = PLUGINS_CAPABLE_AGENTS
-          .filter(a => pluginSupportsAgent(plugin, a))
-          .map(a => agentLabel(a));
-
-        console.log(`  ${chalk.cyan(plugin.name)} ${chalk.gray(`v${plugin.manifest.version}`)}`);
-        console.log(`    ${plugin.manifest.description}`);
-        console.log(`    ${chalk.gray(`Agents: ${agents.join(', ')}`)}`);
-
-        if (plugin.skills.length > 0) {
-          console.log(`    ${chalk.gray(`Skills: ${plugin.skills.join(', ')}`)}`);
-        }
-        if (plugin.hooks.length > 0) {
-          console.log(`    ${chalk.gray(`Hooks: ${plugin.hooks.join(', ')}`)}`);
-        }
-        if (plugin.scripts.length > 0) {
-          console.log(`    ${chalk.gray(`Scripts: ${plugin.scripts.join(', ')}`)}`);
-        }
-
-        // Show which versions have this plugin installed
-        for (const agentId of PLUGINS_CAPABLE_AGENTS) {
-          if (!pluginSupportsAgent(plugin, agentId)) continue;
-          const versions = listInstalledVersions(agentId);
-          const synced: string[] = [];
-          for (const v of versions) {
-            const versionHome = getVersionHomePath(agentId, v);
-            if (isPluginSynced(plugin, agentId, versionHome)) {
-              const defaultVer = getGlobalDefault(agentId);
-              synced.push(v === defaultVer ? `${v} (active)` : v);
-            }
-          }
-          if (synced.length > 0) {
-            console.log(`    ${chalk.green(`${agentLabel(agentId)}: ${synced.join(', ')}`)}`);
-          }
-        }
-
-        console.log();
-      }
+      await showResourceList({
+        resourcePlural: 'plugins',
+        resourceSingular: 'plugin',
+        extraLabel: 'Version',
+        rows: buildPluginRows(plugins),
+        emptyMessage: 'No plugins in ~/.agents/plugins/.',
+        centralPath: getPluginsDir(),
+      });
     });
 
   // agents plugins info [name]
@@ -360,4 +334,101 @@ Examples:
         console.log(chalk.gray(`Kept source at ${formatPath(pluginRoot)}`));
       }
     });
+}
+
+function buildPluginRows(plugins: DiscoveredPlugin[]): ResourceRow[] {
+  const rows: ResourceRow[] = [];
+
+  // Cache version lists per agent once.
+  const versionsByAgent = new Map<AgentId, string[]>();
+  const defaultsByAgent = new Map<AgentId, string | null>();
+  for (const agent of PLUGINS_CAPABLE_AGENTS) {
+    versionsByAgent.set(agent, listInstalledVersions(agent));
+    defaultsByAgent.set(agent, getGlobalDefault(agent));
+  }
+
+  for (const plugin of plugins) {
+    const targets: SyncTarget[] = [];
+
+    for (const agent of PLUGINS_CAPABLE_AGENTS) {
+      if (!pluginSupportsAgent(plugin, agent)) continue;
+      for (const version of versionsByAgent.get(agent) || []) {
+        const versionHome = getVersionHomePath(agent, version);
+        const installed = isPluginSynced(plugin, agent, versionHome);
+        targets.push({
+          agent,
+          version,
+          isDefault: defaultsByAgent.get(agent) === version,
+          status: installed ? 'synced' : 'missing',
+        });
+      }
+    }
+
+    rows.push({
+      name: plugin.name,
+      description: plugin.manifest.description,
+      extra: plugin.manifest.version ? `v${plugin.manifest.version}` : '-',
+      targets,
+      buildDetail: () => formatPluginDetail(plugin, targets),
+    });
+  }
+
+  rows.sort((a, b) => {
+    const aSynced = a.targets.filter((t) => t.status === 'synced').length;
+    const bSynced = b.targets.filter((t) => t.status === 'synced').length;
+    if (aSynced !== bSynced) return bSynced - aSynced;
+    return a.name.localeCompare(b.name);
+  });
+
+  return rows;
+}
+
+function formatPluginDetail(plugin: DiscoveredPlugin, targets: SyncTarget[]): string {
+  const lines: string[] = [];
+
+  const title = plugin.manifest.version
+    ? `${chalk.bold.cyan(plugin.name)} ${chalk.gray(`v${plugin.manifest.version}`)}`
+    : chalk.bold.cyan(plugin.name);
+  lines.push(title);
+
+  if (plugin.manifest.description) {
+    lines.push(chalk.gray(plugin.manifest.description));
+  }
+
+  const supported = PLUGINS_CAPABLE_AGENTS
+    .filter((a) => pluginSupportsAgent(plugin, a))
+    .map((a) => agentLabel(a));
+  if (supported.length > 0) {
+    lines.push('  ' + chalk.gray('Supports: ') + supported.join(chalk.gray(' · ')));
+  }
+  lines.push('  ' + chalk.gray(formatPath(plugin.root)));
+
+  if (plugin.skills.length > 0) {
+    lines.push('');
+    lines.push(chalk.bold('  Skills'));
+    lines.push('  ' + plugin.skills.map((s) => chalk.cyan(s)).join(chalk.gray(', ')));
+  }
+
+  if (plugin.hooks.length > 0) {
+    lines.push('');
+    lines.push(chalk.bold('  Hooks'));
+    lines.push('  ' + plugin.hooks.map((h) => chalk.yellow(h)).join(chalk.gray(', ')));
+  }
+
+  if (plugin.scripts.length > 0) {
+    lines.push('');
+    lines.push(chalk.bold('  Scripts'));
+    lines.push('  ' + plugin.scripts.map((s) => chalk.white(s)).join(chalk.gray(', ')));
+  }
+
+  if (targets.length > 0) {
+    lines.push('');
+    lines.push(chalk.bold('  Synced to'));
+    lines.push(buildTargetsSection(targets));
+  } else {
+    lines.push('');
+    lines.push(chalk.gray('  No supported agent versions installed.'));
+  }
+
+  return lines.join('\n');
 }
