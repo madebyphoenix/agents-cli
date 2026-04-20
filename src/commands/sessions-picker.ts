@@ -208,7 +208,7 @@ export const sessionPicker = createPrompt<PickedSession | null, PickerConfig>((c
   const theme = makeTheme({});
   const [status, setStatus] = useState<'idle' | 'done'>('idle');
   const [searchTerm, setSearchTerm] = useState(config.initialSearch ?? '');
-  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(true);
   const prefix = usePrefix({ status, theme });
 
   const results = useMemo(() => {
@@ -265,7 +265,7 @@ export const sessionPicker = createPrompt<PickedSession | null, PickerConfig>((c
     return `${prefix} ${message} ${chalk.cyan(selected.value.shortId)}`;
   }
 
-  const searchStr = searchTerm ? chalk.cyan(searchTerm) : chalk.gray('(type to filter, space for preview)');
+  const searchStr = searchTerm ? chalk.cyan(searchTerm) : chalk.gray('(type to filter, space to hide preview)');
   const header = [prefix, message, searchStr].filter(Boolean).join(' ');
 
   const page = usePagination({
