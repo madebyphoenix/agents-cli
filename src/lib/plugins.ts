@@ -489,6 +489,122 @@ export function isPluginSynced(
 }
 
 /**
+ * Remove a plugin from a specific agent version's home directory.
+ * Inverse of syncPluginToVersion:
+ *   1. Delete synced skill directories (pluginName--*)
+ *   2. Strip hook entries whose commands reference the plugin root
+ *   3. Strip permission rules that reference the plugin root
+ *
+ * Works whether or not the plugin source still exists on disk, because it
+ * matches by the plugin's name and root path rather than re-reading manifests.
+ */
+export function removePluginFromVersion(
+  pluginName: string,
+  pluginRoot: string,
+  agent: AgentId,
+  versionHome: string
+): { skills: string[]; hooks: string[]; permissions: number } {
+  const result = { skills: [] as string[], hooks: [] as string[], permissions: 0 };
+
+  // 1. Remove synced skill dirs
+  const skillsDir = path.join(versionHome, `.${agent}`, 'skills');
+  if (fs.existsSync(skillsDir)) {
+    const prefix = `${pluginName}--`;
+    for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (!entry.name.startsWith(prefix)) continue;
+      try {
+        fs.rmSync(path.join(skillsDir, entry.name), { recursive: true, force: true });
+        result.skills.push(entry.name);
+      } catch {
+        // Skip on error
+      }
+    }
+  }
+
+  if (agent !== 'claude') {
+    return result;
+  }
+
+  // 2 + 3: edit settings.json — strip hooks and permissions matching plugin root
+  const settingsPath = path.join(versionHome, `.${agent}`, 'settings.json');
+  if (!fs.existsSync(settingsPath)) return result;
+
+  let settings: Record<string, unknown>;
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+  } catch {
+    return result;
+  }
+
+  let changed = false;
+
+  // Strip hooks referencing plugin root
+  const hooksConfig = settings.hooks as Record<string, unknown> | undefined;
+  if (hooksConfig && typeof hooksConfig === 'object') {
+    for (const [event, entries] of Object.entries(hooksConfig)) {
+      if (!Array.isArray(entries)) continue;
+      const eventEntries = entries as Array<{
+        matcher?: string;
+        hooks?: Array<{ type: string; command: string; timeout?: number }>;
+      }>;
+
+      for (const group of eventEntries) {
+        if (!Array.isArray(group.hooks)) continue;
+        const originalLen = group.hooks.length;
+        group.hooks = group.hooks.filter(h => {
+          const matches = typeof h.command === 'string' && h.command.includes(pluginRoot);
+          if (matches) result.hooks.push(`${event}: ${h.command}`);
+          return !matches;
+        });
+        if (group.hooks.length !== originalLen) changed = true;
+      }
+
+      // Drop matcher groups whose hooks array is now empty
+      const kept = eventEntries.filter(g => Array.isArray(g.hooks) && g.hooks.length > 0);
+      if (kept.length !== eventEntries.length) {
+        hooksConfig[event] = kept;
+        changed = true;
+      }
+
+      // Drop the event key entirely if it has no matcher groups left
+      if (Array.isArray(hooksConfig[event]) && (hooksConfig[event] as unknown[]).length === 0) {
+        delete hooksConfig[event];
+        changed = true;
+      }
+    }
+  }
+
+  // Strip permissions referencing plugin root
+  const perms = settings.permissions as { allow?: string[]; deny?: string[] } | undefined;
+  if (perms && typeof perms === 'object') {
+    for (const key of ['allow', 'deny'] as const) {
+      const list = perms[key];
+      if (!Array.isArray(list)) continue;
+      const kept = list.filter(rule => {
+        const matches = typeof rule === 'string' && rule.includes(pluginRoot);
+        if (matches) result.permissions += 1;
+        return !matches;
+      });
+      if (kept.length !== list.length) {
+        perms[key] = kept;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) {
+    try {
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    } catch {
+      // Ignore write errors
+    }
+  }
+
+  return result;
+}
+
+/**
  * Remove orphaned plugin skill directories from a version home.
  * An orphan is a skill dir with the plugin prefix pattern (name--skill)
  * where the plugin no longer exists in ~/.agents/plugins/.

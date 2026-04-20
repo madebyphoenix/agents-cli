@@ -7,11 +7,11 @@ Claude v2.1.112 · claude-opus-4-7 · user@example.com
   Last response:
     ### Situation
     
-    Goal: ship Codex hook sync support to agents-cli (RUSH-390). PR #8 is open, code is verified-correct end-to-end (real codex 0.116.0 fired a hook against the PR-branch-generated hooks.json), but stuck pre-merge on a rebase + my own CHANGES_REQUESTED review. User says they rebased locally; remote disagrees.
+    Goal: ship Codex hook sync support to agents-cli (EXAMPLE-390). PR #8 is open, code is verified-correct end-to-end (real codex 0.116.0 fired a hook against the PR-branch-generated hooks.json), but stuck pre-merge on a rebase + my own CHANGES_REQUESTED review. User says they rebased locally; remote disagrees.
     
     ### Completed
     
-        * **Linear RUSH-390** created with full implementation plan.
+        * **Linear EXAMPLE-390** created with full implementation plan.
         * **PR #8** opened by cloud agent (commit `1bdb936`); schema was wrong (missing top-level `"hooks"` wrapper + matcher-group wrapper).
         * **CHANGES_REQUESTED review** posted to PR #8 (4 blockers, 3 smells).
         * **Fix commit `749ad1a`** pushed by second cloud agent. Verified actual code via `gh api`:

@@ -8,7 +8,7 @@ const HOME = os.homedir();
 const SESSIONS_DIR = path.join(HOME, '.agents', 'sessions');
 const DB_PATH = path.join(SESSIONS_DIR, 'sessions.db');
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 // BM25 column weights for session_text: label > topic > project > content.
 // Higher weights make matches in that column rank higher.
@@ -129,6 +129,12 @@ function migrateSchema(db: Database.Database, fromVersion: number): void {
       );
       DELETE FROM scan_ledger;
     `);
+  }
+  if (fromVersion < 3) {
+    // v2 → v3: topic extraction now strips team-spawn wrapper prompts
+    // (HEADLESS PLAN MODE prefix + summary suffix). Force a rescan so cached
+    // topics like "You are running in HEADLESS PLAN MODE..." get re-extracted.
+    db.exec(`DELETE FROM scan_ledger;`);
   }
 }
 
