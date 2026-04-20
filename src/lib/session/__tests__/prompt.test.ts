@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractSessionTopic } from '../prompt.js';
+import { cleanSessionPrompt, extractSessionTopic } from '../prompt.js';
 
 describe('extractSessionTopic', () => {
   it('strips the HEADLESS PLAN MODE prefix and summary suffix', () => {
@@ -35,3 +35,16 @@ When you're done, provide a brief summary of:`;
     expect(extractSessionTopic('  Refactor the picker\nDetails follow...  ')).toBe('Refactor the picker');
   });
 });
+
+describe('cleanSessionPrompt', () => {
+  it('strips the team-spawn wrapper so the Prompt: preview matches the topic column', () => {
+    const raw = `You are running in HEADLESS PLAN MODE. This mode works...
+
+Refactor the picker
+
+When you're done, provide a brief summary of:
+1. What you did`;
+    expect(cleanSessionPrompt(raw)).toBe('Refactor the picker');
+  });
+});
+
