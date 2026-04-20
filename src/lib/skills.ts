@@ -449,7 +449,41 @@ export function diffVersionSkills(agent: AgentId, version: string): VersionSkill
 }
 
 /**
+ * Walk a directory and return every file's path relative to base.
+ * Follows no symlinks. Returns empty set if the dir doesn't exist.
+ */
+function walkRelativeFiles(base: string): Set<string> {
+  const out = new Set<string>();
+  if (!fs.existsSync(base)) return out;
+  const stack: string[] = [''];
+  while (stack.length > 0) {
+    const rel = stack.pop()!;
+    const abs = path.join(base, rel);
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(abs, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const childRel = rel ? path.join(rel, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        stack.push(childRel);
+      } else if (entry.isFile()) {
+        out.add(childRel);
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Install a single skill from central into a specific version home.
+ *
+ * Copy mode preserves any files that exist in the version home but NOT in
+ * central — e.g. user-populated `.env` alongside the git-tracked `.env.example`.
+ * Without this, re-running `sync` whenever central content changes would wipe
+ * local secrets.
  */
 export function installSkillToVersion(
   agent: AgentId,
@@ -468,6 +502,30 @@ export function installSkillToVersion(
   }
 
   const target = path.join(skillsDir, skillName);
+
+  // Snapshot files unique to the version home so we can restore them after
+  // the fresh copy (copy mode only; symlink shares central so there's nothing
+  // local to preserve — and writing a .env into a symlinked skill would
+  // pollute the git-tracked central dir anyway).
+  const preserved: Array<{ rel: string; buf: Buffer; mode: number }> = [];
+  if (method === 'copy' && fs.existsSync(target) && !fs.lstatSync(target).isSymbolicLink()) {
+    const centralFiles = walkRelativeFiles(centralPath);
+    const installedFiles = walkRelativeFiles(target);
+    for (const rel of installedFiles) {
+      if (centralFiles.has(rel)) continue;
+      try {
+        const abs = path.join(target, rel);
+        preserved.push({
+          rel,
+          buf: fs.readFileSync(abs),
+          mode: fs.statSync(abs).mode,
+        });
+      } catch {
+        // Unreadable — skip rather than fail the whole install
+      }
+    }
+  }
+
   if (fs.existsSync(target) || fs.lstatSync(target, { throwIfNoEntry: false })) {
     try {
       fs.rmSync(target, { recursive: true, force: true });
@@ -485,6 +543,19 @@ export function installSkillToVersion(
   } catch (err) {
     return { success: false, error: `Failed to ${method}: ${(err as Error).message}` };
   }
+
+  // Restore preserved files on top of the fresh copy.
+  for (const { rel, buf, mode } of preserved) {
+    try {
+      const dest = path.join(target, rel);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, buf);
+      fs.chmodSync(dest, mode);
+    } catch {
+      // Best-effort; failure here shouldn't unwind the install
+    }
+  }
+
   return { success: true };
 }
 
