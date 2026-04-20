@@ -3,9 +3,11 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
-import { resolveAgentsDir, type ModelOverrides, type AgentConfig, type ReadConfigResult, readConfig, getModelForAgent } from './persistence.js';
+import { resolveAgentsDir, type ModelOverrides, type AgentConfig, type ReadConfigResult, readConfig } from './persistence.js';
 import { normalizeEvents, AgentType } from './parsers.js';
 import { debug } from './debug.js';
+import { buildReasoningFlags } from '../models.js';
+import type { AgentId } from '../types.js';
 
 /**
  * Compute the Lowest Common Ancestor (LCA) of multiple file paths.
@@ -87,145 +89,22 @@ export const AGENT_COMMANDS: Record<AgentType, string[]> = {
   opencode: ['opencode', 'run', '--format', 'json', '{prompt}'],
 };
 
-// Effort level type
+// Effort level type. Effort is a reasoning-intensity knob (see
+// buildReasoningFlags) — it no longer picks the model. Use --model to pin
+// a specific model per teammate; when unset, the agent's CLI default runs.
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
-export type EffortModelMap = Record<EffortLevel, Record<AgentType, string>>;
 
-// Build effort model map from agent configs
-export function resolveEffortModelMap(
-  baseOrAgentConfigs: EffortModelMap | Record<AgentType, AgentConfig>,
-  overrides?: Partial<Record<AgentType, Partial<Record<EffortLevel, string>>>>
-): EffortModelMap {
-  // Check if first arg is base EffortModelMap (old API) or agent configs (new API)
-  const hasBaseOverrides = arguments.length > 1;
-
-  if (hasBaseOverrides && overrides) {
-    // Old API: resolveEffortModelMap(base, overrides)
-    const base = baseOrAgentConfigs as EffortModelMap;
-    const resolved: EffortModelMap = {
-      low: { ...base.low },
-      medium: { ...base.medium },
-      high: { ...base.high },
-      xhigh: { ...base.xhigh },
-      max: { ...base.max },
-      auto: { ...base.auto }
-    };
-
-    for (const [agentType, effortOverrides] of Object.entries(overrides)) {
-      if (!effortOverrides) continue;
-      const typedAgent = agentType as AgentType;
-      for (const level of ['low', 'medium', 'high', 'xhigh', 'max', 'auto'] as const) {
-        const model = effortOverrides[level];
-        if (typeof model === 'string') {
-          const trimmed = model.trim();
-          if (trimmed) {
-            resolved[level][typedAgent] = trimmed;
-          }
-        }
-      }
-    }
-
-    return resolved;
-  } else {
-    // New API: resolveEffortModelMap(agentConfigs)
-    const agentConfigs = baseOrAgentConfigs as Record<AgentType, AgentConfig>;
-    const resolved: EffortModelMap = {
-      low: {} as Record<AgentType, string>,
-      medium: {} as Record<AgentType, string>,
-      high: {} as Record<AgentType, string>,
-      xhigh: {} as Record<AgentType, string>,
-      max: {} as Record<AgentType, string>,
-      auto: {} as Record<AgentType, string>
-    };
-
-    for (const [agentType, agentConfig] of Object.entries(agentConfigs)) {
-      resolved.low[agentType as AgentType] = agentConfig.models.low;
-      resolved.medium[agentType as AgentType] = agentConfig.models.medium;
-      resolved.high[agentType as AgentType] = agentConfig.models.high;
-      resolved.xhigh[agentType as AgentType] = agentConfig.models.xhigh;
-      resolved.max[agentType as AgentType] = agentConfig.models.max;
-      resolved.auto[agentType as AgentType] = agentConfig.models.auto;
-    }
-
-    return resolved;
-  }
-}
-
-// Load default agent configs from persistence
+// Minimal defaults — no per-effort model map. Configs on disk may still have
+// a model pinned; launchProcess picks it up from agent.model when set.
 function loadDefaultAgentConfigs(): Record<AgentType, AgentConfig> {
-  // Use hardcoded defaults for backward compatibility with synchronous initialization
   return {
-    claude: {
-      command: 'claude -p \'{prompt}\' --output-format stream-json --json',
-      enabled: true,
-      models: {
-        low: 'claude-haiku-4-5-20251001',
-        medium: 'claude-sonnet-4-5',
-        high: 'claude-opus-4-5',
-        xhigh: 'claude-opus-4-6',
-        max: 'claude-opus-4-7',
-        auto: 'claude-sonnet-4-5'
-      },
-      provider: 'anthropic'
-    },
-    codex: {
-      command: 'codex exec --sandbox workspace-write \'{prompt}\' --json',
-      enabled: true,
-      models: {
-        low: 'gpt-4o-mini',
-        medium: 'gpt-5.2-codex',
-        high: 'gpt-5.1-codex-max',
-        xhigh: 'gpt-5.1-codex-max',
-        max: 'gpt-5.1-codex-max',
-        auto: 'gpt-5.2-codex'
-      },
-      provider: 'openai'
-    },
-    gemini: {
-      command: 'gemini \'{prompt}\' --output-format stream-json',
-      enabled: true,
-      models: {
-        low: 'gemini-3-flash-preview',
-        medium: 'gemini-3-flash-preview',
-        high: 'gemini-3-pro-preview',
-        xhigh: 'gemini-3-pro-preview',
-        max: 'gemini-3-pro-preview',
-        auto: 'gemini-3-flash-preview'
-      },
-      provider: 'google'
-    },
-    cursor: {
-      command: 'cursor-agent -p --output-format stream-json \'{prompt}\'',
-      enabled: true,
-      models: {
-        low: 'composer-1',
-        medium: 'composer-1',
-        high: 'composer-1',
-        xhigh: 'composer-1',
-        max: 'composer-1',
-        auto: 'composer-1'
-      },
-      provider: 'custom'
-    },
-    opencode: {
-      command: 'opencode run --format json \'{prompt}\'',
-      enabled: true,
-      models: {
-        low: 'zai-coding-plan/glm-4.7-flash',
-        medium: 'zai-coding-plan/glm-4.7',
-        high: 'zai-coding-plan/glm-4.7',
-        xhigh: 'zai-coding-plan/glm-4.7',
-        max: 'zai-coding-plan/glm-4.7',
-        auto: 'zai-coding-plan/glm-4.7'
-      },
-      provider: 'custom'
-    }
+    claude:   { command: 'claude -p \'{prompt}\' --output-format stream-json --json', enabled: true, model: null, provider: 'anthropic' },
+    codex:    { command: 'codex exec --sandbox workspace-write \'{prompt}\' --json', enabled: true, model: null, provider: 'openai' },
+    gemini:   { command: 'gemini \'{prompt}\' --output-format stream-json',           enabled: true, model: null, provider: 'google' },
+    cursor:   { command: 'cursor-agent -p --output-format stream-json \'{prompt}\'',   enabled: true, model: null, provider: 'custom' },
+    opencode: { command: 'opencode run --format json \'{prompt}\'',                   enabled: true, model: null, provider: 'custom' },
   };
 }
-
-
-// Default effort model map (for backward compatibility with tests)
-export const EFFORT_MODEL_MAP: EffortModelMap = resolveEffortModelMap(loadDefaultAgentConfigs());
 
 // Suffix appended to all prompts to ensure agents provide a summary
 const PROMPT_SUFFIX = `
@@ -413,10 +292,12 @@ export class AgentProcess {
   // Names of teammates in the same team that this teammate is waiting on.
   // Empty array = no deps = can run immediately. Populated by `teams add --after`.
   after: string[] = [];
-  // Stashed so we can resolve the model at launch time when a pending teammate
-  // is finally started (could be later than spawn time; model map may shift).
+  // Reasoning-intensity knob wired into buildReasoningFlags at launch time.
+  // Resolved late so config/effort-default changes between spawn and launch
+  // are honored for teammates staged via `teams add --after`.
   effort: EffortLevel | null = null;
-  // --model override; when set, used instead of the effort→model map.
+  // Pinned model for this teammate. When null, the agent's CLI picks its
+  // own default (no --model forwarded).
   model: string | null = null;
   // Extra env vars passed through to the child process (from --env KEY=VALUE).
   envOverrides: Record<string, string> | null = null;
@@ -775,7 +656,6 @@ export class AgentProcess {
   private filterByCwd: string | null;
   private cleanupAgeDays: number;
   private defaultMode: Mode;
-  private effortModelMap!: EffortModelMap;
   private agentConfigs!: Record<AgentType, AgentConfig>;
   private constructorAgentConfigs: Record<AgentType, AgentConfig> | null = null;
   private initPromise: Promise<void> | null = null;
@@ -817,13 +697,7 @@ export class AgentProcess {
     this.agentsDir = this.constructorAgentsDir || await getAgentsDir();
     await fs.mkdir(this.agentsDir, { recursive: true });
 
-    // Set defaults if no config provided
-    if (!this.constructorAgentConfigs) {
-      this.agentConfigs = loadDefaultAgentConfigs();
-      this.effortModelMap = resolveEffortModelMap(this.agentConfigs);
-    } else {
-      this.effortModelMap = resolveEffortModelMap(this.constructorAgentConfigs);
-    }
+    this.agentConfigs = this.constructorAgentConfigs ?? loadDefaultAgentConfigs();
 
     await this.loadExistingAgents();
   }
@@ -834,7 +708,6 @@ export class AgentProcess {
 
   setModelOverrides(agentConfigs: Record<AgentType, AgentConfig>): void {
     this.agentConfigs = agentConfigs;
-    this.effortModelMap = resolveEffortModelMap(agentConfigs);
   }
 
   registerAgent(agent: AgentProcess): void {
@@ -1031,16 +904,19 @@ export class AgentProcess {
     }
 
     const effort = agent.effort ?? 'medium';
-    // Explicit --model override wins over the effort→model map.
-    const resolvedModel: string =
-      agent.model ?? this.effortModelMap[effort][agent.agentType];
+    // Falls back to the pinned model in agentConfigs; null means "let the
+    // CLI pick its own default" (no --model flag forwarded). Effort is a
+    // separate knob wired into buildReasoningFlags inside buildCommand.
+    const resolvedModel: string | null =
+      agent.model ?? this.agentConfigs[agent.agentType]?.model ?? null;
     const cmd = this.buildCommand(
       agent.agentType,
       agent.prompt,
       agent.mode,
       resolvedModel,
       agent.cwd,
-      agent.agentId
+      agent.agentId,
+      effort
     );
     if (agent.version && cmd.length > 0) {
       cmd[0] = `${cmd[0]}@${agent.version}`;
@@ -1113,9 +989,10 @@ export class AgentProcess {
     agentType: AgentType,
     prompt: string,
     mode: Mode,
-    model: string,
+    model: string | null,
     cwd: string | null = null,
-    sessionId: string | null = null
+    sessionId: string | null = null,
+    effort: EffortLevel = 'medium'
   ): string[] {
     const cmdTemplate = AGENT_COMMANDS[agentType];
     if (!cmdTemplate) {
@@ -1153,24 +1030,43 @@ export class AgentProcess {
       // *default* version rather than the one this teammate is running.
     }
 
-    // Add model flag for each agent type
-    if (agentType === 'codex') {
-      const execIndex = cmd.indexOf('exec');
-      const sandboxIndex = cmd.indexOf('--sandbox');
-      const insertIndex = sandboxIndex !== -1 ? sandboxIndex : execIndex + 1;
-      cmd.splice(insertIndex, 0, '--model', model);
-    } else if (agentType === 'cursor') {
-      cmd.push('--model', model);
-    } else if (agentType === 'gemini' || agentType === 'claude') {
-      cmd.push('--model', model);
-    } else if (agentType === 'opencode') {
+    // Add model flag for each agent type only when the teammate has a pinned
+    // model. When null, the agent's CLI picks its own default.
+    if (model) {
+      if (agentType === 'codex') {
+        const execIndex = cmd.indexOf('exec');
+        const sandboxIndex = cmd.indexOf('--sandbox');
+        const insertIndex = sandboxIndex !== -1 ? sandboxIndex : execIndex + 1;
+        cmd.splice(insertIndex, 0, '--model', model);
+      } else if (agentType === 'cursor') {
+        cmd.push('--model', model);
+      } else if (agentType === 'gemini' || agentType === 'claude') {
+        cmd.push('--model', model);
+      } else if (agentType === 'opencode') {
+        cmd.push('--model', model);
+      }
+    }
+
+    if (agentType === 'opencode') {
       const opencodeAgent = mode === 'edit' || mode === 'full' ? 'build' : 'plan';
-      // Insert --agent flag after the prompt
       const promptIndex = cmd.indexOf(fullPrompt);
       if (promptIndex !== -1) {
         cmd.splice(promptIndex + 1, 0, '--agent', opencodeAgent);
       }
-      cmd.push('--model', model);
+    }
+
+    // Inject reasoning-intensity flags for agents that support them. Claude
+    // gets --effort appended; Codex gets `-c model_reasoning_effort=...`
+    // inserted before `exec` so it's parsed as a global config override.
+    const reasoningFlags = buildReasoningFlags(agentType as AgentId, effort);
+    if (reasoningFlags.length > 0) {
+      if (agentType === 'codex') {
+        const execIndex = cmd.indexOf('exec');
+        const insertIndex = execIndex !== -1 ? execIndex : 1;
+        cmd.splice(insertIndex, 0, ...reasoningFlags);
+      } else {
+        cmd.push(...reasoningFlags);
+      }
     }
 
     if (mode === 'full') {

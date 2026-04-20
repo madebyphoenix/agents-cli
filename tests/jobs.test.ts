@@ -105,7 +105,7 @@ describe('validateJob', () => {
 
   it('rejects invalid effort', () => {
     const errors = validateJob({ ...makeConfig(), effort: 'ultra' as any });
-    expect(errors).toContain('effort must be fast, default, or detailed');
+    expect(errors).toContain('effort must be low, medium, high, xhigh, max, or auto');
   });
 
   it('rejects invalid timeout', () => {
@@ -226,10 +226,17 @@ describe('job CRUD', () => {
   });
 
   it('applies defaults for omitted fields', () => {
-    writeJob(makeConfig({ name: `${PREFIX}crud-defaults` }));
+    // Write a minimal job YAML with no mode/effort/timeout/enabled so readJob
+    // must fall back to JOB_DEFAULTS for each.
+    writeJob({
+      name: `${PREFIX}crud-defaults`,
+      schedule: '0 9 * * *',
+      agent: 'claude',
+      prompt: 'do something',
+    } as JobConfig);
     const job = readJob(`${PREFIX}crud-defaults`)!;
     expect(job.mode).toBe('plan');
-    expect(job.effort).toBe('default');
+    expect(job.effort).toBe('auto');
     expect(job.timeout).toBe('30m');
     expect(job.enabled).toBe(true);
   });

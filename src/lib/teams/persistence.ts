@@ -67,25 +67,22 @@ async function resolveLegacySwarmifyConfigPath(): Promise<string> {
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
 
+// Retained for config-file back-compat: older configs pinned a model per
+// effort tier. We no longer act on those entries, but we won't error if they
+// exist in a user's JSON config on disk.
 export type ModelOverrides = Partial<Record<AgentType, Partial<Record<EffortLevel, string>>>>;
 
 export interface ProviderConfig {
   apiEndpoint: string | null;
 }
 
-export interface AgentModelConfig {
-  low: string;
-  medium: string;
-  high: string;
-  xhigh: string;
-  max: string;
-  auto: string;
-}
-
 export interface AgentConfig {
   command: string;
   enabled: boolean;
-  models: AgentModelConfig;
+  // Pinned model for this agent. When null, the teammate launch omits --model
+  // and lets the agent's CLI use its own default. Effort is a separate knob
+  // that controls reasoning intensity via buildReasoningFlags, not model.
+  model: string | null;
   provider: string;
 }
 
@@ -121,72 +118,39 @@ async function ensureConfigPath(): Promise<string> {
   return CONFIG_PATH;
 }
 
-// Get default agent configuration
+// Get default agent configuration. `model` is null by default — the teammate
+// launcher omits --model and the agent's CLI picks its own default, which is
+// what "drop hardcoded model mapping" means in practice.
 function getDefaultAgentConfig(agentType: AgentType): AgentConfig {
   const defaults: Record<AgentType, AgentConfig> = {
     claude: {
       command: 'claude -p \'{prompt}\' --output-format stream-json --json',
       enabled: true,
-      models: {
-        low: 'claude-haiku-4-5-20251001',
-        medium: 'claude-sonnet-4-6',
-        high: 'claude-opus-4-6',
-        xhigh: 'claude-opus-4-6',
-        max: 'claude-opus-4-7',
-        auto: 'claude-sonnet-4-6'
-      },
+      model: null,
       provider: 'anthropic'
     },
     codex: {
       command: 'codex exec --sandbox workspace-write \'{prompt}\' --json',
       enabled: true,
-      models: {
-        low: 'gpt-4o-mini',
-        medium: 'gpt-5.2-codex',
-        high: 'gpt-5.1-codex-max',
-        xhigh: 'gpt-5.1-codex-max',
-        max: 'gpt-5.1-codex-max',
-        auto: 'gpt-5.2-codex'
-      },
+      model: null,
       provider: 'openai'
     },
     gemini: {
       command: 'gemini \'{prompt}\' --output-format stream-json',
       enabled: true,
-      models: {
-        low: 'gemini-3-flash-preview',
-        medium: 'gemini-3-flash-preview',
-        high: 'gemini-3-pro-preview',
-        xhigh: 'gemini-3-pro-preview',
-        max: 'gemini-3-pro-preview',
-        auto: 'gemini-3-flash-preview'
-      },
+      model: null,
       provider: 'google'
     },
     cursor: {
       command: 'cursor-agent -p --output-format stream-json \'{prompt}\'',
       enabled: true,
-      models: {
-        low: 'composer-1',
-        medium: 'composer-1',
-        high: 'composer-1',
-        xhigh: 'composer-1',
-        max: 'composer-1',
-        auto: 'composer-1'
-      },
+      model: null,
       provider: 'custom'
     },
     opencode: {
       command: 'opencode run --format json \'{prompt}\'',
       enabled: true,
-      models: {
-        low: 'zai-coding-plan/glm-4.7-flash',
-        medium: 'zai-coding-plan/glm-4.7',
-        high: 'zai-coding-plan/glm-4.7',
-        xhigh: 'zai-coding-plan/glm-4.7',
-        max: 'zai-coding-plan/glm-4.7',
-        auto: 'zai-coding-plan/glm-4.7'
-      },
+      model: null,
       provider: 'custom'
     }
   };
@@ -231,11 +195,16 @@ async function tryReadLegacyConfig(configPath: string): Promise<SwarmConfig | nu
     const data = await fs.readFile(configPath, 'utf-8');
     const parsed = JSON.parse(data);
 
-    // New format: has agents object with nested configs
+    // New format: has agents object with nested configs. We detect it by any
+    // recognizable per-agent field (model, models, command, enabled) — the old
+    // 'models' field is still accepted so pre-existing configs load cleanly.
     if (parsed.agents && typeof parsed.agents === 'object') {
       const firstValue = Object.values(parsed.agents)[0];
-      if (firstValue && typeof firstValue === 'object' && 'models' in (firstValue as object)) {
-        return parsed as SwarmConfig;
+      if (firstValue && typeof firstValue === 'object') {
+        const obj = firstValue as Record<string, unknown>;
+        if ('model' in obj || 'models' in obj || 'command' in obj || 'enabled' in obj) {
+          return parsed as SwarmConfig;
+        }
       }
     }
 
@@ -377,19 +346,6 @@ export async function readConfig(): Promise<ReadConfigResult> {
 export async function writeConfig(config: SwarmConfig): Promise<void> {
   const configPath = await ensureConfigPath();
   await fs.writeFile(configPath, JSON.stringify(config, null, 2));
-}
-
-// Get model for agent type and effort level
-export function getModelForAgent(
-  agentConfigs: Record<AgentType, AgentConfig>,
-  agentType: AgentType,
-  effort: EffortLevel
-): string {
-  const agentConfig = agentConfigs[agentType];
-  if (!agentConfig) {
-    throw new Error(`Agent config not found for: ${agentType}`);
-  }
-  return agentConfig.models[effort];
 }
 
 // Update agent enabled status
