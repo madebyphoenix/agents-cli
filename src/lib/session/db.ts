@@ -95,6 +95,7 @@ export interface ScanStamp {
 export interface QueryOptions {
   agent?: SessionAgentId;
   agents?: SessionAgentId[];
+  version?: string;
   cwd?: string;
   project?: string;
   sinceMs?: number;
