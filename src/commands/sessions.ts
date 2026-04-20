@@ -8,6 +8,7 @@ import ora from 'ora';
 import type { AgentId } from '../lib/types.js';
 import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types.js';
 import { SESSION_AGENTS } from '../lib/session/types.js';
+import { discoverArtifacts, readArtifact, resolveArtifact } from '../lib/session/artifacts.js';
 import { discoverSessions, countSessionsInScope, resolveSessionById, searchContentIndex, parseTimeFilter, type DiscoverOptions, type ScanProgress } from '../lib/session/discover.js';
 import { filterTeamSessions } from '../lib/session/team-filter.js';
 import { parseSession } from '../lib/session/parse.js';
@@ -37,6 +38,8 @@ interface SessionsOptions extends SessionFilterOptions {
   exclude?: string;
   first?: string;
   last?: string;
+  artifacts?: boolean;
+  artifact?: string;
 }
 
 interface ClaudeHistoryEntry {
@@ -127,6 +130,64 @@ function resolvePathFilter(query: string): string {
   return path.resolve(expanded);
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function renderArtifactsForSession(
+  session: SessionMeta,
+  listAll: boolean,
+  name?: string,
+): Promise<void> {
+  const artifacts = discoverArtifacts(session);
+
+  if (name !== undefined) {
+    const artifact = resolveArtifact(artifacts, name);
+    if (!artifact) {
+      console.error(chalk.red(`No artifact matching "${name}" in session ${session.shortId}.`));
+      if (artifacts.length > 0) {
+        console.error(chalk.gray('Available artifacts:'));
+        for (const a of artifacts) {
+          console.error(chalk.gray(`  ${a.path}`));
+        }
+      }
+      process.exit(1);
+    }
+    if (!artifact.exists) {
+      console.error(chalk.red(`Artifact exists in session history but the file is no longer on disk: ${artifact.path}`));
+      process.exit(1);
+    }
+    process.stdout.write(readArtifact(artifact));
+    return;
+  }
+
+  if (artifacts.length === 0) {
+    console.log(chalk.gray('No file-write artifacts found in this session.'));
+    return;
+  }
+
+  const agentColor = colorAgent(session.agent);
+  console.log('');
+  console.log(
+    agentColor(session.agent) +
+    chalk.gray(` · ${session.shortId} · ${formatRelativeTime(session.timestamp)}`)
+  );
+  console.log(chalk.gray('─'.repeat(72)));
+
+  for (const a of artifacts) {
+    const exists = a.exists ? chalk.green('yes') : chalk.red('no');
+    const size = a.exists && a.sizeBytes !== undefined ? chalk.cyan(formatBytes(a.sizeBytes)) : chalk.gray('-');
+    const tool = chalk.yellow(padRight(a.tool, 10));
+    const when = chalk.gray(formatRelativeTime(a.timestamp));
+    const p = chalk.white(a.path);
+    console.log(`  ${exists}  ${size.padEnd(10)}  ${tool}  ${when.padEnd(16)}  ${p}`);
+  }
+
+  console.log(chalk.gray(`\n${artifacts.length} artifact${artifacts.length !== 1 ? 's' : ''}.`));
+}
+
 async function sessionsAction(query: string | undefined, options: SessionsOptions): Promise<void> {
   let filterOpts: FilterOptions;
   try {
@@ -153,9 +214,21 @@ async function sessionsAction(query: string | undefined, options: SessionsOption
     searchQuery = query;
   }
 
+  // Artifact flags require a session query.
+  if ((options.artifacts || options.artifact !== undefined) && !query) {
+    console.error(chalk.red('--artifacts and --artifact require a session ID or query.'));
+    process.exit(1);
+  }
+
   const mode = resolveViewMode(options, filterOpts);
   // --markdown or any filter flag forces single-session render.
   const wantsRender = mode === 'markdown' || hasAnyFilter(filterOpts);
+
+  // Artifact-list or artifact-read paths: widen scope and resolve session globally.
+  if ((options.artifacts || options.artifact !== undefined) && searchQuery) {
+    await renderArtifactsGlobal(searchQuery, options.artifacts ?? false, options.artifact, { agent: options.agent, project: options.project });
+    return;
+  }
 
   // When the user explicitly asks to render (via mode flag), resolve the
   // query globally so sessions outside the default cwd/30d window are found.
@@ -717,6 +790,54 @@ function applyScopeFilters(
   return filtered;
 }
 
+async function renderArtifactsGlobal(
+  query: string,
+  listAll: boolean,
+  name: string | undefined,
+  scope: { agent?: string; project?: string },
+): Promise<void> {
+  const spinner = ora().start();
+  const tracker = createScanProgressTracker(FIND_VERBS, 'session', spinner);
+
+  try {
+    const discovered = await discoverSessions({
+      all: true,
+      cwd: process.cwd(),
+      limit: 5000,
+      onProgress: tracker.onProgress,
+    });
+    tracker.stop();
+
+    const allSessions = applyScopeFilters(discovered, scope);
+    const matches = resolveSessionById(allSessions, query);
+    const queryMatches = matches.length > 0 ? matches : filterSessionsByQuery(allSessions, query);
+
+    if (queryMatches.length === 0) {
+      spinner.stop();
+      console.error(chalk.red(`No session found matching: ${query}`));
+      process.exit(1);
+    }
+    if (queryMatches.length > 1) {
+      spinner.stop();
+      console.error(chalk.red(`Multiple sessions match "${query}":`));
+      for (const m of queryMatches.slice(0, 10)) {
+        console.error(chalk.cyan(`  ${m.shortId}  ${m.id}  ${(m as any).label ?? m.topic ?? ''}`));
+      }
+      console.error(chalk.gray('Pass a longer ID to narrow it down.'));
+      process.exit(1);
+    }
+
+    spinner.stop();
+    await renderArtifactsForSession(queryMatches[0], listAll, name);
+  } catch (err: any) {
+    if (isPromptCancelled(err)) return;
+    tracker.stop();
+    spinner.stop();
+    console.error(chalk.red(`Failed to read session: ${err.message}`));
+    process.exit(1);
+  }
+}
+
 async function renderOneSession(
   query: string,
   mode: ViewMode,
@@ -818,6 +939,8 @@ export function registerSessionsCommands(program: Command): void {
     .option('--exclude <roles>', 'Exclude these roles (comma-separated): user, assistant, thinking, tools')
     .option('--first <n>', 'Keep only the first N turns (a turn starts at each user message)')
     .option('--last <n>', 'Keep only the last N turns (a turn starts at each user message)')
+    .option('--artifacts', 'List all files written or edited during a session')
+    .option('--artifact <name>', 'Read a specific artifact by filename or path (outputs to stdout)')
     .addHelpText('after', `
 Examples:
   # Interactive picker: browse and search recent sessions (TTY only)
