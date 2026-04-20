@@ -630,8 +630,22 @@ export function registerHooksToSettings(
   if (agentId === 'codex') {
     return registerHooksForCodex(versionHome, manifest, agentsDir);
   }
+  if (agentId === 'gemini') {
+    return registerHooksForGemini(versionHome, manifest, agentsDir);
+  }
   return { registered: [], errors: [] };
 }
+
+/**
+ * Gemini has no native UserPromptSubmit event — map it to BeforeAgent,
+ * the closest lifecycle phase that fires before the model sees the prompt.
+ * Note: gemini's BeforeAgent can only APPEND via additionalContext — it
+ * cannot replace the prompt. The hook script branches on caller to emit
+ * the correct protocol.
+ */
+const GEMINI_EVENT_MAP: Record<string, string> = {
+  UserPromptSubmit: 'BeforeAgent',
+};
 
 function registerHooksForClaude(
   versionHome: string,
@@ -834,6 +848,90 @@ function registerHooksForCodex(
     fs.writeFileSync(configPath, TOML.stringify(tomlConfig as Parameters<typeof TOML.stringify>[0]), 'utf-8');
   } catch (err) {
     errors.push(`Failed to update config.toml: ${(err as Error).message}`);
+  }
+
+  return { registered, errors };
+}
+
+function registerHooksForGemini(
+  versionHome: string,
+  manifest: Record<string, ManifestHook>,
+  agentsDir: string
+): { registered: string[]; errors: string[] } {
+  const registered: string[] = [];
+  const errors: string[] = [];
+
+  const configDir = path.join(versionHome, '.gemini');
+  const settingsPath = path.join(configDir, 'settings.json');
+
+  let config: Record<string, unknown> = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      config = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    } catch {
+      errors.push('Failed to parse gemini settings.json');
+      return { registered, errors };
+    }
+  }
+
+  if (!config.hooks || typeof config.hooks !== 'object') {
+    config.hooks = {};
+  }
+  const hooks = config.hooks as Record<string, unknown[]>;
+
+  for (const [name, hookDef] of Object.entries(manifest)) {
+    if (hookDef.agents && !hookDef.agents.includes('gemini')) continue;
+    if (!hookDef.events || hookDef.events.length === 0) continue;
+
+    const commandPath = path.join(agentsDir, 'hooks', hookDef.script);
+    if (!fs.existsSync(commandPath)) {
+      errors.push(`${name}: script not found at ${commandPath}`);
+      continue;
+    }
+
+    // Gemini timeouts are in milliseconds; manifest timeouts are seconds.
+    const timeoutMs = (hookDef.timeout || 600) * 1000;
+
+    for (const event of hookDef.events) {
+      const geminiEvent = GEMINI_EVENT_MAP[event] ?? event;
+
+      if (!hooks[geminiEvent]) {
+        hooks[geminiEvent] = [];
+      }
+
+      const eventEntries = hooks[geminiEvent] as Array<{
+        matcher?: string;
+        hooks?: Array<{ name?: string; type: string; command: string; timeout?: number }>;
+      }>;
+
+      const matcher = hookDef.matcher || '';
+      let matcherGroup = eventEntries.find((e) => (e.matcher || '') === matcher);
+      if (!matcherGroup) {
+        matcherGroup = { matcher, hooks: [] };
+        eventEntries.push(matcherGroup);
+      }
+      if (!matcherGroup.hooks) {
+        matcherGroup.hooks = [];
+      }
+
+      const existingIdx = matcherGroup.hooks.findIndex((h) => h.command === commandPath);
+      const hookEntry = { name, type: 'command' as const, command: commandPath, timeout: timeoutMs };
+
+      if (existingIdx >= 0) {
+        matcherGroup.hooks[existingIdx] = hookEntry;
+      } else {
+        matcherGroup.hooks.push(hookEntry);
+      }
+
+      registered.push(`${name} -> ${geminiEvent}`);
+    }
+  }
+
+  try {
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(config, null, 2), 'utf-8');
+  } catch (err) {
+    errors.push(`Failed to write gemini settings.json: ${(err as Error).message}`);
   }
 
   return { registered, errors };

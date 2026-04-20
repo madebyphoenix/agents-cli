@@ -4,6 +4,7 @@ import ora from 'ora';
 import {
   AGENTS,
   ALL_AGENT_IDS,
+  HOOKS_CAPABLE_AGENTS,
   MCP_CAPABLE_AGENTS,
   getAllCliStates,
   registerMcpToTargets,
@@ -418,12 +419,17 @@ Skip CLI installs with --skip-clis when you only want config updates, not versio
           }
         }
 
-        // Register hooks as lifecycle events in settings.json
+        // Register hooks as lifecycle events in each agent's config file.
+        // Claude/codex/gemini all support prompt-time hooks, though only
+        // claude can replace the prompt — codex/gemini append via
+        // additionalContext. The hook script detects the caller and emits
+        // the correct protocol.
         const hookManifest = parseHookManifest();
         if (Object.keys(hookManifest).length > 0) {
           let hookRegistered = 0;
+          const hookAgents = new Set(HOOKS_CAPABLE_AGENTS as readonly AgentId[]);
           for (const agentId of agentsToSync) {
-            if (agentId !== 'claude') continue;
+            if (!hookAgents.has(agentId)) continue;
             const versions = listInstalledVersions(agentId);
             const defaultVer = getGlobalDefault(agentId);
             const targetVersions = defaultVer ? [defaultVer] : versions.slice(-1);
