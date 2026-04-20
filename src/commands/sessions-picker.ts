@@ -16,7 +16,7 @@ import {
 import chalk from 'chalk';
 import type { SessionEvent, SessionMeta } from '../lib/session/types.js';
 import { parseSession } from '../lib/session/parse.js';
-import { cleanSessionPrompt } from '../lib/session/prompt.js';
+import { cleanSessionPrompt, extractSessionTopic } from '../lib/session/prompt.js';
 import { linkPath, relativeToCwd } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
 
@@ -214,9 +214,10 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>, session: 
   const termWidth = process.stdout.columns || 80;
 
   if (firstUser) {
-    const cleaned = cleanSessionPrompt(firstUser);
-    const first = (cleaned || firstUser).split('\n').find(l => l.trim()) || '';
-    lines.push(chalk.cyan('Prompt: ') + chalk.white(truncate(first.trim(), termWidth - 12)));
+    const first = extractSessionTopic(firstUser) || cleanSessionPrompt(firstUser).split('\n').find(l => l.trim()) || '';
+    if (first) {
+      lines.push(chalk.cyan('Prompt: ') + chalk.white(truncate(first.trim(), termWidth - 12)));
+    }
   }
 
   const activity: string[] = [];

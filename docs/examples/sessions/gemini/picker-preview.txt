@@ -1,0 +1,23 @@
+Gemini v0.29.5
+~/src/github.com/example/agents · main · started 23d 18h ago · lasted 7m
+25 msgs · 180k tokens · d37d035f-f749-419b-afaf-3080f906df14
+  Prompt: # Bug Investigation: Go CLI process crash during agent delegation
+  Activity: 5 read · 23 tools
+  
+  Last response:
+    I have identified the root cause of the Go CLI process crash during agent delegation and prepared the necessary fix.
+    
+    ### Root Cause Analysis
+    
+    The Go runtime panic originates from the hook system in harness/agent/hooks.go. While the Execute method in harness/agent/agent.go (line 527) correctly uses recover() to handle panics within the main execution thread, it does not protect against panics in goroutines spawned for asynchronous hooks.
+    
+    In Go, a panic in a goroutine that is not caught by recover() within that same goroutine will terminate the entire process. The hook system spawns these unprotected goroutines in two places:
+    
+        1. **`emitEventWithWait`** (lines 53-65): Spawns goroutines for pre-tool events (e.g., `EventToolCallStart`).
+        2. **`emitEventImmediate`** (lines 102-108): Spawns goroutines for post-tool and error events.
+    
+    When a child agent is executed during delegation, it emits an EventExecutionStart via emitEventImmediate. If a registered hook panics during this process, the entire CLI crashes instantly.
+    
+    ### Recommended Fix
+    
+    … (42 more lines)
