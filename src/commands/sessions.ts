@@ -33,20 +33,6 @@ interface SessionsOptions extends SessionFilterOptions {
   timeline?: boolean;
 }
 
-interface ListOptions extends SessionFilterOptions {
-  limit?: string;
-  json?: boolean;
-}
-
-interface ViewOptions {
-  transcript?: boolean;
-  trace?: boolean;
-  timeline?: boolean;
-  json?: boolean;
-  project?: string;
-  agent?: string;
-}
-
 interface ClaudeHistoryEntry {
   sessionId: string;
   display?: string;

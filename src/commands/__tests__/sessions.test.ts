@@ -609,7 +609,7 @@ describe('agents sessions (render-mode)', () => {
   });
 
   it('resolves Claude /resume history IDs to the resumed transcript', () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-view-'));
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-render-history-'));
 
     try {
       writeUpdateCache(tempHome);
@@ -693,7 +693,7 @@ describe('agents sessions (render-mode)', () => {
         'utf-8'
       );
 
-      const result = runAgents(['sessions', 'view', historyOnlyId, '--transcript'], repoRoot, tempHome);
+      const result = runAgents(['sessions', historyOnlyId, '--transcript'], repoRoot, tempHome);
       expect(result.status).toBe(0);
 
       const output = outputOf(result);
@@ -708,7 +708,7 @@ describe('agents sessions (render-mode)', () => {
   });
 
   it('resolves text queries against session topics, not only IDs', () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-view-query-'));
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-render-query-'));
 
     try {
       writeUpdateCache(tempHome);
@@ -725,7 +725,7 @@ describe('agents sessions (render-mode)', () => {
         '2026-04-17T19:41:30.000Z'
       );
 
-      const result = runAgents(['sessions', 'view', 'prompt text', '--transcript'], projectDir, tempHome);
+      const result = runAgents(['sessions', 'prompt text', '--transcript'], projectDir, tempHome);
       expect(result.status).toBe(0);
 
       const output = outputOf(result);
@@ -737,7 +737,7 @@ describe('agents sessions (render-mode)', () => {
   });
 
   it('applies --project filters before resolving search queries', () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-view-project-filter-'));
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-render-project-filter-'));
 
     try {
       writeUpdateCache(tempHome);
@@ -762,7 +762,7 @@ describe('agents sessions (render-mode)', () => {
       );
 
       const result = runAgents(
-        ['sessions', 'view', '--project', 'agents-cli', 'scoped search', '--transcript'],
+        ['sessions', '--project', 'agents-cli', 'scoped search', '--transcript'],
         workspaceDir,
         tempHome,
       );
@@ -777,7 +777,7 @@ describe('agents sessions (render-mode)', () => {
   });
 
   it('applies --agent filters before resolving search queries', () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-view-agent-filter-'));
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-sessions-render-agent-filter-'));
 
     try {
       writeUpdateCache(tempHome);
@@ -801,7 +801,7 @@ describe('agents sessions (render-mode)', () => {
       );
 
       const result = runAgents(
-        ['sessions', 'view', '--agent', 'codex', 'shared filter phrase', '--transcript'],
+        ['sessions', '--agent', 'codex', 'shared filter phrase', '--transcript'],
         projectDir,
         tempHome,
       );
