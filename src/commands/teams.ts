@@ -692,7 +692,7 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
 
   // status
   teams
-    .command('status <team>')
+    .command('status [team]')
     .aliases(['s', 'st', 'check'])
     .description("Check in on a team: who's working, what files they touched, recent commands, last output. Pass --since for efficient delta polling.")
     .option('-f, --filter <state>', 'Show only teammates in this state: working, completed, failed, stopped, or all (default: all)', 'all')
@@ -738,11 +738,18 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
 
   // start — fire any staged teammates whose --after deps have all completed
   teams
-    .command('start <team>')
+    .command('start [team]')
     .description('Launch any pending teammates whose --after dependencies are satisfied. Re-run to advance the DAG as teammates finish.')
     .option('--json', 'Output machine-readable JSON')
-    .action(async (team: string, opts: { json?: boolean }) => {
+    .action(async (team: string | undefined, opts: { json?: boolean }) => {
       const mgr = new AgentManager();
+
+      if (!team) {
+        const picked = await pickTeamOr(mgr, 'agents teams start');
+        if (!picked) return;
+        team = picked;
+      }
+
       const launched = await mgr.startReady(team);
       // Also compute which teammates are still pending + why, so the user
       // knows what's being waited on.
@@ -844,13 +851,25 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
 
   // disband
   teams
-    .command('disband <team>')
+    .command('disband [team]')
     .alias('d')
     .description('Disband the team. Stops all teammates cleanly and removes the team registry entry.')
     .option('--keep-logs', 'Keep all teammate logs on disk (default: delete them)')
     .option('--json', 'Output machine-readable JSON')
-    .action(async (team: string, opts: { keepLogs?: boolean; json?: boolean }) => {
+    .action(async (team: string | undefined, opts: { keepLogs?: boolean; json?: boolean }) => {
       const mgr = new AgentManager();
+
+      if (!team) {
+        const { names } = await loadTeamRows(mgr);
+        requireDestructiveArg({
+          argName: 'team',
+          command: 'agents teams disband',
+          itemNoun: 'team',
+          available: names,
+          emptyHint: "You don't have any teams to disband.",
+        });
+      }
+
       const stopRes = await handleStop(mgr, team);
       if ('error' in stopRes) die(stopRes.error);
 
