@@ -20,6 +20,7 @@ Also available as `ag` — all commands work with both `agents` and `ag`.
 ## Table of contents
 
 - [Run any agent, same interface](#run-any-agent-same-interface)
+- [Run open-source models through Claude Code](#run-open-source-models-through-claude-code)
 - [Keep secrets out of plaintext env files](#keep-secrets-out-of-plaintext-env-files)
 - [Put agents on a team](#put-agents-on-a-team)
 - [Non-interactive usage](#non-interactive-usage)
@@ -45,19 +46,9 @@ agents run gemini "Write tests for the fixed code"
 
 Each agent resolves to the project-pinned version, with the right skills, MCP servers, and permissions already synced. No setup between steps -- just run.
 
-`agents run` also passes through environment overrides to the spawned CLI, so Claude can target any Anthropic-compatible endpoint:
+`agents run` also passes environment overrides to the spawned CLI. For one-off flags this looks like `--env KEY=VALUE`; for repeatable provider setups see [profiles](#run-open-source-models-through-claude-code) below.
 
-```bash
-agents run claude "Reply with exactly: agents-qwen route ok" \
-  --mode full \
-  --model qwen3.6:35b \
-  --env ANTHROPIC_BASE_URL=https://ollama.example.com \
-  --env ANTHROPIC_AUTH_TOKEN="$(security find-generic-password -a "$USER" -s ollama-auth-token -w)" \
-  --env ANTHROPIC_MODEL=qwen3.6:35b \
-  --env ANTHROPIC_SMALL_FAST_MODEL=qwen3.6:35b
-```
-
-This makes agent pipelines possible. Chain agents by strength, swap one for another, script them in CI -- the interface stays the same:
+Chain agents by strength, swap one for another, script them in CI -- the interface stays the same:
 
 ```bash
 # Friday night code review
@@ -71,6 +62,53 @@ agents run claude "Review all PRs merged this week, summarize risks"
 ```
 
 Supports plan (read-only) and edit modes, effort levels that map to the right model per agent, and JSON output for scripting.
+
+---
+
+## Run open-source models through Claude Code
+
+`agents profiles` saves a named bundle of (host CLI, endpoint, model, keychain-backed auth). Ship a preset, paste the API key once, then invoke any open-source model as a first-class agent — no shell function, no plaintext token, no proxy.
+
+```bash
+agents profiles add kimi                # prompts for OpenRouter key, stores in Keychain
+agents run kimi "refactor this file"    # Claude Code UI, Kimi K2.5 responses
+```
+
+Built-in presets (all via OpenRouter, one shared key):
+
+| Preset | Model | Notes |
+|---|---|---|
+| `kimi` | `moonshotai/kimi-k2.5` | #1 HumanEval (99%), top Kimi. Reasoning — interactive only. |
+| `kimi-chat` | `moonshotai/kimi-k2-0905` | Non-reasoning, print-safe for `agents run`. |
+| `minimax` | `minimax/minimax-m2.5` | #1 SWE-bench Verified (80.2%). Reasoning. |
+| `glm` | `z-ai/glm-5` | #1 Chatbot Arena among open-weight (1451 ELO). |
+| `qwen` | `qwen/qwen3-coder-next` | Latest coding Qwen, sparse MoE 80B/3B active. Print-safe. |
+| `deepseek` | `deepseek/deepseek-chat-v3-0324` | Latest non-reasoning DeepSeek Chat. Print-safe. |
+
+`agents profiles presets` lists the catalog. `agents profiles view <name>` shows the env, model, and keychain status.
+
+**How it works:** a profile swaps the *model* while keeping Claude Code as the *agent runtime* — same UI, slash commands, skills, MCP tools, permission system. Under the hood it sets `ANTHROPIC_BASE_URL` + `ANTHROPIC_MODEL` and pulls `ANTHROPIC_AUTH_TOKEN` from Keychain at spawn time.
+
+Profile YAML lives in `~/.agents/profiles/<name>.yml` with no secrets — safe to `agents push` to a shared repo. Keys live only in macOS Keychain; rotate with `agents profiles login <provider>`.
+
+**Custom endpoints** — for self-hosted models (Ollama, vLLM) or other aggregators, drop a YAML file directly:
+
+```yaml
+# ~/.agents/profiles/local-qwen.yml
+name: local-qwen
+host: { agent: claude }
+env:
+  ANTHROPIC_BASE_URL: https://ollama.internal
+  ANTHROPIC_MODEL: qwen3.6:35b
+  ANTHROPIC_SMALL_FAST_MODEL: qwen3.6:35b
+auth:
+  envVar: ANTHROPIC_AUTH_TOKEN
+  keychainItem: agents-cli.ollama.token
+```
+
+Then `agents profiles login ollama` to store the token, and `agents run local-qwen "..."` works.
+
+**Note on `--print` and reasoning models:** Claude Code's `--print` mode consolidates response text, but returns empty when the response contains `thinking` blocks. Models flagged REASONING in the preset descriptions work fine interactively (plain `claude` launch with the same env) but not with `agents run --print`. Use the non-reasoning `-chat` variant for scripting.
 
 ---
 

@@ -59,6 +59,9 @@ src/
   lib/
     types.ts         # Core types (AgentId, Meta)
     agents.ts        # Agent configs, detection, MCP ops
+    profiles.ts      # Profile schema, YAML read/write, keychain-aware resolver
+    profiles-presets.ts  # Built-in preset catalog (Kimi/DeepSeek/Qwen/GLM/MiniMax via OpenRouter)
+    profiles-keychain.ts # macOS keychain wrapper (shim over shared secrets module)
     state.ts         # ~/.agents/agents.yaml management
     versions.ts      # Install, remove, sync resources
     shims.ts         # Shim generation, config symlink switching
@@ -138,8 +141,16 @@ agents sessions <id> --exclude thinking --markdown   # Drop reasoning from markd
 agents sessions <id> --last 3         # Last 3 turns (turn = user message)
 agents sessions <id> --first 10 --include user --json # Compose filters + format
 
+# Profiles (host CLI + endpoint + model + keychain auth)
+agents profiles add kimi              # apply a preset; prompts for API key once per provider
+agents profiles presets               # list built-in presets (Kimi, DeepSeek, Qwen, GLM, MiniMax)
+agents profiles list                  # list installed profiles
+agents profiles view <name>           # env + keychain status
+agents profiles login <provider>      # rotate stored key
+agents profiles remove <name>         # delete a profile (keychain item preserved)
+
 # Execution
-agents run <agent> <prompt> # Execute agent non-interactively
+agents run <agent|profile> <prompt>   # Execute agent non-interactively (profile name resolves to host CLI + env)
 
 # Schedule
 agents routines              # Manage scheduled jobs (add, list, run, pause, resume)

@@ -72,7 +72,46 @@ function renderProfileRow(p: ReturnType<typeof listProfiles>[number]): string {
 export function registerProfilesCommands(program: Command): void {
   const cmd = program
     .command('profiles')
-    .description('Named bundles of (host CLI, endpoint, model, auth) — run Kimi/DeepSeek/Qwen/etc through Claude Code without a proxy.');
+    .description('Named bundles of (host CLI, endpoint, model, auth) — run Kimi/DeepSeek/Qwen/etc through Claude Code without a proxy.')
+    .addHelpText(
+      'after',
+      `
+A profile pins a host CLI (claude, codex, gemini, ...) to a non-default endpoint
+and model, with a keychain-backed API key. Running 'agents run <profile>' spawns
+the host CLI with the right env vars — no plaintext tokens, no local proxy.
+
+Built-in presets (via OpenRouter, one shared key):
+  kimi       Kimi K2.5           (top HumanEval, reasoning — interactive only)
+  kimi-chat  Kimi K2 0905        (non-reasoning, print-safe)
+  minimax    MiniMax M2.5        (top SWE-bench, reasoning)
+  glm        GLM 5               (top Chatbot Arena among open-weight, reasoning)
+  qwen       Qwen3 Coder Next    (latest coding Qwen, print-safe)
+  deepseek   DeepSeek Chat V3    (latest non-reasoning chat, print-safe)
+
+Run 'agents profiles presets' for the full list with pricing and context sizes.
+
+Typical flow:
+  agents profiles add kimi             # prompts for OpenRouter key, stored in Keychain
+  agents run kimi "refactor this"      # Claude Code UI, Kimi model responses
+  agents profiles add deepseek         # reuses OpenRouter key, no re-prompt
+
+Managing keys:
+  agents profiles login openrouter     # rotate the key (shared across openrouter profiles)
+  agents profiles logout openrouter    # remove from Keychain
+
+Custom endpoints — drop a YAML file at ~/.agents/profiles/<name>.yml:
+  name: local-llama
+  host: { agent: claude }
+  env:
+    ANTHROPIC_BASE_URL: http://localhost:11434
+    ANTHROPIC_MODEL: llama-3.3-70b
+  auth:
+    envVar: ANTHROPIC_AUTH_TOKEN
+    keychainItem: agents-cli.ollama.token
+
+Profiles store no secrets — safe to 'agents push' to a shared repo.
+`,
+    );
 
   cmd
     .command('list')

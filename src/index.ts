@@ -99,7 +99,7 @@ Packages:
   install <pkg>                   Install from registry (mcp:name, skill:user/repo)
 
 Run agents:
-  run <agent> <prompt>            One-shot run (non-interactive)
+  run <agent|profile> <prompt>    One-shot run (non-interactive). Accepts a profile name (e.g. 'kimi', 'deepseek').
   teams                           Coordinate multiple agents on shared work
   sessions                        Browse and replay past runs
 
