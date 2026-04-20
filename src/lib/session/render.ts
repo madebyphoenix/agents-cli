@@ -499,13 +499,7 @@ function renderFileGroup(lines: string[], groups: Map<string, string[]>, absPath
  * Render session as an activity summary.
  * Returns a chalk-formatted string (not markdown) for direct terminal output.
  */
-export interface RenderSummaryOptions {
-  /** When true, show Timeline section and suppress the bucketed sections. */
-  timeline?: boolean;
-}
-
-export function renderSummary(events: SessionEvent[], cwd?: string, opts: RenderSummaryOptions = {}): string {
-  const timelineMode = !!opts.timeline;
+export function renderSummary(events: SessionEvent[], cwd?: string): string {
   // ── Collect data in a single chronological pass ───────────────────────────
 
   let firstUserMessage = '';
@@ -520,12 +514,6 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
   // Commands with timestamps
   const cmdList: Array<{ cmd: string; ts: number }> = [];
 
-  // Timeline: one entry per assistant text message, with tools/errors that followed
-  interface TimelineTool { summary: string; error?: string }
-  interface TimelineEntry { ts: number; text: string; tools: TimelineTool[] }
-  const timeline: TimelineEntry[] = [];
-  let currentEntry: TimelineEntry | null = null;
-
   // Plan items
   const todoItems: string[] = [];
   let exitPlanContent: string | null = null;
@@ -535,6 +523,9 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
 
   // Errors
   const errors: Array<{ tool: string; cmd?: string; content?: string }> = [];
+
+  // Assistant message count (used to decide whether the session produced any narration)
+  let assistantCount = 0;
 
   const isInsideCwd = (p: string): boolean => !!(cwd && p.startsWith(cwd + '/'));
 
@@ -582,26 +573,15 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
         });
       }
 
-      // Attach to current timeline entry
-      if (currentEntry) {
-        currentEntry.tools.push({ summary: toolSummaryShort(event, cwd, timelineMode) });
-      }
-
     } else if (event.type === 'error') {
       errors.push({
         tool: event.tool || 'unknown',
         cmd: event.args?.command ? String(event.args.command).slice(0, 80) : undefined,
         content: event.content?.slice(0, 120),
       });
-      // Attach to the last tool in the current entry (it's the one that failed)
-      if (currentEntry && currentEntry.tools.length > 0) {
-        const lastTool = currentEntry.tools[currentEntry.tools.length - 1];
-        lastTool.error = (event.content ?? event.tool ?? 'error').slice(0, 100);
-      }
 
     } else if (event.type === 'message') {
       if (event.role === 'user') {
-        currentEntry = null;
         if (!firstUserMessage) {
           const content = event.content || '';
           if (!/^\s*<local-command-caveat>/i.test(content)) {
@@ -611,9 +591,7 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
         }
       } else if (event.role === 'assistant' && event.content) {
         lastAssistantMessage = event.content;
-        const firstSentence = event.content.split(/(?<=[.!?])\s+|\n/)[0]?.trim() || event.content.slice(0, 100);
-        currentEntry = { ts, text: firstSentence, tools: [] };
-        timeline.push(currentEntry);
+        assistantCount++;
       }
 
     } else if (event.type === 'attachment') {
@@ -806,105 +784,160 @@ export function renderSummary(events: SessionEvent[], cwd?: string, opts: Render
   return lines.join('\n');
 }
 
-// ── Role filter ───────────────────────────────────────────────────────────────
+// ── Event filters ─────────────────────────────────────────────────────────────
 
 export const VALID_ROLE_VALUES = ['user', 'assistant', 'thinking', 'tools'] as const;
 export type RoleFilter = typeof VALID_ROLE_VALUES[number];
 
-/**
- * Filter events by role before passing to any renderer.
- * Throws with a clear message if role is not one of the four valid values.
- */
-export function filterByRole(events: SessionEvent[], role: string): SessionEvent[] {
-  if (!VALID_ROLE_VALUES.includes(role as RoleFilter)) {
-    throw new Error(`Invalid --role "${role}". Valid values: ${VALID_ROLE_VALUES.join(', ')}`);
-  }
-  switch (role as RoleFilter) {
-    case 'user':
-      return events.filter(e => e.type === 'message' && e.role === 'user');
-    case 'assistant':
-      return events.filter(e => e.type === 'message' && e.role === 'assistant');
-    case 'thinking':
-      return events.filter(e => e.type === 'thinking');
-    case 'tools':
-      return events.filter(e => e.type === 'tool_use' || e.type === 'tool_result');
-  }
-}
-
-// ── Other view modes (unchanged) ──────────────────────────────────────────────
-
-/**
- * Render session as a conversation transcript.
- */
-export function renderTranscript(events: SessionEvent[]): string {
-  const lines: string[] = [];
-  let lastRole: string | null = null;
-
-  for (const event of events) {
-    if (event.type === 'message') {
-      if (lastRole && lastRole !== event.role) {
-        lines.push('');
-      }
-      if (event.role === 'user') {
-        lines.push(`> ${event.content}`);
-        lines.push('');
-      } else {
-        lines.push(event.content || '');
-      }
-      lastRole = event.role || null;
-    } else if (event.type === 'tool_use') {
-      const summary = summarizeToolUse(event.tool || 'unknown', event.args);
-      lines.push(`  [${summary}]`);
-      lastRole = 'tool';
-    } else if (event.type === 'error') {
-      lines.push(`  [ERROR: ${event.content || event.tool || 'unknown'}]`);
-      lastRole = 'error';
-    }
-  }
-
-  return lines.join('\n');
+export interface FilterOptions {
+  include?: RoleFilter[];
+  exclude?: RoleFilter[];
+  first?: number;
+  last?: number;
 }
 
 /**
- * Render session as a markdown trace.
+ * Parse a comma-separated role list (e.g. "user,assistant") into typed values.
+ * Throws with a clear message listing valid values on any unknown entry.
  */
-export function renderTrace(events: SessionEvent[]): string {
-  const reasoning: string[] = [];
-  const conversation: string[] = [];
+export function parseRoleList(raw: string, flag: string): RoleFilter[] {
+  const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (parts.length === 0) {
+    throw new Error(`${flag} requires at least one role. Valid values: ${VALID_ROLE_VALUES.join(', ')}`);
+  }
+  for (const p of parts) {
+    if (!VALID_ROLE_VALUES.includes(p as RoleFilter)) {
+      throw new Error(`Invalid value "${p}" for ${flag}. Valid values: ${VALID_ROLE_VALUES.join(', ')}`);
+    }
+  }
+  return parts as RoleFilter[];
+}
+
+function roleOfEvent(e: SessionEvent): RoleFilter | null {
+  if (e.type === 'message' && e.role === 'user') return 'user';
+  if (e.type === 'message' && e.role === 'assistant') return 'assistant';
+  if (e.type === 'thinking') return 'thinking';
+  if (e.type === 'tool_use' || e.type === 'tool_result') return 'tools';
+  return null;
+}
+
+/**
+ * Keep events whose role is in `include` (whitelist) or whose role is not in
+ * `exclude` (blacklist). Non-role events (errors, usage, attachments, init,
+ * result) are preserved unless explicitly constrained by `include` — that
+ * matches the user model: "include user" means "only user".
+ */
+function applyRoleFilter(events: SessionEvent[], opts: FilterOptions): SessionEvent[] {
+  if (opts.include && opts.include.length > 0) {
+    const set = new Set(opts.include);
+    return events.filter(e => {
+      const role = roleOfEvent(e);
+      return role !== null && set.has(role);
+    });
+  }
+  if (opts.exclude && opts.exclude.length > 0) {
+    const set = new Set(opts.exclude);
+    return events.filter(e => {
+      const role = roleOfEvent(e);
+      return role === null || !set.has(role);
+    });
+  }
+  return events;
+}
+
+/**
+ * A "turn" starts at each user message. `--first N` keeps events through the
+ * end of the Nth user turn; `--last N` keeps events from the start of the
+ * (M-N+1)th user turn to the end. If the session has no user messages, every
+ * assistant message counts as a turn instead.
+ */
+function applyTurnSlice(events: SessionEvent[], opts: FilterOptions): SessionEvent[] {
+  if (opts.first === undefined && opts.last === undefined) return events;
+  if (opts.first !== undefined && opts.last !== undefined) {
+    throw new Error('--first and --last are mutually exclusive');
+  }
+  const n = (opts.first ?? opts.last)!;
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`Turn count must be a positive integer, got ${n}`);
+  }
+
+  const isTurnStart = (e: SessionEvent): boolean =>
+    e.type === 'message' && e.role === 'user';
+  const turnStartIdx: number[] = [];
+  for (let i = 0; i < events.length; i++) if (isTurnStart(events[i])) turnStartIdx.push(i);
+
+  // Fallback: no user messages — treat assistant messages as turn boundaries.
+  if (turnStartIdx.length === 0) {
+    for (let i = 0; i < events.length; i++) {
+      if (events[i].type === 'message' && events[i].role === 'assistant') turnStartIdx.push(i);
+    }
+  }
+  if (turnStartIdx.length === 0) return events;
+
+  if (opts.first !== undefined) {
+    if (n >= turnStartIdx.length) return events;
+    const endIdx = turnStartIdx[n]; // exclusive
+    return events.slice(0, endIdx);
+  }
+  // --last
+  if (n >= turnStartIdx.length) return events;
+  const startIdx = turnStartIdx[turnStartIdx.length - n];
+  return events.slice(startIdx);
+}
+
+/**
+ * Apply include/exclude/first/last. Turn slicing runs first so role filters
+ * operate on the sliced window (natural semantics: "last 3 turns, user only").
+ */
+export function filterEvents(events: SessionEvent[], opts: FilterOptions): SessionEvent[] {
+  if (opts.include && opts.include.length > 0 && opts.exclude && opts.exclude.length > 0) {
+    throw new Error('--include and --exclude are mutually exclusive');
+  }
+  const sliced = applyTurnSlice(events, opts);
+  return applyRoleFilter(sliced, opts);
+}
+
+// ── Conversation renderers ────────────────────────────────────────────────────
+
+/**
+ * Build the conversation as a single markdown string: user / assistant
+ * messages, inline thinking blocks, tool calls, and errors. Emitted in event
+ * order so reasoning sits where it actually occurred relative to the assistant
+ * reply.
+ */
+export function renderConversationMarkdown(events: SessionEvent[]): string {
+  const parts: string[] = [];
 
   for (const event of events) {
-    if (event.type === 'thinking' && event.content) {
-      reasoning.push(event.content);
-    }
     if (event.type === 'message') {
       if (event.role === 'user') {
-        conversation.push(`## User\n\n${event.content}`);
-      } else if (event.role === 'assistant' && event.content) {
-        conversation.push(`## Agent\n\n${event.content}`);
+        parts.push(`## User\n\n${event.content ?? ''}`);
+      } else if (event.role === 'assistant') {
+        parts.push(`## Assistant\n\n${event.content ?? ''}`);
       }
+    } else if (event.type === 'thinking') {
+      if (event.content) parts.push(`### Thinking\n\n${event.content}`);
     } else if (event.type === 'tool_use') {
       const tool = event.tool || 'unknown';
       if (event.command) {
-        conversation.push(`## Tool: ${tool}\n\n\`\`\`bash\n${event.command}\n\`\`\``);
+        parts.push(`### Tool: ${tool}\n\n\`\`\`bash\n${event.command}\n\`\`\``);
       } else if (event.path) {
-        conversation.push(`## Tool: ${tool}\n\n\`${shortenPathTrace(event.path)}\``);
+        parts.push(`### Tool: ${tool}\n\n\`${shortenPathTrace(event.path)}\``);
       } else {
         const summary = summarizeToolUse(tool, event.args);
-        conversation.push(`## Tool: ${tool}\n\n${summary}`);
+        parts.push(`### Tool: ${tool}\n\n${summary}`);
+      }
+    } else if (event.type === 'tool_result') {
+      if (event.content) {
+        const body = event.content.length > 2000 ? event.content.slice(0, 2000) + '\n…' : event.content;
+        parts.push(`### Tool Result\n\n\`\`\`\n${body}\n\`\`\``);
       }
     } else if (event.type === 'error') {
-      conversation.push(`## Error\n\n${event.content || 'Unknown error'}`);
+      parts.push(`### Error\n\n${event.content || event.tool || 'Unknown error'}`);
     }
   }
 
-  const parts: string[] = [];
-  if (reasoning.length > 0) {
-    parts.push('# Agent Reasoning\n');
-    parts.push(reasoning.join('\n\n---\n\n'));
-  }
-  parts.push('\n\n# Full Conversation\n');
-  parts.push(conversation.join('\n\n'));
-  return parts.join('\n');
+  return parts.join('\n\n');
 }
 
 /**
