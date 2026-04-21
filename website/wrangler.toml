@@ -8,6 +8,10 @@ compatibility_date = "2026-04-20"
 pattern = "agents-cli.sh/*"
 zone_name = "agents-cli.sh"
 
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
 # Observability so UA-sniff outcomes + request counts are visible in the CF
 # dashboard without needing a separate logging pipeline.
 [observability]

@@ -40,6 +40,38 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 main { max-width: 680px; margin: 0 auto; padding: 80px 24px 120px; }
+.hero-video {
+  position: relative;
+  margin: 32px -40px 48px;
+  border: 1px solid #1a1a1a;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 0 0 1px rgba(163,230,53,0.04), 0 24px 48px -24px rgba(0,0,0,0.6);
+}
+.hero-video video { display: block; width: 100%; height: auto; }
+.sound-toggle {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid rgba(163,230,53,0.35);
+  background: rgba(10,10,10,0.72);
+  backdrop-filter: blur(8px);
+  color: #a3e635;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 0.15s ease;
+  opacity: 0.75;
+}
+.sound-toggle:hover { opacity: 1; border-color: #a3e635; background: rgba(163,230,53,0.1); }
+.sound-toggle svg { width: 16px; height: 16px; }
+@media (max-width: 760px) { .hero-video { margin-left: -12px; margin-right: -12px; } }
 nav { display: flex; gap: 24px; font-size: 13px; color: #666; margin-bottom: 96px; }
 nav a { color: #666; text-decoration: none; }
 nav a:hover { color: #a3e635; }
@@ -133,6 +165,13 @@ ul li code { background: #141414; border: 1px solid #222; padding: 1px 6px; bord
 <h1>agents</h1>
 <p class="lede">The open client for AI coding agents. Run Claude, Codex, Gemini, Cursor — same interface, on your machine.</p>
 
+<div class="hero-video">
+  <video id="demo-video" src="/demo.mp4" poster="/demo-poster.jpg" autoplay muted loop playsinline preload="metadata"></video>
+  <button class="sound-toggle" id="sound-toggle" type="button" aria-label="Unmute">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>
+  </button>
+</div>
+
 <div class="hero-install">
   <span class="prompt">$</span>
   <span class="cmd">curl -fsSL agents-cli.sh | sh</span>
@@ -210,6 +249,20 @@ document.querySelectorAll("[data-copy]").forEach(btn => {
     setTimeout(() => { btn.textContent = prev; btn.classList.remove("copied"); }, 1200);
   });
 });
+
+(function(){
+  const v = document.getElementById("demo-video");
+  const b = document.getElementById("sound-toggle");
+  if (!v || !b) return;
+  const mutedIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/></svg>';
+  const liveIcon  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>';
+  b.addEventListener("click", () => {
+    v.muted = !v.muted;
+    b.innerHTML = v.muted ? mutedIcon : liveIcon;
+    b.setAttribute("aria-label", v.muted ? "Unmute" : "Mute");
+    if (!v.muted) { v.play().catch(()=>{}); }
+  });
+})();
 </script>
 </body>
 </html>`;
