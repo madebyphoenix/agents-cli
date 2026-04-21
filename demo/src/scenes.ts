@@ -14,6 +14,7 @@ export interface TermLine {
 export interface Scene {
   id: string;
   title: string;          // shown in progress bar
+  caption?: string;       // human-readable description, typewritten above the terminal
   prompt?: string;        // terminal prompt text (default: ~/payments git:(main))
   lines: TermLine[];
   durationFrames: number; // how long this scene lasts
@@ -32,6 +33,7 @@ export const SCENES: Scene[] = [
   {
     id: 'install',
     title: 'INSTALL',
+    caption: 'Install any agent, pinned to an exact version.',
     lines: [
       { text: '$ agents add claude@2.1.113', color: W, typing: true, delay: 0 },
       { text: 'Installing Claude Code@2.1.113...', color: D, delay: 30, spinner: true },
@@ -44,6 +46,7 @@ export const SCENES: Scene[] = [
   {
     id: 'use',
     title: 'USE',
+    caption: 'Switch the global default in one command.',
     clear: true,
     lines: [
       { text: '$ agents use claude@2.1.113', color: W, typing: true, delay: 0 },
@@ -60,6 +63,7 @@ export const SCENES: Scene[] = [
   {
     id: 'profile',
     title: 'PROFILES',
+    caption: 'Add profiles — point Claude at Kimi, Grok, or any endpoint.',
     clear: true,
     lines: [
       { text: '$ agents profiles add kimi', color: W, typing: true, delay: 0 },
@@ -78,6 +82,7 @@ export const SCENES: Scene[] = [
   {
     id: 'skills',
     title: 'SKILLS',
+    caption: 'Install a skill once — synced to every agent.',
     clear: true,
     lines: [
       { text: '$ agents skills add gh:phnx-labs/security-expert', color: W, typing: true, delay: 0 },
@@ -94,6 +99,7 @@ export const SCENES: Scene[] = [
   {
     id: 'mcp',
     title: 'MCP',
+    caption: 'Register MCP servers across every agent at once.',
     clear: true,
     lines: [
       { text: '$ agents install mcp:com.linear/linear', color: W, typing: true, delay: 0 },
@@ -113,6 +119,7 @@ export const SCENES: Scene[] = [
   {
     id: 'pin',
     title: 'PIN',
+    caption: 'Pin agent versions per project — like .nvmrc, but for AI.',
     clear: true,
     lines: [
       { text: '$ cat .agents-version', color: W, typing: true, delay: 0 },
@@ -130,6 +137,7 @@ export const SCENES: Scene[] = [
   {
     id: 'sessions',
     title: 'SESSIONS',
+    caption: 'See every session across agents, versions, and projects.',
     clear: true,
     lines: [
       { text: '$ agents sessions', color: W, typing: true, delay: 0 },
@@ -150,6 +158,7 @@ export const SCENES: Scene[] = [
   {
     id: 'pipe',
     title: 'PIPE',
+    caption: 'Chain agents in Unix pipelines — chain by strength.',
     clear: true,
     lines: [
       { text: '$ agents run claude "find auth vulnerabilities in src/" \\', color: W, typing: true, delay: 0 },
@@ -167,6 +176,7 @@ export const SCENES: Scene[] = [
   {
     id: 'cloud',
     title: 'CLOUD',
+    caption: 'Dispatch work to the cloud — same CLI, remote execution.',
     clear: true,
     lines: [
       { text: '$ agents cloud run "deploy payments-api to staging" --provider rush', color: W, typing: true, delay: 0 },
@@ -187,6 +197,7 @@ export const SCENES: Scene[] = [
   {
     id: 'rotate',
     title: 'ROTATE',
+    caption: 'Rotate across accounts — never hit a usage limit again.',
     clear: true,
     lines: [
       { text: '$ agents run claude --rotate "run full test suite"', color: W, typing: true, delay: 0 },

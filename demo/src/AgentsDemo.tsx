@@ -34,6 +34,76 @@ const Vignette: React.FC = () => (
   />
 );
 
+// Typewriter caption above the terminal. Same mono font as agents-cli.sh.
+const CaptionOverlay: React.FC<{
+  text: string;
+  frameInScene: number;
+  sceneDuration: number;
+  fps: number;
+}> = ({ text, frameInScene, sceneDuration, fps }) => {
+  if (!text) return null;
+
+  const charsPerFrame = 0.85;
+  const startDelay = 2;
+  const revealed = Math.max(
+    0,
+    Math.min(text.length, Math.floor((frameInScene - startDelay) * charsPerFrame)),
+  );
+  const visible = text.slice(0, revealed);
+  const typingDone = revealed >= text.length;
+
+  const containerOpacity = interpolate(
+    frameInScene,
+    [0, 6, sceneDuration - 12, sceneDuration],
+    [0, 1, 1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+
+  const cursorOn =
+    !typingDone || Math.floor((frameInScene / fps) * 2) % 2 === 0;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 200,
+        left: 0,
+        right: 0,
+        display: "flex",
+        justifyContent: "center",
+        opacity: containerOpacity,
+        zIndex: 10,
+        pointerEvents: "none",
+      }}
+    >
+      <div
+        style={{
+          fontFamily:
+            'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+          fontSize: 32,
+          fontWeight: 400,
+          letterSpacing: "-0.01em",
+          color: "#e8e8e8",
+          display: "flex",
+          alignItems: "center",
+        }}
+      >
+        <span>{visible}</span>
+        <span
+          style={{
+            display: "inline-block",
+            width: 14,
+            height: 28,
+            marginLeft: 4,
+            background: cursorOn ? "#a3e635" : "transparent",
+            transform: "translateY(2px)",
+          }}
+        />
+      </div>
+    </div>
+  );
+};
+
 // Finale: Phoenix logo + agents-cli wordmark + CTA.
 const Finale: React.FC<{ frameInScene: number; fps: number }> = ({
   frameInScene,
@@ -231,21 +301,31 @@ export const AgentsDemo: React.FC = () => {
       {isFinale ? (
         <Finale frameInScene={frameInScene} fps={fps} />
       ) : (
-        <AbsoluteFill
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            opacity: fadeIn,
-            transform: `translateY(${(1 - fadeIn) * 15}px)`,
-          }}
-        >
-          <Terminal
-            lines={scene.lines}
-            sceneStartFrame={sceneStartFrame}
-            prompt={scene.prompt}
-          />
-        </AbsoluteFill>
+        <>
+          {scene.caption ? (
+            <CaptionOverlay
+              text={scene.caption}
+              frameInScene={frameInScene}
+              sceneDuration={scene.durationFrames}
+              fps={fps}
+            />
+          ) : null}
+          <AbsoluteFill
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: fadeIn,
+              transform: `translateY(${(1 - fadeIn) * 15}px)`,
+            }}
+          >
+            <Terminal
+              lines={scene.lines}
+              sceneStartFrame={sceneStartFrame}
+              prompt={scene.prompt}
+            />
+          </AbsoluteFill>
+        </>
       )}
 
       <CRTOverlay />
