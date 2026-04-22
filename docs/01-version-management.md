@@ -107,6 +107,68 @@ Key behaviors:
 
 Special case: Gemini requires TOML format, so commands are converted (not symlinked).
 
+## Shim Process Contract
+
+The shim is more than a version router — it's a process-model contract that
+downstream consumers (VS Code extensions, IDEs, daemons) depend on. Two
+guarantees:
+
+### 1. `exec`-replacement, not `fork+exec`
+
+The shim's final line is always:
+
+```bash
+exec "$BINARY" "$@"
+```
+
+`exec` replaces the shim process in place. The shell's direct child pid *is*
+the shim pid — which, after `exec`, *is* the agent CLI. No wrapper process
+remains as a parent of the agent.
+
+```
+Process tree after `claude@2.1.112` runs at the shell:
+
+  zsh(shell_pid)
+    └─ /bin/bash(shim_pid)              ← shim script starts here
+         ├─ (transient) agents sync     ← project resource sync, ~100ms
+         └─ (exec replaces) node claude ← same pid, now IS claude
+```
+
+### 2. Signals propagate cleanly
+
+Because `exec` replaces rather than forks, `SIGINT` (Ctrl+C) and `SIGTERM`
+from the shell hit the agent CLI directly. A second `SIGINT` exits the agent
+and returns control to the shell — `pgrep -P shell_pid` returns empty, the
+shell is idle at prompt.
+
+### Why this matters
+
+Any consumer that drives an agent terminal programmatically — Swarmify's VS
+Code extension is the primary one today — relies on these two guarantees to
+observe lifecycle transitions via `pgrep`/`ps` without hooking the terminal's
+pty output. Specifically:
+
+- **"Agent is running"** is detectable as "shell has a child pid."
+- **"Agent has exited, shell is idle"** is detectable as "shell has no
+  children."
+- **"Which process is the agent"** is always the immediate child of the
+  shell, not a deeper descendant.
+
+See [`swarmify/docs/01-terminal-lifecycle.md`](../../swarmify/docs/01-terminal-lifecycle.md)
+for how the Swarmify extension consumes this contract to implement
+`tabReady → shellReady → promptReady → agentReady` event detection.
+
+### What would break the contract
+
+| Hypothetical change | Breaks |
+|---|---|
+| Shim uses `$BINARY "$@"` instead of `exec $BINARY "$@"` | `pgrep -P shell_pid` keeps returning the shim pid even after the agent exits; consumers can't detect "shell idle" |
+| Shim wraps the agent in `tmux`/`screen`/`agents pty` as a persistent parent | `pgrep -P shell_pid` returns the wrapper pid; the actual agent is a deeper descendant, requiring a tree-walk |
+| Shim daemonizes or backgrounds the agent | Terminal's pty is not the agent's stdin; typed input goes to the wrong process |
+
+When introducing new launch modes, preserve this contract or provide an
+explicit alternative detection path for consumers.
+
 ## Key Functions
 
 | Function | File | Purpose |

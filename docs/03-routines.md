@@ -66,30 +66,159 @@ The agent can only:
 
 ## Execution Flow
 
+Temporal sequence from cron fire to report saved.
+
 ```
-Cron trigger (croner)
-           │
-           ▼
-  ┌──────────────────────────────────────────────────────────────────────┐
-  │ scheduler.ts:executeJob()                                            │
-  │                                                                      │
-  │ 1. Create sandbox: sandbox.ts:createOverlay()                       │
-  │    - Generate settings.json with permissions                        │
-  │    - Symlink allowed directories                                    │
-  │                                                                      │
-  │ 2. Spawn agent process                                              │
-  │    - HOME=/path/to/overlay                                          │
-  │    - Pass prompt via stdin or --prompt                              │
-  │                                                                      │
-  │ 3. Capture output to runs/{job}/{timestamp}/                        │
-  │                                                                      │
-  │ 4. Generate report from output                                      │
-  │    - Extract markdown from terminal output                          │
-  │    - Save as report.md in run directory                             │
-  │                                                                      │
-  │ 5. Cleanup sandbox                                                  │
-  └──────────────────────────────────────────────────────────────────────┘
+croner            JobScheduler          runner.ts           sandbox.ts       spawned agent       filesystem
+(library)         scheduler.ts:20       executeJob          prepareJobHome   (claude/codex/      ~/.agents/runs/
+                                                                              gemini)
+
+     │                  │                  │                    │                │                    │
+     ●──fire callback──▶│                  │                    │                │                    │
+     │                  │                  │                    │                │                    │
+     │                  │──onTrigger(cfg)──▶                    │                │                    │
+     │                  │  (scheduler.ts:42)                    │                │                    │
+     │                  │                  │                    │                │                    │
+     │                  │                  │──resolveJobPrompt──│                │                    │
+     │                  │                  │  + buildJobCommand │                │                    │
+     │                  │                  │  (runner.ts:40)    │                │                    │
+     │                  │                  │                    │                │                    │
+     │                  │                  │  if sandbox≠false: │                │                    │
+     │                  │                  │──prepareJobHome───▶│                │                    │
+     │                  │                  │                    │                │                    │
+     │                  │                  │                    ├─rm old overlay─────────────────────▶│
+     │                  │                  │                    ├─mkdir ~/.agents/routines/{name}/home▶│
+     │                  │                  │                    ├─generateClaudeConfig (etc.)────────▶│ .claude/
+     │                  │                  │                    │                                    │   settings.json
+     │                  │                  │                    ├─symlinkAllowedDirs─────────────────▶│ home/<dir>->...
+     │                  │                  │                    │                │                    │
+     │                  │                  │◀──overlayHome──────│                │                    │
+     │                  │                  │                    │                │                    │
+     │                  │                  │──buildSpawnEnv─────▶│                │                    │
+     │                  │                  │  HOME=overlay      │                │                    │
+     │                  │                  │  + ENV_ALLOWLIST   │                │                    │
+     │                  │                  │  (sandbox.ts:19)   │                │                    │
+     │                  │                  │                    │                │                    │
+     │                  │                  ├─mkdir runDir, open stdout fd────────────────────────────▶│ runs/{job}/{runId}/
+     │                  │                  ├─writeRunMeta(status='running')──────────────────────────▶│   meta.json
+     │                  │                  │                    │                │                    │
+     │                  │                  ├─spawn(cmd, {       │                │                    │
+     │                  │                  │    detached:true,  │                │                    │
+     │                  │                  │    stdio:[ign,     │                │                    │
+     │                  │                  │          fd, fd],  │                │                    │
+     │                  │                  │    env: spawnEnv   │                │                    │
+     │                  │                  │  })  runner.ts:159─────────────────▶●                    │
+     │                  │                  │                    │                │──stdout────────────▶│ stdout.log
+     │                  │                  │                    │                │                    │
+     │                  │                  │  setTimeout(timeout)                │                    │
+     │                  │                  │  runner.ts:170     │                │                    │
+     │                  │                  │                    │                ●──agent runs──       │
+     │                  │                  │                    │                │   prompt, uses     │
+     │                  │                  │                    │                │   allowed tools    │
+     │                  │                  │                    │                ●──exits(code)───    │
+     │                  │                  │◀───────'exit'──────────────────────────────────────────  │
+     │                  │                  │                    │                │                    │
+     │                  │                  ├─writeRunMeta(status=code===0 ? 'completed' : 'failed')──▶│ meta.json
+     │                  │                  │                    │                │                    │
+     │                  │                  ├─extractAndSaveReport(stdoutPath, agent, runDir)─────────▶│ report.md
+     │                  │                  │  runner.ts:271     │                │                    │
+     │                  │                  │                    │                │                    │
+     │                  │◀──resolve────────│                    │                │                    │
+     │                  │                  │                    │                │                    │
+     │                  │  if runOnce:     │                    │                │                    │
+     │                  │  ├─unschedule    │                    │                │                    │
+     │                  │  └─deleteJob     │                    │                │                    │
+     ▼                  ▼                  ▼                    ▼                ▼                    ▼
 ```
+
+On timeout: the setTimeout at `runner.ts:170` fires, sends `SIGTERM` to the
+process group (`process.kill(-child.pid, 'SIGTERM')`), waits 5s, then
+`SIGKILL`. Report extraction runs regardless — a truncated stdout is still
+valuable.
+
+## Run State Machine
+
+Each `RunMeta.status` value maps to one terminal state. Transitions are
+one-shot — a run never re-enters `running` once it leaves.
+
+```
+                        ┌─────────────┐
+                        │  (spawned)  │
+                        └──────┬──────┘
+                               │
+                               ▼
+              writeRunMeta(status='running')
+              runner.ts:149
+                               │
+                               │
+         ┌─────────────────────┼─────────────────────┐
+         │                     │                     │
+         │                     │                     │
+         ▼                     ▼                     ▼
+    exit code=0          exit code≠0         timeout fires
+    runner.ts:200        runner.ts:200       runner.ts:184
+         │                     │                     │
+         ▼                     ▼                     ▼
+    ┌─────────┐           ┌────────┐            ┌─────────┐
+    │completed│           │ failed │            │ timeout │
+    └─────────┘           └────────┘            └─────────┘
+                                                      │
+                                                      │
+                                             SIGTERM → wait 5s → SIGKILL
+                                             report still extracted from
+                                             partial stdout
+```
+
+Plus one error branch: `child.on('error')` at `runner.ts:208` (spawn itself
+failed — binary not found, EACCES, etc.) → `status='failed'` with `exitCode=null`.
+
+## Sandbox Data Flow
+
+What `prepareJobHome` produces on disk, given a job config.
+
+```
+Input:  JobConfig                                Output:  ~/.agents/routines/{name}/home/
+
+┌──────────────────────────┐                    ┌─────────────────────────────────────────┐
+│ name: daily-review       │                    │ (cleanJobHome removes any prior overlay)│
+│ agent: claude            │                    │                                         │
+│ mode: plan               │  prepareJobHome    │ .claude/                                │
+│ allow:                   │  sandbox.ts:74     │   settings.json  ← generateClaudeConfig │
+│   dirs:                  │                    │                    - mode → permMode    │
+│     - ~/projects/myapp   │ ─────────────────▶ │                    - allow.tools        │
+│   tools:                 │                    │                    - SAFE_TOOLS expand  │
+│     - Bash(git *)        │                    │                                         │
+│     - Read               │                    │ myapp -> /Users/you/projects/myapp      │
+│     - web_search         │                    │   (symlink, from allow.dirs)            │
+│                          │                    │                                         │
+└──────────────────────────┘                    └─────────────────────────────────────────┘
+
+                                                 Env handed to child process:
+                                                 (sandbox.ts:52, buildSpawnEnv)
+                                                 ┌─────────────────────────────────────────┐
+                                                 │ HOME=~/.agents/routines/daily-review/home│
+                                                 │ + forwarded from parent only if in      │
+                                                 │   ENV_ALLOWLIST (sandbox.ts:19):        │
+                                                 │   PATH, SHELL, TERM, LANG, LC_*, USER,  │
+                                                 │   TMPDIR, XDG_*, NVM_DIR, NODE_PATH,    │
+                                                 │   BUN_INSTALL, EDITOR, VISUAL, NO_COLOR │
+                                                 │   FORCE_COLOR                           │
+                                                 │ + TZ (if config.timezone)               │
+                                                 │                                         │
+                                                 │ Everything else (AWS_*, OPENAI_API_KEY, │
+                                                 │ GITHUB_TOKEN, etc.) is DROPPED.         │
+                                                 └─────────────────────────────────────────┘
+```
+
+Tools in `allow.tools` are expanded per two small tables at `sandbox.ts:43-49`:
+
+- `SAFE_TOOLS` — safe wildcards (`web_search` → `WebSearch(*)`, `web_fetch` → `WebFetch(*)`)
+- `DIR_SCOPED_TOOLS` — always scoped, never wildcarded (`read`, `write`, `edit`, `glob`, `grep`, `notebook_edit`). A bare `Read` in config expands to `Read(dir1)`, `Read(dir2)`… for each entry in `allow.dirs`.
+
+This is the core isolation invariant: the spawned agent's view of the
+filesystem is **only** the symlinks we created in the overlay, plus any
+file:// paths its tools touch via the allowed-tool expansion. No `~/.ssh`,
+no `~/.gitconfig`, no ambient AWS/OPENAI keys.
 
 ### Run Output
 
