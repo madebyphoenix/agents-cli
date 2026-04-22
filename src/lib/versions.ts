@@ -1,3 +1,19 @@
+/**
+ * Version management module for agents-cli.
+ *
+ * Handles installing, removing, listing, and switching between agent CLI versions.
+ * Each version is installed into an isolated directory under ~/.agents/versions/{agent}/{version}/
+ * with its own HOME directory for config isolation. Resources (commands, skills, hooks, memory,
+ * MCP servers, permissions, subagents, plugins) from ~/.agents/ are synced into version homes
+ * via copies or conversions (not symlinks).
+ *
+ * Key responsibilities:
+ * - Version lifecycle: install, remove, list, resolve (project-level or global default)
+ * - Resource discovery: scan ~/.agents/ for available resources across all types
+ * - Resource sync: copy/convert resources into a version's isolated config directory
+ * - Diff and reconciliation: detect new/unsynced resources and prompt users to sync them
+ * - Agent/version target resolution: parse agent@version specs from CLI flags
+ */
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -13,13 +29,14 @@ import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, g
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME } from './permissions.js';
 import { installMcpServers } from './mcp.js';
 import { markdownToToml } from './convert.js';
-import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion } from './shims.js';
+import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion, ensureClaudeInsideSymlink } from './shims.js';
 import { listInstalledSubagents, transformSubagentForClaude, syncSubagentToOpenclaw, SUBAGENT_CAPABLE_AGENTS } from './subagents.js';
 import { parseHookManifest, registerHooksToSettings } from './hooks.js';
 import { discoverPlugins, syncPluginToVersion, isPluginSynced, pluginSupportsAgent, cleanOrphanedPluginSkills } from './plugins.js';
 import { compileMemoryForAgent } from './memory-compile.js';
 import { PLUGINS_CAPABLE_AGENTS } from './agents.js';
 
+/** Promisified exec for running shell commands. */
 const execAsync = promisify(exec);
 
 /**
@@ -799,6 +816,7 @@ export async function promptResourceSelection(agent: AgentId): Promise<ResourceS
   return selection;
 }
 
+/** Parsed agent@version specification from CLI input. */
 export interface AgentSpec {
   agent: AgentId;
   version: string;
@@ -1001,6 +1019,18 @@ export async function installVersion(
     // Create versioned alias (e.g., claude@2.0.65)
     createVersionedAlias(agent, installedVersion);
 
+    // Claude reads its global config from CLAUDE_CONFIG_DIR/.claude.json —
+    // i.e. inside the per-version .claude dir — while the rest of agents-cli
+    // manages the home-level file. Symlink INSIDE to OUTSIDE so Claude and
+    // agents-cli see the same content.
+    if (agent === 'claude') {
+      try {
+        ensureClaudeInsideSymlink(installedVersion);
+      } catch {
+        /* non-fatal; the install itself succeeded */
+      }
+    }
+
     return { success: true, installedVersion };
   } catch (err) {
     // Clean up on failure
@@ -1158,6 +1188,7 @@ export async function getInstalledVersion(agent: AgentId, version: string): Prom
   }
 }
 
+/** Outcome of syncing resources to a version home, keyed by resource type. */
 export interface SyncResult {
   commands: boolean;
   skills: boolean;
@@ -1169,6 +1200,7 @@ export interface SyncResult {
   plugins: string[];
 }
 
+/** Diff between central ~/.agents/ resources and what is synced to a version home. */
 export interface ResourceDiff {
   commands: { added: string[]; dangling: string[] };
   skills: { added: string[]; dangling: string[] };
@@ -1636,11 +1668,13 @@ export function getEffectiveHome(agentId: AgentId): string {
   return os.homedir();
 }
 
+/** Result of resolving agent/version targets from CLI input or interactive selection. */
 export interface VersionSelectionResult {
   selectedAgents: AgentId[];
   versionSelections: Map<AgentId, string[]>;
 }
 
+/** Extended target result that distinguishes managed versions from direct (unmanaged) agent homes. */
 export interface InstalledAgentTargetResult {
   selectedAgents: AgentId[];
   directAgents: AgentId[];

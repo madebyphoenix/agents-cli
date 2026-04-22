@@ -1,3 +1,13 @@
+/**
+ * Shim generation and config symlink management for agent version switching.
+ *
+ * Shims are small shell scripts placed in ~/.agents/shims/ that resolve the
+ * active agent version (project-level or user-default), then exec the real
+ * binary. Config isolation is achieved by symlinking ~/.{agent} into the
+ * per-version home directory. This module also handles versioned aliases
+ * (e.g., claude@2.0.65), PATH setup, conflict detection during migration,
+ * and resource diffing between versions.
+ */
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -185,8 +195,13 @@ export async function promptConflictStrategy(
  */
 export const SHIM_SCHEMA_VERSION = 4;
 
+/** Internal marker string used to embed the schema version in shim scripts. */
 const SHIM_VERSION_MARKER = 'agents-shim-version:';
 
+/**
+ * Generate the full bash shim script for the given agent. The returned string
+ * is written to ~/.agents/shims/{cliCommand} and made executable.
+ */
 export function generateShimScript(agent: AgentId): string {
   const agentConfig = AGENTS[agent];
   const cliCommand = agentConfig.cliCommand;
@@ -384,6 +399,7 @@ export function removeShim(agent: AgentId): boolean {
  */
 export const VERSIONED_ALIAS_SCHEMA_VERSION = 2;
 
+/** Internal marker string used to embed the schema version in versioned alias scripts. */
 const VERSIONED_ALIAS_VERSION_MARKER = 'agents-versioned-alias-version:';
 
 /**
@@ -436,6 +452,9 @@ export function readVersionedAliasSchemaVersion(agent: AgentId, version: string)
   }
 }
 
+/**
+ * True if the on-disk versioned alias matches the current schema version.
+ */
 export function isVersionedAliasCurrent(agent: AgentId, version: string): boolean {
   return readVersionedAliasSchemaVersion(agent, version) === VERSIONED_ALIAS_SCHEMA_VERSION;
 }
@@ -458,6 +477,9 @@ export function ensureVersionedAliasCurrent(agent: AgentId, version: string): 'c
   return 'current';
 }
 
+/**
+ * Get the filesystem path for a versioned alias script.
+ */
 export function getVersionedAliasPath(agent: AgentId, version: string): string {
   return path.join(getShimsDir(), `${AGENTS[agent].cliCommand}@${version}`);
 }
@@ -652,6 +674,15 @@ export function switchHomeFileSymlinks(
   const switched: string[] = [];
   const errors: string[] = [];
 
+  // For Claude, Claude's binary reads CLAUDE_CONFIG_DIR/.claude.json (INSIDE
+  // the per-version .claude dir) — not the home-level file this function
+  // manages. Reconcile all installed Claude versions so INSIDE is a symlink
+  // to OUTSIDE, making OUTSIDE the single source of truth.
+  if (agent === 'claude') {
+    const reconcile = ensureAllClaudeInsideSymlinks();
+    for (const e of reconcile.errors) errors.push(e);
+  }
+
   for (const fileName of homeFiles) {
     const globalPath = path.join(home, fileName);
     const versionFilePath = path.join(versionsDir, agent, version, 'home', fileName);
@@ -740,6 +771,111 @@ export function switchHomeFileSymlinks(
   }
 
   return { switched, errors };
+}
+
+/**
+ * Claude reads `.claude.json` at `$CLAUDE_CONFIG_DIR/.claude.json`. Our shim
+ * points CLAUDE_CONFIG_DIR at `<ver>/home/.claude`, so Claude's real config
+ * file lives at `<ver>/home/.claude/.claude.json` (INSIDE), while
+ * `switchHomeFileSymlinks` manages `<ver>/home/.claude.json` (OUTSIDE).
+ *
+ * To keep both views consistent we make INSIDE a symlink to OUTSIDE. Claude's
+ * atomic write (`Uf6`) resolves symlinks before the tmp+rename cycle, so the
+ * symlink survives across writes and OUTSIDE remains the single source of
+ * truth that agents-cli's home-file machinery already manages.
+ *
+ * This function idempotently reconciles one version:
+ *   - INSIDE missing: create symlink -> `../.claude.json` (create OUTSIDE if needed).
+ *   - INSIDE already symlink to OUTSIDE: no-op.
+ *   - INSIDE is a real file: it's the authoritative auth state (Claude was
+ *     writing to it). Move its content to OUTSIDE (merging with OUTSIDE,
+ *     INSIDE wins for `oauthAccount`), then replace INSIDE with the symlink.
+ *   - Symlink points elsewhere: replace it.
+ */
+export function ensureClaudeInsideSymlink(version: string): void {
+  const versionsDir = getVersionsDir();
+  const versionHome = path.join(versionsDir, 'claude', version, 'home');
+  const outsidePath = path.join(versionHome, '.claude.json');
+  const insideDir = path.join(versionHome, '.claude');
+  const insidePath = path.join(insideDir, '.claude.json');
+  const linkTarget = '../.claude.json'; // relative so version dir can be moved
+
+  if (!fs.existsSync(insideDir)) {
+    fs.mkdirSync(insideDir, { recursive: true });
+  }
+
+  let insideStat: fs.Stats | null = null;
+  try {
+    insideStat = fs.lstatSync(insidePath);
+  } catch {
+    /* INSIDE does not exist */
+  }
+
+  if (insideStat?.isSymbolicLink()) {
+    const currentTarget = fs.readlinkSync(insidePath);
+    if (currentTarget === linkTarget) return;
+    // Wrong target — replace.
+    if (!fs.existsSync(outsidePath)) fs.writeFileSync(outsidePath, '{}');
+    fs.unlinkSync(insidePath);
+    fs.symlinkSync(linkTarget, insidePath);
+    return;
+  }
+
+  if (insideStat?.isFile()) {
+    // INSIDE is the authoritative file — Claude has been reading/writing it.
+    // Merge INSIDE into OUTSIDE, with INSIDE winning on every field, then
+    // replace INSIDE with a symlink.
+    let insideContent: Record<string, unknown> = {};
+    try {
+      insideContent = JSON.parse(fs.readFileSync(insidePath, 'utf-8'));
+    } catch {
+      /* INSIDE corrupt — treat as empty; OUTSIDE preserved as-is */
+    }
+
+    let outsideContent: Record<string, unknown> = {};
+    if (fs.existsSync(outsidePath)) {
+      try {
+        outsideContent = JSON.parse(fs.readFileSync(outsidePath, 'utf-8'));
+      } catch {
+        /* OUTSIDE corrupt — drop it */
+      }
+    }
+
+    const merged = { ...outsideContent, ...insideContent };
+    fs.writeFileSync(outsidePath, JSON.stringify(merged, null, 2));
+    fs.unlinkSync(insidePath);
+    fs.symlinkSync(linkTarget, insidePath);
+    return;
+  }
+
+  // INSIDE missing — ensure OUTSIDE exists, then create symlink.
+  if (!fs.existsSync(outsidePath)) fs.writeFileSync(outsidePath, '{}');
+  fs.symlinkSync(linkTarget, insidePath);
+}
+
+/**
+ * Apply `ensureClaudeInsideSymlink` to every installed Claude version.
+ * Safe to call repeatedly; per-version calls are idempotent.
+ */
+export function ensureAllClaudeInsideSymlinks(): { migrated: string[]; errors: string[] } {
+  const versionsDir = getVersionsDir();
+  const claudeVersionsDir = path.join(versionsDir, 'claude');
+  const migrated: string[] = [];
+  const errors: string[] = [];
+
+  if (!fs.existsSync(claudeVersionsDir)) return { migrated, errors };
+
+  for (const entry of fs.readdirSync(claudeVersionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    try {
+      ensureClaudeInsideSymlink(entry.name);
+      migrated.push(entry.name);
+    } catch (err) {
+      errors.push(`${entry.name}: ${(err as Error).message}`);
+    }
+  }
+
+  return { migrated, errors };
 }
 
 /**
@@ -1111,7 +1247,8 @@ export function ensureAllShims(): void {
 }
 
 /**
- * Resource diff between two versions.
+ * Resource diff between two versions. Each field lists resources present in
+ * the current version but missing from the target.
  */
 export interface ResourceDiff {
   commands: string[];  // names in current but not in target
