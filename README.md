@@ -139,6 +139,8 @@ agents sessions a1b2c3d4 --last 3 --include user
 
 Interactive picker when you're in a terminal. Structured output (`--json`, `--markdown`, filtered by role or turn count) when piped.
 
+Backed by a SQLite + FTS5 index at `~/.agents/sessions/sessions.db` with incremental scanning -- warm reads in ~100ms. External tools can consume `--json` output as a programmatic observability layer; see [docs/05-sessions.md](docs/05-sessions.md) for the schema and [docs/06-observability.md](docs/06-observability.md) for the consumption patterns.
+
 ---
 
 ## Run open models through Claude Code
@@ -194,6 +196,8 @@ agents teams status auth-feature    # Who's working, what they changed, what the
 ```
 
 Teammates run detached -- close your terminal, they keep working. Check in with `teams status`, read full output with `teams logs <name>`, clean up with `teams disband`.
+
+Team state is observable via `agents teams list --json` / `agents teams status --json`. External tools join it with `sessions --json` (teammates get `isTeamOrigin: true`) and `cloud list --json` (for `--cloud` teammates) to build a unified fleet view. See [docs/06-observability.md](docs/06-observability.md).
 
 ---
 

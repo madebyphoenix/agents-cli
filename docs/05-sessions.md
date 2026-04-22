@@ -1,0 +1,173 @@
+# Sessions
+
+Unified discovery, search, and rendering of agent conversation transcripts across
+Claude, Codex, Gemini, OpenCode, and OpenClaw.
+
+## Architecture
+
+```
+~/.agents/
+  sessions/
+    sessions.db                 # SQLite + FTS5 index
+    sessions.db-wal             # Write-ahead log (WAL mode)
+
+Per-agent on-disk session files (not owned by agents-cli, read-only):
+~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl     # Claude
+~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl        # Codex
+~/.gemini/tmp/<project>/chats/session-*.json              # Gemini
+~/.local/share/opencode/project/*/storage/session/...     # OpenCode
+~/Library/Application Support/OpenClaw/sessions/*.json    # OpenClaw
+```
+
+## Discovery Flow
+
+```
+agents sessions [query] [--json] [--since 1h] [--all]
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  1. Open ~/.agents/sessions/sessions.db (cached connection)         │
+│                                                                     │
+│  2. Parallel incremental scan per agent:                            │
+│     For each on-disk session file:                                  │
+│       stat() -> (mtime, size)                                       │
+│       If unchanged since last scan -> skip (DB row is fresh)        │
+│       Else -> parse file, upsert sessions row + FTS5 content row    │
+│                                                                     │
+│  3. SQL query with filters (agent, cwd, since, project, limit)      │
+│     FTS5 search if [query] given, BM25 ranked                       │
+│                                                                     │
+│  4. Emit JSON (--json) or render interactively                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+Cold run re-parses everything. Warm run is mostly DB-only with a stat() per file;
+active sessions get refreshed each call because their mtime keeps advancing.
+
+## SessionMeta (list output)
+
+`agents sessions --json` returns an array of `SessionMeta`:
+
+```json
+{
+  "id": "c07ec355-d841-45fc-b2eb-f500355e15c6",
+  "shortId": "c07ec355",
+  "agent": "claude",
+  "version": "2.1.112",
+  "account": "muqsitnawaz@gmail.com",
+  "timestamp": "2026-04-22T13:37:14.047Z",
+  "project": "agents",
+  "cwd": "/Users/muqsit/src/github.com/muqsitnawaz/agents",
+  "gitBranch": "main",
+  "topic": "We integrated gpt-image-2 with quality-tiered pricing. Check the image-studio agent",
+  "label": null,
+  "messageCount": 9,
+  "tokenCount": 537397,
+  "isTeamOrigin": false,
+  "filePath": "/Users/muqsit/.claude/projects/-Users-.../c07ec355-....jsonl"
+}
+```
+
+Fields:
+
+| Field | Source | Notes |
+|---|---|---|
+| `id` | Agent-native UUID | Primary key; stable across reloads |
+| `shortId` | First 8 chars of `id` | For human matching in CLI output |
+| `agent` | One of 5 formats | See SessionAgentId union |
+| `timestamp` | Session start | ISO 8601 |
+| `project` | Derived from `cwd` | Basename of the working directory |
+| `cwd` | Recorded at spawn | Normalized absolute path |
+| `gitBranch` | Recorded at spawn | `null` outside a repo |
+| `topic` | First user prompt (truncated) | Best headline for a session |
+| `label` | User-set name | Claude's `/rename` command only |
+| `tokenCount` | Parsed from usage events | `null` for agents that don't log it |
+| `isTeamOrigin` | Set when spawned by `agents teams` | JSONL `entrypoint: 'sdk-cli'` |
+
+## SessionEvent (detail output)
+
+`agents sessions <id> --json` returns the normalized event array:
+
+```json
+[
+  { "type": "message", "role": "user", "timestamp": "...", "content": "..." },
+  { "type": "tool_use", "timestamp": "...", "tool": "Edit", "args": {...}, "path": "/repo/src/a.ts" },
+  { "type": "tool_result", "timestamp": "...", "tool": "Edit", "success": true },
+  { "type": "usage", "timestamp": "...", "model": "claude-opus-4-7", "inputTokens": 6, "outputTokens": 364 },
+  { "type": "thinking", "timestamp": "...", "content": "..." },
+  { "type": "message", "role": "assistant", "timestamp": "...", "content": "..." }
+]
+```
+
+The event types are an agent-agnostic union:
+
+| Type | Fields | Present for |
+|---|---|---|
+| `message` | `role`, `content` | All agents |
+| `tool_use` | `tool`, `args`, `path`, `command` | All agents |
+| `tool_result` | `tool`, `success`, `output` | All agents |
+| `thinking` | `content` | Claude, Codex (reasoning traces) |
+| `usage` | `model`, `inputTokens`, `outputTokens`, `cacheReadTokens` | Claude, Codex |
+| `attachment` | `mediaType`, `sizeBytes` | Claude (images, files) |
+| `init` | - | Session boot event |
+| `result` | - | Session completion event |
+| `error` | - | Recoverable parse errors |
+
+## Query Flags
+
+```bash
+# Current project, last 50 sessions
+agents sessions
+
+# All projects, last 20 from the past hour
+agents sessions --json --all --since 1h --limit 20
+
+# Filter by agent (and optional version)
+agents sessions --agent claude
+agents sessions --agent codex@0.116.0
+
+# FTS5 search (BM25 ranked, labels weighted highest)
+agents sessions "auth refactor"
+
+# Include team-spawned sessions (hidden by default)
+agents sessions --teams
+
+# Replay one session as markdown
+agents sessions c07ec355 --markdown
+
+# Full normalized event array for one session
+agents sessions c07ec355 --json --last 30
+
+# Role filtering
+agents sessions c07ec355 --json --include tools,assistant --last 20
+```
+
+## BM25 Column Weights
+
+FTS5 ranks search hits across four columns with these weights:
+
+```
+label   5.0   # /rename'd sessions rank highest
+topic   2.0   # first-prompt headline
+project 1.5   # project name
+content 1.0   # everything else
+```
+
+## Time Filters
+
+`--since` and `--until` accept:
+
+- Relative: `2h`, `7d`, `4w`, `30m`
+- ISO date: `2026-04-22T00:00:00Z`
+- Natural: `yesterday`, `today`
+
+## Schema Version
+
+Schema version is currently `4`. Migrations run on connection open; old DBs
+get upgraded in place. The `meta` table tracks `schema_version`.
+
+## Related
+
+- `agents sessions <id> --artifacts` — list files created/modified in a session
+- `agents teams status` — session state for team-coordinated runs
+- `agents cloud logs <id>` — for remote cloud dispatches (different subsystem)
