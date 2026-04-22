@@ -166,7 +166,7 @@ agents run <agent|profile> <prompt>   # Execute agent non-interactively (profile
 agents cloud run <prompt> --provider rush --repo owner/repo   # Dispatch to Rush Cloud (Factory Floor)
 agents cloud run <prompt> --provider codex --env env_abc123   # Dispatch to Codex Cloud
 agents cloud run task.md --repo owner/repo                    # Read prompt from file, default provider
-agents cloud list [--provider rush|codex] [--refresh]         # List tasks (local DB; --refresh queries provider)
+agents cloud list [--provider rush|codex]                     # List tasks (auto-refreshes in-flight tasks from provider)
 agents cloud status <id>                                      # Task detail + latest status from provider
 agents cloud logs <id> [-f]                                   # Stream live SSE output from running task
 agents cloud cancel <id>                                      # Cancel a running task
