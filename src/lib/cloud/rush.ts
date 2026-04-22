@@ -1,3 +1,10 @@
+/**
+ * Rush Cloud provider -- dispatches tasks to the Factory Floor via api.prix.dev.
+ *
+ * Auth: reads the session token from ~/.rush/user.yaml (written by `rush login`).
+ * Requires the Rush GitHub App installed on the target repo.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -9,6 +16,7 @@ import type {
   CloudEvent,
   DispatchOptions,
 } from './types.js';
+import { resolveDispatchRepos } from './types.js';
 import { parseSSE } from './stream.js';
 
 const PROXY_BASE = 'https://api.prix.dev';
@@ -30,7 +38,7 @@ interface Installation {
   repository_selection?: string;
 }
 
-/** Map Factory Floor status to our canonical status. */
+/** Map a Factory Floor status string to the canonical CloudTaskStatus enum. */
 function mapStatus(s: string): CloudTaskStatus {
   switch (s) {
     case 'allocating': return 'allocating';
@@ -43,6 +51,7 @@ function mapStatus(s: string): CloudTaskStatus {
   }
 }
 
+/** Read the Rush session access token from ~/.rush/user.yaml. */
 function readToken(): string {
   if (!fs.existsSync(USER_YAML)) {
     throw new Error('Not logged in to Rush. Run `rush login` first.');
@@ -56,6 +65,7 @@ function readToken(): string {
   return token;
 }
 
+/** Read the user's email from the Rush session config, if available. */
 function readEmail(): string | undefined {
   try {
     const raw = fs.readFileSync(USER_YAML, 'utf-8');
@@ -66,6 +76,7 @@ function readEmail(): string | undefined {
   }
 }
 
+/** Make an authenticated request to the Rush API proxy. */
 async function api(method: string, endpoint: string, token: string, body?: unknown): Promise<Response> {
   const url = endpoint.startsWith('http') ? endpoint : `${PROXY_BASE}${endpoint}`;
   const headers: Record<string, string> = {
@@ -79,6 +90,7 @@ async function api(method: string, endpoint: string, token: string, body?: unkno
   });
 }
 
+/** Find the GitHub App installation ID for a given owner/repo pair. */
 async function findInstallation(token: string, owner: string, repo: string): Promise<number> {
   const res = await api('GET', '/api/v1/github/app/installations', token);
   if (!res.ok) {
@@ -100,6 +112,36 @@ async function findInstallation(token: string, owner: string, repo: string): Pro
   );
 }
 
+/**
+ * Build the POST body for /api/v1/cloud-runs. Exported so tests can verify
+ * the back-compat shape (singular fields + repos[]) without needing real
+ * GitHub installations or a live Rush session. `findInstallation` is the
+ * only other I/O and it's tested by the halo/proxy integration suite.
+ */
+export function buildDispatchBody(input: {
+  agent?: string;
+  prompt: string;
+  mode?: string;
+  resolvedRepos: Array<{ installation_id: number; repo_owner: string; repo_name: string }>;
+}): Record<string, unknown> {
+  if (input.resolvedRepos.length === 0) {
+    throw new Error('buildDispatchBody: resolvedRepos must have at least one entry');
+  }
+  const primary = input.resolvedRepos[0];
+  const body: Record<string, unknown> = {
+    agent: input.agent ?? 'claude',
+    prompt: input.prompt,
+    repos: input.resolvedRepos,
+    mode: input.mode,
+  };
+  if (input.resolvedRepos.length === 1) {
+    body.installation_id = primary.installation_id;
+    body.repo_owner = primary.repo_owner;
+    body.repo_name = primary.repo_name;
+  }
+  return body;
+}
+
 export class RushCloudProvider implements CloudProvider {
   id = 'rush' as const;
   name = 'Rush Cloud';
@@ -109,26 +151,37 @@ export class RushCloudProvider implements CloudProvider {
   }
 
   async dispatch(options: DispatchOptions): Promise<CloudTask> {
-    if (!options.repo) {
-      throw new Error('Rush Cloud requires --repo <owner/repo>.');
+    const repos = resolveDispatchRepos(options);
+    if (repos.length === 0) {
+      throw new Error('Rush Cloud requires --repo <owner/repo> (or --repo repeated for multi-repo).');
     }
 
-    const [owner, repo] = options.repo.split('/');
-    if (!owner || !repo) {
-      throw new Error('Invalid repo format. Use owner/repo (e.g., muqsitnawaz/agents).');
-    }
-
+    // Validate each repo's shape and resolve its installation_id up front.
+    // Any bad entry fails the whole dispatch — we never want a half-started
+    // multi-repo run that only found installations for some of the repos.
     const token = readToken();
-    const installationId = await findInstallation(token, owner, repo);
+    const parsed = repos.map((full) => {
+      const parts = full.split('/');
+      if (parts.length !== 2 || !parts[0] || !parts[1]) {
+        throw new Error(`Invalid repo format: ${JSON.stringify(full)}. Use owner/repo.`);
+      }
+      return { full, owner: parts[0], name: parts[1] };
+    });
 
-    const body = {
-      agent: options.agent ?? 'claude',
+    const resolvedRepos = await Promise.all(
+      parsed.map(async (r) => ({
+        installation_id: await findInstallation(token, r.owner, r.name),
+        repo_owner: r.owner,
+        repo_name: r.name,
+      })),
+    );
+
+    const body = buildDispatchBody({
+      agent: options.agent,
       prompt: options.prompt,
-      installation_id: installationId,
-      repo_owner: owner,
-      repo_name: repo,
       mode: options.providerOptions?.mode,
-    };
+      resolvedRepos,
+    });
 
     const res = await api('POST', '/api/v1/cloud-runs', token, body);
     if (!res.ok) {
@@ -145,7 +198,8 @@ export class RushCloudProvider implements CloudProvider {
       status: 'queued',
       agent: options.agent ?? 'claude',
       prompt: options.prompt,
-      repo: options.repo,
+      repo: repos[0],
+      repos: repos,
       branch: options.branch,
       createdAt: now,
       updatedAt: now,

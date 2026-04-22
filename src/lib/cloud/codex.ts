@@ -1,3 +1,11 @@
+/**
+ * Codex Cloud provider -- wraps the `codex` CLI for cloud dispatch.
+ *
+ * Delegates to `codex cloud exec/status/list` subcommands, parsing their
+ * JSON or text output into the unified CloudTask format. Streaming is
+ * emulated via polling since Codex Cloud lacks an SSE endpoint.
+ */
+
 import { spawn, execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -9,10 +17,11 @@ import type {
   CloudEvent,
   DispatchOptions,
 } from './types.js';
+import { resolveDispatchRepos } from './types.js';
 
 const SHIMS_DIR = path.join(os.homedir(), '.agents', 'shims');
 
-/** Map Codex Cloud status strings to our canonical status. */
+/** Map a Codex Cloud status string to the canonical CloudTaskStatus enum. */
 function mapStatus(s: string): CloudTaskStatus {
   const lower = s.toLowerCase();
   if (lower.includes('queued') || lower.includes('pending')) return 'queued';
@@ -23,6 +32,7 @@ function mapStatus(s: string): CloudTaskStatus {
   return 'running';
 }
 
+/** Locate the codex binary, checking agents-cli shims first then PATH. */
 function findCodexBinary(): string | null {
   // Check agents-cli shims first
   const shim = path.join(SHIMS_DIR, 'codex');
@@ -36,10 +46,12 @@ function findCodexBinary(): string | null {
   }
 }
 
+/** Check whether the codex CLI is installed and reachable. */
 function codexAvailable(): boolean {
   return findCodexBinary() !== null;
 }
 
+/** Spawn the codex CLI with the given arguments and capture its output. */
 function runCodex(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   const bin = findCodexBinary();
   if (!bin) return Promise.resolve({ stdout: '', stderr: 'codex not found', code: 127 });
@@ -56,6 +68,7 @@ function runCodex(args: string[]): Promise<{ stdout: string; stderr: string; cod
   });
 }
 
+/** Best-effort parse of codex CLI output into task fields (tries JSON, then key:value lines). */
 function parseTaskFromText(text: string): Partial<CloudTask> {
   // Codex cloud list/status output varies. Try JSON first, then parse text.
   try {
@@ -97,6 +110,21 @@ export class CodexCloudProvider implements CloudProvider {
       throw new Error('Codex Cloud requires --env <id>. Set a default in ~/.agents/agents.yaml under cloud.providers.codex.env.');
     }
 
+    // Codex envs bundle their own repo list — the repos a task can touch are
+    // fixed at env-creation time, not per-dispatch. Passing 2+ repos here is
+    // almost always a misconfiguration: either the user meant to dispatch to
+    // Rush (which does support multi-repo), or they need to create/pick a
+    // Codex env that already contains those repos. Fail loudly rather than
+    // silently ignore the extras.
+    const repos = resolveDispatchRepos(options);
+    if (repos.length > 1) {
+      throw new Error(
+        `Codex Cloud does not support multi-repo dispatch. Got ${repos.length} repos (${repos.join(', ')}). ` +
+          `Codex envs bundle repos at the env layer — either configure a Codex env that includes all of these repos, ` +
+          `or switch to --provider rush (which clones each repo into /workspace/<owner>/<name>/).`,
+      );
+    }
+
     const args = ['cloud', 'exec', '--env', env];
     if (options.branch) args.push('--branch', options.branch);
     args.push(options.prompt);
@@ -116,6 +144,8 @@ export class CodexCloudProvider implements CloudProvider {
       status: 'queued',
       agent: 'codex',
       prompt: options.prompt,
+      repo: repos[0],
+      repos: repos.length > 0 ? repos : undefined,
       branch: options.branch,
       createdAt: now,
       updatedAt: now,
@@ -216,6 +246,7 @@ export class CodexCloudProvider implements CloudProvider {
   }
 }
 
+/** Extract a task ID from codex CLI output (JSON field, key:value line, or UUID pattern). */
 function extractTaskId(output: string): string | undefined {
   // Try JSON first
   try {

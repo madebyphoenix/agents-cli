@@ -1,17 +1,26 @@
+/**
+ * Cloud dispatch commands for running agent tasks on remote infrastructure.
+ *
+ * Provides a unified CLI for dispatching, monitoring, and managing tasks
+ * across multiple cloud providers (Rush Cloud, Codex Cloud, Factory/Droid).
+ * All tasks are tracked locally in a SQLite database for cross-provider listing.
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import * as fs from 'fs';
 import ora from 'ora';
 import { resolveProvider, getAllProviders, getDefaultProviderId } from '../lib/cloud/registry.js';
-import { insertTask, updateTaskStatus, getTaskById, listTasks as listStoredTasks } from '../lib/cloud/store.js';
+import { insertTask, updateTaskStatus, getTaskById, listTasks as listStoredTasks, listActiveTasks } from '../lib/cloud/store.js';
 import { renderStream } from '../lib/cloud/stream.js';
 import type { CloudProviderId, CloudTaskStatus, DispatchOptions } from '../lib/cloud/types.js';
 
+/** Print an error message to stderr and exit. */
 function die(msg: string, code = 1): never {
   console.error(chalk.red(msg));
   process.exit(code);
 }
 
+/** Format an ISO timestamp as a human-readable relative time string. */
 function relTime(iso: string): string {
   const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
   if (secs < 10) return 'just now';
@@ -26,6 +35,7 @@ function truncate(s: string, n: number): string {
   return s.slice(0, n - 1) + '...';
 }
 
+/** Return a chalk color function appropriate for the given task status. */
 function statusColor(status: string): (s: string) => string {
   switch (status) {
     case 'queued':
@@ -43,6 +53,7 @@ function isJsonMode(opts: { json?: boolean }): boolean {
   return Boolean(opts.json) || !process.stdout.isTTY;
 }
 
+/** Register the `agents cloud` command tree (run, list, status, logs, cancel, message, providers). */
 export function registerCloudCommands(program: Command): void {
   const cloud = program
     .command('cloud')
@@ -54,7 +65,15 @@ export function registerCloudCommands(program: Command): void {
     .description('Dispatch a task to a cloud agent.')
     .option('--provider <id>', 'Cloud backend: rush, codex, factory')
     .option('--agent <name>', 'Agent to run: claude, codex, droid')
-    .option('--repo <owner/repo>', 'GitHub repository (required for Rush Cloud)')
+    .option(
+      '--repo <owner/repo>',
+      'GitHub repository. Repeatable for multi-repo dispatch (Rush Cloud only).',
+      (value: string, previous: string[] | undefined) => {
+        const acc = Array.isArray(previous) ? previous : [];
+        acc.push(value);
+        return acc;
+      },
+    )
     .option('--branch <name>', 'Target git branch')
     .option('-p, --prompt <text>', 'Inline prompt (alternative to positional argument)')
     .option('--timeout <duration>', 'Kill after duration (e.g., 30m, 2h)')
@@ -69,6 +88,9 @@ Examples:
   # Rush Cloud
   agents cloud run "fix the flaky test" --provider rush --repo user/repo
   agents cloud run task.md --provider rush --repo org/project --agent codex
+
+  # Rush Cloud — multi-repo (clones each into /workspace/<owner>/<name>/)
+  agents cloud run "refactor shared logger" --provider rush --repo user/rush --repo user/agents
 
   # Codex Cloud
   agents cloud run "add auth tests" --provider codex --env env_abc123
@@ -90,10 +112,21 @@ Examples:
 
       const provider = resolveProvider(options.provider as string | undefined);
 
+      // --repo is repeatable: commander gives us an array via our collector.
+      // A single --repo value arrives as a one-element array; keep the legacy
+      // singular `repo` field in sync so providers that only know that field
+      // still dispatch correctly.
+      const repoValues = Array.isArray(options.repo)
+        ? (options.repo as string[])
+        : options.repo
+          ? [options.repo as string]
+          : [];
+
       const dispatchOptions: DispatchOptions = {
         prompt,
         agent: options.agent as string | undefined,
-        repo: options.repo as string | undefined,
+        repo: repoValues[0],
+        repos: repoValues.length > 0 ? repoValues : undefined,
         branch: options.branch as string | undefined,
         timeout: options.timeout as string | undefined,
         model: options.model as string | undefined,
@@ -145,7 +178,6 @@ Examples:
     .option('--provider <id>', 'Filter by provider')
     .option('--status <status>', 'Filter by status')
     .option('--limit <n>', 'Max results', '20')
-    .option('--refresh', 'Fetch latest status from provider before displaying')
     .option('--json', 'JSON output')
     .action(async (options: Record<string, unknown>) => {
       const json = isJsonMode(options as { json?: boolean });
@@ -153,14 +185,36 @@ Examples:
       const status = options.status as CloudTaskStatus | undefined;
       const limit = parseInt(options.limit as string, 10) || 20;
 
-      // If --refresh and a specific provider, fetch from remote
-      if (options.refresh && providerId) {
-        const provider = resolveProvider(providerId);
-        try {
-          const remoteTasks = await provider.list({ status });
-          for (const t of remoteTasks) insertTask(t);
-        } catch (err) {
-          process.stderr.write(chalk.yellow(`Could not refresh from ${provider.name}: ${(err as Error).message}\n`));
+      // Auto-refresh tasks still in transient states (queued, allocating, running, input_required).
+      // Groups by provider to minimise resolver calls, refreshes each via provider.status().
+      const activeTasks = listActiveTasks();
+      if (activeTasks.length > 0) {
+        const byProvider = new Map<CloudProviderId, string[]>();
+        for (const t of activeTasks) {
+          if (providerId && t.provider !== providerId) continue;
+          let ids = byProvider.get(t.provider);
+          if (!ids) { ids = []; byProvider.set(t.provider, ids); }
+          ids.push(t.id);
+        }
+
+        const refreshJobs: Promise<void>[] = [];
+        for (const [pid, ids] of byProvider) {
+          try {
+            const provider = resolveProvider(pid);
+            for (const id of ids) {
+              refreshJobs.push(
+                provider.status(id)
+                  .then((fresh) => { insertTask(fresh); })
+                  .catch(() => {}),  // stale cache is acceptable if API is down
+              );
+            }
+          } catch {
+            // provider not configured — skip
+          }
+        }
+
+        if (refreshJobs.length > 0) {
+          await Promise.allSettled(refreshJobs);
         }
       }
 
@@ -254,7 +308,7 @@ Examples:
       const json = isJsonMode(options as { json?: boolean });
 
       const task = getTaskById(id);
-      if (!task) die(`Task ${id} not found locally. Run 'agents cloud list --refresh' first.`);
+      if (!task) die(`Task ${id} not found locally. Run 'agents cloud list' first.`);
 
       const provider = resolveProvider(task.provider);
 

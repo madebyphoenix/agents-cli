@@ -1,3 +1,10 @@
+/**
+ * Server-Sent Events parser and terminal renderer for cloud task output.
+ *
+ * Used by `agents cloud logs -f` to stream live output from a running task
+ * and by the post-dispatch follow mode to show progress inline.
+ */
+
 import chalk from 'chalk';
 import type { CloudEvent } from './types.js';
 
@@ -122,6 +129,7 @@ export async function renderStream(
   return { status: lastStatus, summary, prUrl };
 }
 
+/** Map a task status string to a colored terminal label. */
 function statusLabel(status: string): string {
   switch (status) {
     case 'queued':

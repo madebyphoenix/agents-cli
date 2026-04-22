@@ -1,3 +1,10 @@
+/**
+ * Factory/Droid cloud provider -- stub for Phase 2.
+ *
+ * Will dispatch tasks to a `droid daemon` running on a remote machine.
+ * All methods throw until the droid daemon API is documented and stable.
+ */
+
 import type {
   CloudProvider,
   CloudTask,

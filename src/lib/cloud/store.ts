@@ -1,3 +1,11 @@
+/**
+ * Local SQLite persistence for cloud-dispatched tasks.
+ *
+ * Every dispatch, status poll, and list query flows through this module so
+ * that task history survives across CLI invocations without hitting the
+ * remote provider each time.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -29,6 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
 
 let _db: ReturnType<typeof Database> | null = null;
 
+/** Lazy-initialize the SQLite connection, creating the database and schema on first access. */
 function db(): ReturnType<typeof Database> {
   if (_db) return _db;
   fs.mkdirSync(CLOUD_DIR, { recursive: true });
@@ -38,6 +47,7 @@ function db(): ReturnType<typeof Database> {
   return _db;
 }
 
+/** Persist a task snapshot, replacing any existing row with the same ID. */
 export function insertTask(task: CloudTask): void {
   db().prepare(`
     INSERT OR REPLACE INTO tasks (id, provider, status, agent, prompt, repo, branch, pr_url, summary, created_at, updated_at)
@@ -57,6 +67,7 @@ export function insertTask(task: CloudTask): void {
   );
 }
 
+/** Update a task's status and optionally patch summary, PR URL, or branch. */
 export function updateTaskStatus(id: string, status: CloudTaskStatus, extra?: Partial<Pick<CloudTask, 'summary' | 'prUrl' | 'branch'>>): void {
   const now = new Date().toISOString();
   const sets = ['status = ?', 'updated_at = ?'];
@@ -79,11 +90,13 @@ export function updateTaskStatus(id: string, status: CloudTaskStatus, extra?: Pa
   db().prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...params);
 }
 
+/** Fetch a single task by its provider-assigned ID, or null if not found locally. */
 export function getTaskById(id: string): CloudTask | null {
   const row = db().prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
   return row ? rowToTask(row) : null;
 }
 
+/** List tasks with optional provider/status filters, ordered newest-first. */
 export function listTasks(filter?: { provider?: CloudProviderId; status?: CloudTaskStatus; limit?: number }): CloudTask[] {
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -104,6 +117,18 @@ export function listTasks(filter?: { provider?: CloudProviderId; status?: CloudT
   return rows.map(rowToTask);
 }
 
+const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
+
+/** Return tasks still in a transient state (queued, allocating, running, input_required). */
+export function listActiveTasks(): CloudTask[] {
+  const placeholders = TERMINAL_STATUSES.map(() => '?').join(', ');
+  const rows = db().prepare(
+    `SELECT * FROM tasks WHERE status NOT IN (${placeholders}) ORDER BY created_at DESC`,
+  ).all(...TERMINAL_STATUSES) as Record<string, unknown>[];
+  return rows.map(rowToTask);
+}
+
+/** Map a raw SQLite row to a typed CloudTask, converting snake_case columns to camelCase. */
 function rowToTask(row: Record<string, unknown>): CloudTask {
   return {
     id: row.id as string,
