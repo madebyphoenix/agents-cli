@@ -1,3 +1,12 @@
+/**
+ * Session discovery, search, and rendering commands.
+ *
+ * Implements `agents sessions` -- the unified interface for finding, browsing,
+ * and reading agent conversation transcripts across Claude, Codex, Gemini,
+ * and OpenCode. Supports interactive picker mode, text/path search, markdown
+ * and JSON rendering, role/turn filtering, artifact inspection, and session
+ * resume via agent-native CLI flags.
+ */
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -9,6 +18,7 @@ import type { AgentId } from '../lib/types.js';
 import type { SessionAgentId, SessionMeta, ViewMode } from '../lib/session/types.js';
 import { SESSION_AGENTS } from '../lib/session/types.js';
 import { discoverArtifacts, readArtifact, resolveArtifact } from '../lib/session/artifacts.js';
+import { getActiveSessions, type ActiveSession } from '../lib/session/active.js';
 import { discoverSessions, countSessionsInScope, resolveSessionById, searchContentIndex, parseTimeFilter, type DiscoverOptions, type ScanProgress } from '../lib/session/discover.js';
 import { filterTeamSessions } from '../lib/session/team-filter.js';
 import { parseSession } from '../lib/session/parse.js';
@@ -18,6 +28,7 @@ import { colorAgent } from '../lib/agents.js';
 import { resolveVersion } from '../lib/versions.js';
 import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
 import { sessionPicker, type PickedSession } from './sessions-picker.js';
+import { registerSessionsTailCommand } from './sessions-tail.js';
 
 const SESSION_AGENT_FILTER_HELP = `Filter by agent, e.g. claude, codex, claude@2.0.65`;
 
@@ -40,6 +51,7 @@ interface SessionsOptions extends SessionFilterOptions {
   last?: string;
   artifacts?: boolean;
   artifact?: string;
+  active?: boolean;
 }
 
 interface ClaudeHistoryEntry {
@@ -66,6 +78,7 @@ interface ProgressTracker {
   stop: () => void;
 }
 
+/** Build a spinner-backed progress tracker that cycles through verbs while scanning sessions. */
 function createScanProgressTracker(
   verbs: string[],
   suffix: string,
@@ -188,7 +201,92 @@ async function renderArtifactsForSession(
   console.log(chalk.gray(`\n${artifacts.length} artifact${artifacts.length !== 1 ? 's' : ''}.`));
 }
 
+function statusColor(status: ActiveSession['status']): (s: string) => string {
+  switch (status) {
+    case 'running': return chalk.green;
+    case 'idle': return chalk.gray;
+    case 'queued': return chalk.blue;
+    case 'input_required': return chalk.yellow;
+  }
+}
+
+function contextColor(context: ActiveSession['context']): (s: string) => string {
+  switch (context) {
+    case 'terminal': return chalk.magenta;
+    case 'teams': return chalk.cyan;
+    case 'cloud': return chalk.blue;
+    case 'headless': return chalk.gray;
+  }
+}
+
+function shortCwd(cwd?: string): string {
+  if (!cwd) return '-';
+  const home = os.homedir();
+  return cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd;
+}
+
+function formatStartedAt(startedAtMs?: number): string {
+  if (!startedAtMs) return '-';
+  return formatRelativeTime(new Date(startedAtMs).toISOString());
+}
+
+/** Render the unified active-session view. */
+async function renderActiveSessions(asJson: boolean): Promise<void> {
+  const sessions = await getActiveSessions();
+
+  if (asJson) {
+    process.stdout.write(JSON.stringify(sessions, null, 2) + '\n');
+    return;
+  }
+
+  if (sessions.length === 0) {
+    console.log(chalk.gray('No active agent sessions.'));
+    return;
+  }
+
+  for (const s of sessions) {
+    const kindCol = colorAgent(s.kind as any)(padRight(truncate(s.kind, 8), 9));
+    const ctxCol = contextColor(s.context)(padRight(truncate(s.context, 8), 9));
+    const hostCol = chalk.gray(padRight(truncate(s.host ?? '-', 8), 9));
+    const statusCol = statusColor(s.status)(padRight(truncate(s.status, 8), 9));
+    const pidCol = chalk.yellow(padRight(s.pid ? String(s.pid) : '-', 7));
+    const idCol = chalk.white(padRight(s.sessionId ? s.sessionId.slice(0, 8) : '-', 10));
+    const detail = s.context === 'cloud'
+      ? `${s.cloudProvider ?? ''}${s.cloudTaskId ? ` · ${s.cloudTaskId.slice(0, 12)}` : ''}`
+      : s.context === 'teams'
+        ? `${s.teamName ?? ''}${s.label ? ` · ${s.label}` : ''}`
+        : s.label ?? shortCwd(s.cwd);
+
+    console.log(
+      pidCol +
+      kindCol +
+      ctxCol +
+      hostCol +
+      statusCol +
+      idCol +
+      chalk.cyan(padRight(truncate(detail || '-', 30), 32)) +
+      chalk.gray(formatStartedAt(s.startedAtMs))
+    );
+  }
+
+  const runningCount = sessions.filter(s => s.status === 'running').length;
+  const idleCount = sessions.filter(s => s.status === 'idle').length;
+  const queuedCount = sessions.filter(s => s.status === 'queued' || s.status === 'input_required').length;
+
+  const parts: string[] = [];
+  if (runningCount > 0) parts.push(`${runningCount} running`);
+  if (idleCount > 0) parts.push(`${idleCount} idle`);
+  if (queuedCount > 0) parts.push(`${queuedCount} queued`);
+  console.log(chalk.gray(`\n${sessions.length} active (${parts.join(', ')}).`));
+}
+
+/** Main action handler for `agents sessions`. Routes to picker, table, or single-session render. */
 async function sessionsAction(query: string | undefined, options: SessionsOptions): Promise<void> {
+  if (options.active) {
+    await renderActiveSessions(options.json === true);
+    return;
+  }
+
   let filterOpts: FilterOptions;
   try {
     filterOpts = buildFilterOptions(options);
@@ -670,6 +768,7 @@ function formatSearchMessage(options: SessionFilterOptions): string {
   return `Search sessions (${filters.join(', ')}):`;
 }
 
+/** Filter and rank sessions by a multi-term search query across metadata and content. */
 export function filterSessionsByQuery(
   sessions: SessionMeta[],
   query: string | undefined,
@@ -921,8 +1020,9 @@ async function renderOneSession(
   }
 }
 
+/** Register the `agents sessions` command with all its options and help text. */
 export function registerSessionsCommands(program: Command): void {
-  program
+  const sessionsCmd = program
     .command('sessions')
     .argument('[query]', 'Session ID, search query, or path (., ../, /path) to filter by project')
     .description('Find, browse, and read agent conversation transcripts across Claude, Codex, Gemini, and OpenCode.')
@@ -941,6 +1041,7 @@ export function registerSessionsCommands(program: Command): void {
     .option('--last <n>', 'Keep only the last N turns (a turn starts at each user message)')
     .option('--artifacts', 'List all files written or edited during a session')
     .option('--artifact <name>', 'Read a specific artifact by filename or path (outputs to stdout)')
+    .option('--active', 'Show only sessions running right now across terminals, teams, cloud, and headless agents')
     .addHelpText('after', `
 Examples:
   # Interactive picker: browse and search recent sessions (TTY only)
@@ -988,6 +1089,10 @@ Examples:
   # Include team-spawned sessions in results
   agents sessions --teams
 
+  # Show only live sessions across terminals, teams, cloud, and headless agents
+  agents sessions --active
+  agents sessions --active --json
+
 Notes:
   - --include and --exclude are mutually exclusive.
   - --first and --last are mutually exclusive.
@@ -996,6 +1101,8 @@ Notes:
     .action(async (query: string | undefined, options: SessionsOptions) => {
       await sessionsAction(query, options);
     });
+
+  registerSessionsTailCommand(sessionsCmd);
 }
 
 function formatNoSessionsMessage(

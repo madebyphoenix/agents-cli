@@ -1,3 +1,10 @@
+/**
+ * Team management commands for organizing multi-agent collaboration.
+ *
+ * Implements `agents teams` -- create named teams, add teammates (background
+ * agent processes), check status with session-aware previews, manage DAG
+ * dependencies between teammates, and clean up when work is done.
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import * as fs from 'fs/promises';
@@ -6,8 +13,15 @@ import {
   AgentManager,
   checkAllClis,
   getAgentsDir,
+  VALID_TASK_TYPES,
   type AgentType,
+  type TaskType,
 } from '../lib/teams/agents.js';
+import { resolveProvider } from '../lib/cloud/registry.js';
+import type { CloudProviderId, DispatchOptions } from '../lib/cloud/types.js';
+import { resolveLedger, syncTeammate } from '../lib/ledger/index.js';
+import { maybeFileBugfix } from '../lib/teams/oracle.js';
+import { runSupervisor } from '../lib/teams/supervisor.js';
 import {
   handleSpawn,
   handleStatus,
@@ -49,6 +63,7 @@ const AGENT_NAMES: Record<AgentType, string> = {
 const VALID_AGENTS = Object.keys(AGENT_NAMES) as AgentType[];
 const VALID_MODES = ['plan', 'edit', 'full'] as const;
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'auto'] as const;
+const VALID_CLOUD_PROVIDERS = ['rush', 'codex', 'factory'] as const satisfies readonly CloudProviderId[];
 
 type Mode = (typeof VALID_MODES)[number];
 type Effort = (typeof VALID_EFFORTS)[number];
@@ -89,6 +104,10 @@ function truncate(s: string, n: number): string {
   return s.slice(0, n - 1) + '…';
 }
 
+function padRight(s: string, width: number): string {
+  return s.length >= width ? s : s + ' '.repeat(width - s.length);
+}
+
 function fullName(type: AgentType, version: string | null | undefined): string {
   const name = AGENT_NAMES[type];
   return version ? `${name} ${version}` : name;
@@ -107,6 +126,123 @@ function parseTeammate(spec: string): { agent: AgentType; version: string | null
 
 function shortId(id: string): string {
   return id.slice(0, 8);
+}
+
+/**
+ * Preamble injected into every factory worker's prompt. Tells the worker:
+ *  - which team + teammate name + task-type it is
+ *  - the 4 Ledger MCP tools it has access to
+ *  - how to file more tasks via `agents teams add`
+ *
+ * The actual how-to lives in the /factory-worker skill; this preamble just
+ * summarises and points at it so workers get the dynamic-DAG pattern even
+ * when the spawning agent forgets to mention it.
+ */
+function factoryWorkerPreamble(
+  team: string,
+  name: string | null,
+  taskType: TaskType,
+  after: string[]
+): string {
+  const n = name ?? '<anonymous>';
+  const deps = after.length > 0 ? after.join(', ') : '(none)';
+  return [
+    `FACTORY WORKER — team="${team}", name="${n}", task_type="${taskType}", after=${deps}`,
+    `You are a teammate in a Software Factory. Read the /factory-worker skill for the full pattern.`,
+    `Key rules:`,
+    ` - Other teammates may be running now. Coordinate via git, tests, and the Team Ledger (never peer-to-peer).`,
+    ` - Read dependency outputs via MCP: LedgerRead(team_id="${team}", task_id=<dep-agent-id>).`,
+    ` - If you discover work beyond your task, file a new teammate via Bash:`,
+    `     agents teams add "${team}" claude "<ask>" --name <slug> --task-type <implement|test|review|bugfix|docs> [--after <dep>]`,
+    `   A background supervisor picks up new tasks every wave.`,
+    ` - Before exiting, call LedgerNote(team_id="${team}", task_id=<your-agent-id>, teammate="${n}", text="...") with what you tried, what failed, what worked.`,
+    ` - test-type teammates: print "TESTS: N passed, M failed" as your last line. Failed tests auto-file a bugfix.`,
+    ``,
+    `YOUR TASK:`,
+  ].join('\n');
+}
+
+/**
+ * Build an AgentManager with the Ledger sync hook pre-wired. Every `teams`
+ * command call path that touches status goes through this so completions
+ * automatically land in the Ledger.
+ */
+function mkManager(): AgentManager {
+  const mgr = new AgentManager();
+  const ledger = resolveLedger();
+  mgr.setCompletionHook(async (agent) => {
+    // 1. Push teammate outputs to the Ledger so other teammates can read
+    //    them via MCP tools.
+    const snap = await agent.toSnapshot();
+    await syncTeammate(snap, ledger);
+    // 2. Run the test-oracle: failed test-type teammates auto-file a
+    //    bugfix teammate.
+    await maybeFileBugfix(agent, mgr);
+  });
+  return mgr;
+}
+
+/**
+ * Register the generic cloud dispatcher — staged cloud teammates get
+ * dispatched when their --after deps resolve, using repo/branch stored on
+ * the teammate itself so we don't need the original --cloud CLI args.
+ */
+export function wireCloudDispatcher(mgr: AgentManager): void {
+  mgr.setCloudDispatcher(async (a) => {
+    if (!a.cloudProvider) {
+      throw new Error(`Teammate ${a.agentId} has no cloud provider set`);
+    }
+    const prov = resolveProvider(a.cloudProvider as CloudProviderId);
+    const dispatchOpts: DispatchOptions = {
+      prompt: a.prompt,
+      agent: a.agentType,
+      repo: a.cloudRepo ?? undefined,
+      branch: a.cloudBranch ?? undefined,
+      model: a.model ?? undefined,
+    };
+    const cloudTask = await prov.dispatch(dispatchOpts);
+    return { cloudSessionId: cloudTask.id };
+  });
+}
+
+/** Single-wave start used by `teams start` without --watch. */
+async function runOneWave(mgr: AgentManager, team: string, json: boolean): Promise<void> {
+  const launched = await mgr.startReady(team);
+  const all = await mgr.listByTask(team);
+  const stillPending = all.filter((a) => a.status === 'pending');
+
+  if (json) {
+    console.log(
+      JSON.stringify({
+        team,
+        launched: launched.map((a) => ({ agent_id: a.agentId, name: a.name, after: a.after })),
+        still_pending: stillPending.map((a) => ({ agent_id: a.agentId, name: a.name, after: a.after })),
+      }, null, 2)
+    );
+    return;
+  }
+
+  if (launched.length === 0 && stillPending.length === 0) {
+    console.log(chalk.gray(`No pending teammates in team ${team}.`));
+    return;
+  }
+
+  if (launched.length > 0) {
+    console.log(chalk.green(`Launched ${launched.length} teammate(s) in team ${chalk.cyan(team)}:`));
+    for (const a of launched) {
+      const who = fullName(a.agentType as AgentType, a.version);
+      const h = a.name || shortId(a.agentId);
+      console.log(`  ${chalk.cyan(h)}  ${who}`);
+    }
+  }
+  if (stillPending.length > 0) {
+    console.log();
+    console.log(chalk.gray(`Still pending (${stillPending.length}):`));
+    for (const a of stillPending) {
+      const h = a.name || shortId(a.agentId);
+      console.log(`  ${chalk.blue(h)}  ${chalk.gray('after')} ${a.after.join(', ')}`);
+    }
+  }
 }
 
 // Pick the display handle for a teammate: their given name if they have one,
@@ -435,6 +571,7 @@ async function pickTeamOr(
   }
 }
 
+/** Register the `agents teams` command tree (list, create, add, status, start, remove, disband, logs, doctor). */
 export function registerTeamsCommands(program: Command): void {
   const teams = program
     .command('teams')
@@ -498,7 +635,7 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
       agent?: string; status?: string; since?: string; until?: string;
       limit: string; json?: boolean;
     }) => {
-      const mgr = new AgentManager();
+      const mgr = mkManager();
       const limit = Math.max(1, parseInt(opts.limit, 10) || 20);
       const [tasks, registry, everyAgent] = await Promise.all([
         handleTasks(mgr, 1000),
@@ -647,16 +784,40 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
     )
     .option('--cwd <dir>', 'Working directory for this teammate (default: current directory)')
     .option('--after <names>', "DAG dependencies: comma-separated teammate names to wait for. Stages as PENDING; run 'teams start' to launch when ready.")
+    .option('--task-type <type>', `Factory label: ${VALID_TASK_TYPES.join('|')}. Drives planner fan-out + test-oracle bugfix loop.`)
+    .option('--cloud <provider>', `Dispatch to cloud backend instead of local CLI: ${VALID_CLOUD_PROVIDERS.join('|')}`)
+    .option('--repo <owner/repo>', 'GitHub repository (required for --cloud rush)')
+    .option('--branch <name>', 'Target git branch for cloud dispatch')
     .option('--json', 'Output machine-readable JSON')
     .action(async (team: string, teammate: string, task: string, opts: {
       name?: string; mode: string; effort: string; model?: string; env: string[];
       cwd?: string; after?: string; json?: boolean;
+      taskType?: string; cloud?: string; repo?: string; branch?: string;
     }) => {
       if (!(VALID_MODES as readonly string[]).includes(opts.mode)) {
         die(`Invalid mode '${opts.mode}'. Use one of: ${VALID_MODES.join(', ')}`);
       }
       if (!(VALID_EFFORTS as readonly string[]).includes(opts.effort)) {
         die(`Invalid effort '${opts.effort}'. Use one of: ${VALID_EFFORTS.join(', ')}`);
+      }
+
+      let taskType: TaskType | null = null;
+      if (opts.taskType) {
+        if (!(VALID_TASK_TYPES as readonly string[]).includes(opts.taskType)) {
+          die(`Invalid task-type '${opts.taskType}'. Use one of: ${VALID_TASK_TYPES.join(', ')}`);
+        }
+        taskType = opts.taskType as TaskType;
+      }
+
+      let cloudProviderId: CloudProviderId | null = null;
+      if (opts.cloud) {
+        if (!(VALID_CLOUD_PROVIDERS as readonly string[]).includes(opts.cloud)) {
+          die(`Invalid cloud provider '${opts.cloud}'. Use one of: ${VALID_CLOUD_PROVIDERS.join(', ')}`);
+        }
+        cloudProviderId = opts.cloud as CloudProviderId;
+        if (cloudProviderId === 'rush' && !opts.repo) {
+          die(`--cloud rush requires --repo <owner/repo>`);
+        }
       }
 
       const { agent, version } = parseTeammate(teammate);
@@ -692,13 +853,62 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
       await ensureTeam(team);
 
       const cwd = opts.cwd ?? process.cwd();
-      const mgr = new AgentManager();
+      const mgr = mkManager();
+
+      // Factory teammates: prepend the worker-skill preamble to every task
+      // prompt so implementers/testers/reviewers know about the Ledger, the
+      // dynamic DAG, and the pattern for filing new tasks mid-flight. No
+      // preamble when --task-type isn't set (plain teammates work as before).
+      let effectiveTask = task;
+      if (taskType) {
+        effectiveTask = factoryWorkerPreamble(team, opts.name ?? null, taskType, after) + '\n\n' + task;
+      }
+
+      // Dispatcher callback: when a staged cloud teammate's deps resolve,
+      // AgentManager.startReady() invokes this to kick off the remote task.
+      if (cloudProviderId) {
+        const providerId = cloudProviderId;
+        mgr.setCloudDispatcher(async (a) => {
+          const prov = resolveProvider(providerId);
+          const dispatchOpts: DispatchOptions = {
+            prompt: a.prompt,
+            agent: a.agentType,
+            repo: opts.repo,
+            branch: opts.branch,
+            model: a.model ?? undefined,
+          };
+          const cloudTask = await prov.dispatch(dispatchOpts);
+          return { cloudSessionId: cloudTask.id };
+        });
+      }
+
+      let cloudSessionId: string | null = null;
+      const isStaged = after.length > 0;
+      if (cloudProviderId && !isStaged) {
+        // Ready to run now: dispatch to the cloud provider before registering
+        // the teammate so we have the remote session id up front.
+        const prov = resolveProvider(cloudProviderId);
+        const dispatchOpts: DispatchOptions = {
+          prompt: effectiveTask,
+          agent,
+          repo: opts.repo,
+          branch: opts.branch,
+          model: opts.model,
+        };
+        try {
+          const cloudTask = await prov.dispatch(dispatchOpts);
+          cloudSessionId = cloudTask.id;
+        } catch (err) {
+          die(`Cloud dispatch failed: ${(err as Error).message}`);
+        }
+      }
+
       try {
         const result = await handleSpawn(
           mgr,
           team,
           agent,
-          task,
+          effectiveTask,
           cwd,
           opts.mode as Mode,
           opts.effort as Effort,
@@ -708,7 +918,12 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
           opts.name ?? null,
           after,
           opts.model ?? null,
-          envOverrides ?? null
+          envOverrides ?? null,
+          taskType,
+          cloudProviderId,
+          cloudSessionId,
+          opts.repo ?? null,
+          opts.branch ?? null
         );
 
         if (isJsonMode(opts)) {
@@ -729,6 +944,12 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
         console.log(`  ${chalk.gray('status  ')}  ${statusColor(result.status)(result.status)}`);
         console.log(`  ${chalk.gray('mode    ')}  ${opts.mode}`);
         console.log(`  ${chalk.gray('working ')}  ${cwd}`);
+        if (result.task_type) {
+          console.log(`  ${chalk.gray('task    ')}  ${chalk.cyan(result.task_type)}`);
+        }
+        if (result.cloud_provider) {
+          console.log(`  ${chalk.gray('cloud   ')}  ${chalk.magenta(result.cloud_provider)}${result.cloud_session_id ? chalk.gray(' — ' + result.cloud_session_id.slice(0, 12)) : ''}`);
+        }
         if (result.after && result.after.length) {
           console.log(`  ${chalk.gray('after   ')}  ${result.after.join(', ')}`);
         }
@@ -757,7 +978,7 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
     }) => {
       // Map friendly 'working' → internal 'running' for filter.
       const filter = opts.filter === 'working' ? 'running' : opts.filter;
-      const mgr = new AgentManager();
+      const mgr = mkManager();
 
       // No team given → drop into the picker (TTY) or fail clearly (script).
       if (!team) {
@@ -789,13 +1010,65 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
       }
     });
 
+  // active — list every live teammate across every team, grouped by team.
+  teams
+    .command('active')
+    .description('List every teammate running right now, across all teams (PID-alive check).')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (opts: { json?: boolean }) => {
+      const mgr = mkManager();
+      const running = await mgr.listRunning();
+
+      if (isJsonMode(opts)) {
+        console.log(JSON.stringify({ agents: running.map((a) => ({
+          agent_id: a.agentId,
+          team: a.taskName,
+          name: a.name,
+          agent_type: a.agentType,
+          pid: a.pid,
+          started_at: a.startedAt.toISOString(),
+          cwd: a.cwd,
+          version: a.version,
+        })) }, null, 2));
+        return;
+      }
+
+      if (running.length === 0) {
+        console.log(chalk.gray('No teammates are running right now.'));
+        return;
+      }
+
+      const byTeam = new Map<string, typeof running>();
+      for (const a of running) {
+        const arr = byTeam.get(a.taskName) || [];
+        arr.push(a);
+        byTeam.set(a.taskName, arr);
+      }
+
+      for (const [team, agents] of byTeam) {
+        console.log(chalk.bold(`Team ${chalk.cyan(team)}  ${chalk.gray(`(${agents.length} working)`)}`));
+        for (const a of agents) {
+          const ident = a.name || shortId(a.agentId);
+          const pidStr = a.pid ? chalk.yellow(`pid ${a.pid}`) : chalk.gray('pid ?');
+          const started = chalk.gray(relTime(a.startedAt.toISOString()));
+          console.log(`  ${chalk.magenta(padRight(fullName(a.agentType, a.version), 18))}  ${chalk.white(padRight(ident, 20))}  ${pidStr}  ${started}`);
+        }
+        console.log();
+      }
+      console.log(chalk.gray(`${running.length} teammate${running.length === 1 ? '' : 's'} running. See 'agents sessions --active' for the full cross-context view.`));
+    });
+
   // start — fire any staged teammates whose --after deps have all completed
   teams
     .command('start [team]')
-    .description('Launch any pending teammates whose --after dependencies are satisfied. Re-run to advance the DAG as teammates finish.')
+    .description('Launch any pending teammates whose --after dependencies are satisfied. Use --watch to keep draining the DAG as teammates finish and as new tasks are added mid-flight.')
     .option('--json', 'Output machine-readable JSON')
-    .action(async (team: string | undefined, opts: { json?: boolean }) => {
-      const mgr = new AgentManager();
+    .option('--watch', 'Keep running: poll every --interval seconds, fire new waves, exit when the DAG drains.')
+    .option('--interval <seconds>', 'Seconds between waves in --watch mode (default 8)', '8')
+    .option('--max-waves <n>', 'Safety cap on waves in --watch mode (default 1000)', '1000')
+    .action(async (team: string | undefined, opts: { json?: boolean; watch?: boolean; interval: string; maxWaves: string }) => {
+      const mgr = mkManager();
+      wireCloudDispatcher(mgr);
 
       if (!team) {
         const picked = await pickTeamOr(mgr, 'agents teams start');
@@ -803,55 +1076,44 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
         team = picked;
       }
 
-      const launched = await mgr.startReady(team);
-      // Also compute which teammates are still pending + why, so the user
-      // knows what's being waited on.
-      const all = await mgr.listByTask(team);
-      const stillPending = all.filter((a) => a.status === 'pending');
-
-      if (isJsonMode(opts)) {
-        console.log(
-          JSON.stringify(
-            {
-              team,
-              launched: launched.map((a) => ({
-                agent_id: a.agentId,
-                name: a.name,
-                after: a.after,
-              })),
-              still_pending: stillPending.map((a) => ({
-                agent_id: a.agentId,
-                name: a.name,
-                after: a.after,
-              })),
-            },
-            null,
-            2
-          )
-        );
+      if (!opts.watch) {
+        await runOneWave(mgr, team, Boolean(opts.json));
         return;
       }
 
-      if (launched.length === 0 && stillPending.length === 0) {
-        console.log(chalk.gray(`No pending teammates in team ${team}.`));
-        return;
-      }
+      const intervalMs = Math.max(1000, Number.parseInt(opts.interval, 10) * 1000 || 8000);
+      const maxWaves = Math.max(1, Number.parseInt(opts.maxWaves, 10) || 1000);
+      const json = isJsonMode(opts);
 
-      if (launched.length > 0) {
-        console.log(chalk.green(`Launched ${launched.length} teammate(s) in team ${chalk.cyan(team)}:`));
-        for (const a of launched) {
-          const who = fullName(a.agentType as AgentType, a.version);
-          const h = a.name || shortId(a.agentId);
-          console.log(`  ${chalk.cyan(h)}  ${who}`);
-        }
-      }
-      if (stillPending.length > 0) {
-        console.log();
-        console.log(chalk.gray(`Still pending (${stillPending.length}):`));
-        for (const a of stillPending) {
-          const h = a.name || shortId(a.agentId);
-          console.log(`  ${chalk.blue(h)}  ${chalk.gray('after')} ${a.after.join(', ')}`);
-        }
+      const result = await runSupervisor(mgr, {
+        team,
+        intervalMs,
+        maxWaves,
+        onWave: (s) => {
+          const ts = s.timestamp.slice(11, 19);
+          if (json) {
+            console.log(JSON.stringify({
+              wave: s.wave, ts, team: s.team, launched: s.launched.length,
+              pending: s.pending, running: s.running, completed: s.completed, failed: s.failed,
+            }));
+            return;
+          }
+          console.log(
+            `[${ts}] wave ${s.wave}  team ${chalk.cyan(s.team)}  ` +
+            `launched=${chalk.green(s.launched.length)}  running=${chalk.yellow(s.running)}  ` +
+            `pending=${chalk.blue(s.pending)}  done=${chalk.green(s.completed)}  ` +
+            `failed=${s.failed > 0 ? chalk.red(s.failed) : '0'}`
+          );
+        },
+      });
+
+      const elapsed = Math.floor(result.elapsed_ms / 1000);
+      if (result.stoppedBy === 'drained') {
+        console.log(chalk.green(`Factory drained in ${elapsed}s (${result.waves} waves).`));
+      } else if (result.stoppedBy === 'max-waves') {
+        console.error(chalk.yellow(`Hit --max-waves=${maxWaves}; stopping. Re-run to continue.`));
+      } else if (result.stoppedBy === 'signal') {
+        console.error(chalk.yellow(`Stopped by signal after ${result.waves} waves.`));
       }
     });
 
@@ -863,7 +1125,7 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
     .option('--keep-logs', 'Keep their log files on disk (default: delete them)')
     .option('--json', 'Output machine-readable JSON')
     .action(async (team: string | undefined, ref: string | undefined, opts: { keepLogs?: boolean; json?: boolean }) => {
-      const mgr = new AgentManager();
+      const mgr = mkManager();
 
       if (!team) {
         const { names } = await loadTeamRows(mgr);
@@ -932,7 +1194,7 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
     .option('--keep-logs', 'Keep all teammate logs on disk (default: delete them)')
     .option('--json', 'Output machine-readable JSON')
     .action(async (team: string | undefined, opts: { keepLogs?: boolean; json?: boolean }) => {
-      const mgr = new AgentManager();
+      const mgr = mkManager();
 
       if (!team) {
         const { names } = await loadTeamRows(mgr);
@@ -987,7 +1249,7 @@ Name teammates with --name alice to refer to them as 'alice' instead of a UUID.
       // No teammate → picker in TTY, hard fail outside.
       let agentId: string;
       if (!ref) {
-        const mgr = new AgentManager();
+        const mgr = mkManager();
         const picked = await pickTeammateOr(mgr, 'agents teams logs');
         if (!picked) return;
         agentId = picked.agentId;
