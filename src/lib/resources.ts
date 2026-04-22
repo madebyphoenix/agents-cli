@@ -12,22 +12,26 @@ import { listInstalledInstructionsWithScope } from './memory.js';
 import { getEffectiveHome } from './versions.js';
 import { listMcpServerConfigs } from './mcp.js';
 
+/** A single installed resource (command, skill, memory file, or hook). */
 export interface ResourceEntry {
   name: string;
   path: string;
   scope: 'user' | 'project';
 }
 
+/** A skill resource entry with optional rule count. */
 export interface SkillResourceEntry extends ResourceEntry {
   ruleCount?: number;
 }
 
+/** An MCP server resource entry. */
 export interface McpResourceEntry {
   name: string;
   scope: 'user' | 'project';
   version?: string;
 }
 
+/** All resources installed for a specific agent. */
 export interface AgentResources {
   agentId: AgentId;
   commands: ResourceEntry[];
@@ -38,6 +42,7 @@ export interface AgentResources {
   hooks: ResourceEntry[];
 }
 
+/** Options for resource discovery. */
 export interface GetAgentResourcesOptions {
   cwd?: string;
   scope?: 'user' | 'project' | 'all';

@@ -1,3 +1,10 @@
+/**
+ * Interactive session picker and preview renderer.
+ *
+ * Powers the fuzzy-searchable session list shown by `agents sessions` in a TTY.
+ * Builds a compact preview for each session (prompt, activity summary, last
+ * response) and delegates to the generic `itemPicker` for the interactive UI.
+ */
 import chalk from 'chalk';
 import type { SessionEvent, SessionMeta } from '../lib/session/types.js';
 import { parseSession } from '../lib/session/parse.js';
@@ -22,6 +29,7 @@ export interface SessionPickerConfig {
 
 const previewCache = new Map<string, string>();
 
+/** Build a cached multi-line preview string for display in the session picker. */
 export function buildPreview(session: SessionMeta): string {
   const cached = previewCache.get(session.id);
   if (cached) return cached;
@@ -258,6 +266,7 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
+/** Show an interactive session picker and return the selected session with its action (resume or view). */
 export async function sessionPicker(config: SessionPickerConfig): Promise<PickedSession | null> {
   const picked = await itemPicker<SessionMeta>({
     message: config.message,

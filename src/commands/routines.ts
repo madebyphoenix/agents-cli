@@ -1,3 +1,11 @@
+/**
+ * Scheduled routines management.
+ *
+ * Registers the `agents routines` command tree for creating, editing,
+ * running, pausing, and removing cron-scheduled agent invocations.
+ * Also exposes scheduler lifecycle controls (start/stop/status/logs).
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -32,6 +40,7 @@ import { executeJob } from '../lib/runner.js';
 import { JobScheduler } from '../lib/scheduler.js';
 import { isInteractiveTerminal, requireInteractiveSelection } from './utils.js';
 
+/** Start or reload the background scheduler so newly-added jobs fire on time. */
 function ensureSchedulerRunning(): void {
   if (isDaemonRunning()) {
     signalDaemonReload();
@@ -47,6 +56,7 @@ function ensureSchedulerRunning(): void {
   }
 }
 
+/** Detect Ctrl+C or premature stream close during an interactive prompt. */
 function isPromptCancelled(err: unknown): boolean {
   return (
     err instanceof Error &&
@@ -56,6 +66,7 @@ function isPromptCancelled(err: unknown): boolean {
   );
 }
 
+/** Interactive job picker. Returns the selected job name or null on cancel/empty. */
 async function pickJob(
   message: string,
   filter?: (job: JobConfig) => boolean,
@@ -93,6 +104,7 @@ async function pickJob(
   }
 }
 
+/** Register the `agents routines` command tree. */
 export function registerRoutinesCommands(program: Command): void {
   const routinesCmd = program
     .command('routines')

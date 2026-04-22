@@ -1,3 +1,11 @@
+/**
+ * Profile management -- named bundles of (host CLI, endpoint, model, auth).
+ *
+ * Profiles let users run agents against alternative providers (OpenRouter,
+ * custom endpoints) without reconfiguring the agent CLI itself. Stored as
+ * YAML files under ~/.agents/profiles/.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
@@ -6,6 +14,7 @@ import { getAgentsDir } from './state.js';
 import { getKeychainToken, keychainItemName } from './profiles-keychain.js';
 import { getPreset, type Preset } from './profiles-presets.js';
 
+/** A named profile binding an agent host, env vars, and optional keychain auth. */
 export interface Profile {
   name: string;
   host: {
@@ -24,6 +33,7 @@ export interface Profile {
 
 const PROFILE_NAME_PATTERN = /^[a-z0-9][a-z0-9-_]{0,48}$/i;
 
+/** Get the directory where profile YAML files are stored. */
 export function getProfilesDir(): string {
   return path.join(getAgentsDir(), 'profiles');
 }
@@ -32,16 +42,19 @@ function profilePath(name: string): string {
   return path.join(getProfilesDir(), `${name}.yml`);
 }
 
+/** Validate a profile name against the allowed pattern. Throws on invalid input. */
 export function validateProfileName(name: string): void {
   if (!PROFILE_NAME_PATTERN.test(name)) {
     throw new Error(`Invalid profile name '${name}'. Use letters, digits, dash, underscore (max 48 chars).`);
   }
 }
 
+/** Check whether a profile YAML file exists on disk. */
 export function profileExists(name: string): boolean {
   return fs.existsSync(profilePath(name));
 }
 
+/** Read and parse a profile from disk. Throws if not found or malformed. */
 export function readProfile(name: string): Profile {
   validateProfileName(name);
   const file = profilePath(name);
@@ -63,6 +76,7 @@ export function readProfile(name: string): Profile {
   return parsed;
 }
 
+/** Write a profile to disk atomically (write-to-tmp then rename). */
 export function writeProfile(profile: Profile): void {
   validateProfileName(profile.name);
   const dir = getProfilesDir();
@@ -74,6 +88,7 @@ export function writeProfile(profile: Profile): void {
   fs.renameSync(tmp, file);
 }
 
+/** Delete a profile from disk. Returns false if it did not exist. */
 export function deleteProfile(name: string): boolean {
   validateProfileName(name);
   const file = profilePath(name);
@@ -82,6 +97,7 @@ export function deleteProfile(name: string): boolean {
   return true;
 }
 
+/** List all valid profiles, sorted by name. Malformed files are silently skipped. */
 export function listProfiles(): Profile[] {
   const dir = getProfilesDir();
   if (!fs.existsSync(dir)) return [];
@@ -98,9 +114,11 @@ export function listProfiles(): Profile[] {
   return profiles.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// Build a profile from a preset. The keychain item is shared across all
-// profiles that point at the same provider, so adding kimi + deepseek prompts
-// for the OpenRouter key exactly once.
+/**
+ * Build a profile from a preset. The keychain item is shared across all
+ * profiles that point at the same provider, so adding kimi + deepseek prompts
+ * for the OpenRouter key exactly once.
+ */
 export function profileFromPreset(profileName: string, preset: Preset, version?: string): Profile {
   return {
     name: profileName,
@@ -116,9 +134,11 @@ export function profileFromPreset(profileName: string, preset: Preset, version?:
   };
 }
 
-// Resolve a profile into the env block that should be injected into the
-// spawned agent process. Reads the token from keychain at exec time so the
-// profile YAML never holds secrets.
+/**
+ * Resolve a profile into the env block that should be injected into the
+ * spawned agent process. Reads the token from keychain at exec time so the
+ * profile YAML never holds secrets.
+ */
 export function resolveProfileEnv(profile: Profile): Record<string, string> {
   const env: Record<string, string> = { ...profile.env };
   if (profile.auth) {
@@ -128,6 +148,7 @@ export function resolveProfileEnv(profile: Profile): Record<string, string> {
   return env;
 }
 
+/** Resolved profile data ready for spawning an agent process. */
 export interface ResolvedProfileRun {
   agent: AgentId;
   version?: string;
@@ -135,9 +156,11 @@ export interface ResolvedProfileRun {
   profileName: string;
 }
 
-// Resolve a name into (agent, version, env). Throws if the name is not a
-// profile. Callers are expected to try agent-id resolution first and fall
-// back to this when that fails, so we don't need a "isProfile" probe.
+/**
+ * Resolve a name into (agent, version, env). Throws if the name is not a
+ * profile. Callers are expected to try agent-id resolution first and fall
+ * back to this when that fails, so we don't need a "isProfile" probe.
+ */
 export function resolveProfileForRun(name: string): ResolvedProfileRun {
   const profile = readProfile(name);
   return {
@@ -148,8 +171,10 @@ export function resolveProfileForRun(name: string): ResolvedProfileRun {
   };
 }
 
-// Look up the preset a profile was created from, if any. Used by
-// `profiles view` to show upstream metadata like signup URLs.
+/**
+ * Look up the preset a profile was created from, if any. Used by
+ * `profiles view` to show upstream metadata like signup URLs.
+ */
 export function getPresetForProfile(profile: Profile): Preset | undefined {
   return profile.preset ? getPreset(profile.preset) : undefined;
 }

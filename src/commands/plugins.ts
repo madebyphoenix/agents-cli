@@ -1,3 +1,11 @@
+/**
+ * Plugin management commands.
+ *
+ * Registers the `agents plugins` command tree for listing, viewing,
+ * syncing, and removing plugin bundles (skills + hooks + permissions)
+ * stored in ~/.agents/plugins/.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Command } from 'commander';
@@ -30,6 +38,7 @@ import {
 } from './resource-view.js';
 import { getPluginsDir } from '../lib/state.js';
 
+/** Replace the home directory prefix with ~ for display. */
 function formatPath(p: string): string {
   const home = process.env.HOME || '';
   if (home && p.startsWith(home)) {
@@ -38,6 +47,7 @@ function formatPath(p: string): string {
   return p;
 }
 
+/** Register the `agents plugins` command tree. */
 export function registerPluginsCommands(program: Command): void {
   const pluginsCmd = program
     .command('plugins')
@@ -345,6 +355,7 @@ Examples:
     });
 }
 
+/** Convert discovered plugins into rows suitable for the resource list view. */
 function buildPluginRows(plugins: DiscoveredPlugin[]): ResourceRow[] {
   const rows: ResourceRow[] = [];
 
@@ -392,6 +403,7 @@ function buildPluginRows(plugins: DiscoveredPlugin[]): ResourceRow[] {
   return rows;
 }
 
+/** Build the multi-line detail pane shown when a plugin is selected in the picker. */
 function formatPluginDetail(plugin: DiscoveredPlugin, targets: SyncTarget[]): string {
   const lines: string[] = [];
 

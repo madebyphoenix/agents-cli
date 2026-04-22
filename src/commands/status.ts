@@ -1,7 +1,15 @@
+/**
+ * Deprecated status command.
+ *
+ * Registers the `agents status` command as a backward-compatible alias
+ * for `agents view`. Prints a deprecation notice and delegates to viewAction.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import { viewAction } from './view.js';
 
+/** Register the deprecated `agents status` command (alias for `agents view`). */
 export function registerStatusCommand(program: Command): void {
   // Deprecated: use `agents view` instead
   program

@@ -1,5 +1,12 @@
 #!/usr/bin/env node
 
+/**
+ * CLI entry point for agents-cli.
+ *
+ * Registers all commands, handles update checks, auto-corrects typos,
+ * and launches the first-run interactive init when appropriate.
+ */
+
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -52,6 +59,7 @@ import { registerTeamsCommands } from './commands/teams.js';
 import { registerProfilesCommands } from './commands/profiles.js';
 import { registerSecretsCommands } from './commands/secrets.js';
 import { registerCloudCommands } from './commands/cloud.js';
+import { registerFactoryCommands } from './commands/factory.js';
 import { applyGlobalHelpConventions } from './lib/help.js';
 import { isPromptCancelled } from './commands/utils.js';
 
@@ -136,6 +144,7 @@ Config lives in ~/.agents/. Run 'agents <command> --help' for details.
   return originalHelpInformation();
 };
 
+/** Compare two semver version strings. Returns 1 if a > b, -1 if a < b, 0 if equal. */
 function compareVersions(a: string, b: string): number {
   const partsA = a.split('.').map(Number);
   const partsB = b.split('.').map(Number);
@@ -146,6 +155,7 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+/** Fetch and display changelog entries between two versions from unpkg. */
 async function showWhatsNew(fromVersion: string, toVersion: string): Promise<void> {
   try {
     const response = await fetch(`https://unpkg.com/@phnx-labs/agents-cli@${toVersion}/CHANGELOG.md`);
@@ -196,6 +206,7 @@ async function showWhatsNew(fromVersion: string, toVersion: string): Promise<voi
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_CHECK_FILE = path.join(os.homedir(), '.agents', '.update-check');
 
+/** Read the cached update-check state from disk. Returns null if the file is missing or corrupt. */
 function readUpdateCache(): { lastCheck: number; latestVersion: string; dismissed?: string } | null {
   try {
     return JSON.parse(fs.readFileSync(UPDATE_CHECK_FILE, 'utf-8'));
@@ -205,11 +216,13 @@ function readUpdateCache(): { lastCheck: number; latestVersion: string; dismisse
   }
 }
 
+/** Determine whether enough time has elapsed since the last registry fetch. */
 function shouldFetchLatest(cache: { lastCheck: number } | null): boolean {
   if (!cache) return true;
   return Date.now() - cache.lastCheck > UPDATE_CHECK_INTERVAL_MS;
 }
 
+/** Persist the latest known version and current timestamp to the update-check cache. */
 function saveUpdateCheck(latestVersion: string): void {
   try {
     const dir = path.dirname(UPDATE_CHECK_FILE);
@@ -220,6 +233,7 @@ function saveUpdateCheck(latestVersion: string): void {
   }
 }
 
+/** Present an interactive upgrade prompt (TTY) or a one-line hint (non-TTY). */
 async function promptUpgrade(latestVersion: string): Promise<void> {
   if (!process.stdout.isTTY) {
     console.error(chalk.yellow(`Update available: ${VERSION} -> ${latestVersion}. Run: npm install -g @phnx-labs/agents-cli@latest`));
@@ -290,7 +304,7 @@ function refreshUpdateCacheInBackground(): void {
     });
 }
 
-/** Synchronous cache read — prompt if cached latestVersion is newer. Triggers background refresh if cache is stale. */
+/** Check for available updates using the local cache. Triggers a background refresh if stale. */
 async function checkForUpdates(): Promise<void> {
   const cache = readUpdateCache();
 
@@ -376,6 +390,7 @@ registerSyncCommand(program);
 registerRefreshMemoryCommand(program);
 registerDriveCommands(program);
 registerCloudCommands(program);
+registerFactoryCommands(program);
 registerPtyCommands(program);
 
 // Deprecated 'jobs' and 'cron' aliases for 'routines'
@@ -439,9 +454,7 @@ registerInitCommand(program);
 
 applyGlobalHelpConventions(program);
 
-/**
- * Calculate Levenshtein edit distance between two strings.
- */
+/** Calculate the Levenshtein edit distance between two strings. */
 function levenshtein(a: string, b: string): number {
   const m = a.length;
   const n = b.length;

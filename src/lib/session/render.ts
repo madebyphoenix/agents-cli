@@ -1,3 +1,12 @@
+/**
+ * Session rendering: summary, markdown conversation, and JSON output.
+ *
+ * Provides the display layer for `agents sessions <id>`. The summary renderer
+ * produces a chalk-formatted activity overview (modified files, commands,
+ * errors, final message). The markdown renderer emits a full conversation
+ * transcript. Filtering by role and turn slicing is handled here as well.
+ */
+
 import chalk from 'chalk';
 import type { SessionEvent } from './types.js';
 import { summarizeToolUse } from './parse.js';
@@ -75,6 +84,7 @@ export function normalizeForDedup(cmd: string): string {
   return s.trim();
 }
 
+/** Command classification categories with signal levels for summary rendering. */
 const CATEGORIES: Array<{
   name: string;
   match: (first: string) => boolean;
@@ -91,6 +101,7 @@ const CATEGORIES: Array<{
   { name: 'Wait',       match: t => ['sleep','wait'].includes(t),                                                                              signal: 'low'  },
 ];
 
+/** CLI tools whose subcommand (second token) is included in the bucket key. */
 const TWO_LEVEL_TOKENS = new Set([
   'git','gh','bun','npm','cargo','docker','kubectl','rush','openclaw','pnpm','yarn',
 ]);
@@ -161,6 +172,7 @@ export function collapseRetries(commands: Array<{ cmd: string; ts: number }>): C
 
 // ── Stats rollup ──────────────────────────────────────────────────────────────
 
+/** Aggregated statistics computed from a session's parsed events. */
 export interface SessionStats {
   models: string[];
   userTurns: number;
@@ -173,6 +185,7 @@ export interface SessionStats {
   lastTs: number;
 }
 
+/** Compute aggregate statistics (turns, tools, tokens, duration) from session events. */
 export function computeSummaryStats(events: SessionEvent[]): SessionStats {
   const modelSet = new Set<string>();
   let userTurns = 0;
@@ -217,10 +230,12 @@ export function computeSummaryStats(events: SessionEvent[]): SessionStats {
   };
 }
 
+/** Strip the 'claude-' prefix and date suffix from a model identifier. */
 function shortenModel(model: string): string {
   return model.replace(/^claude-/, '').replace(/-\d{8}$/, '');
 }
 
+/** Format a token count as a human-readable string (e.g. 67.5K, 1.2M). */
 function formatTokenCount(n: number): string {
   if (n === 0) return '0';
   if (n < 1000) return String(n);
@@ -232,6 +247,7 @@ function formatTokenCount(n: number): string {
   return (m >= 100 ? Math.round(m) : parseFloat(m.toFixed(1))) + 'M';
 }
 
+/** Format a duration in milliseconds as a human-readable string (e.g. '12 min', '2h 30min'). */
 function formatDuration(ms: number): string {
   const totalMin = Math.round(ms / 60_000);
   if (totalMin < 1) return 'under 1 min';
@@ -274,6 +290,7 @@ export function renderSummaryHeader(stats: SessionStats): string {
 
 // ── Prompt reference extraction ───────────────────────────────────────────────
 
+/** Extract @-mentions, slash paths, and ~/... references from a prompt string. */
 function extractReferences(text: string): string[] {
   const refs = new Set<string>();
   for (const m of text.matchAll(/@[\w/.-]+/g)) refs.add(m[0]);
@@ -292,6 +309,7 @@ interface BucketEntry {
   samples: string[];
 }
 
+/** Render the Commands section of the summary, grouping by category and collapsing retries. */
 function renderCommandsSection(
   cmds: Array<{ cmd: string; ts: number }>,
   lines: string[],
@@ -406,6 +424,7 @@ function truncateCmd(cmd: string, max: number): string {
 
 // ── File grouping ─────────────────────────────────────────────────────────────
 
+/** Group file paths by their parent directory, relative to cwd. */
 function groupByParentDir(paths: Iterable<string>, cwd?: string): Map<string, string[]> {
   const groups = new Map<string, string[]>();
   for (const p of paths) {
@@ -420,6 +439,7 @@ function groupByParentDir(paths: Iterable<string>, cwd?: string): Map<string, st
   return new Map(Array.from(groups.entries()).sort((a, b) => b[1].length - a[1].length));
 }
 
+/** Render grouped file paths as indented, clickable terminal lines. */
 function renderFileGroup(lines: string[], groups: Map<string, string[]>, absPathMap: Map<string, string>): void {
   if (groups.size === 1) {
     const [dir, files] = Array.from(groups.entries())[0];
@@ -687,9 +707,12 @@ export function renderSummary(events: SessionEvent[], cwd?: string): string {
 
 // ── Event filters ─────────────────────────────────────────────────────────────
 
+/** Allowed values for --include/--exclude role filters. */
 export const VALID_ROLE_VALUES = ['user', 'assistant', 'thinking', 'tools'] as const;
+/** A single role filter value derived from VALID_ROLE_VALUES. */
 export type RoleFilter = typeof VALID_ROLE_VALUES[number];
 
+/** Options for filtering session events by role and turn range. */
 export interface FilterOptions {
   include?: RoleFilter[];
   exclude?: RoleFilter[];
@@ -848,6 +871,7 @@ export function renderJson(events: SessionEvent[]): string {
   return JSON.stringify(events, null, 2);
 }
 
+/** Replace the home directory prefix with ~ for trace display. */
 function shortenPathTrace(p: string): string {
   const home = process.env.HOME || '';
   if (home && p.startsWith(home)) return '~' + p.slice(home.length);

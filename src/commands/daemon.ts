@@ -1,3 +1,11 @@
+/**
+ * Deprecated daemon commands.
+ *
+ * Registers the hidden `agents daemon` command tree as backward-compatible
+ * aliases for `agents routines` scheduler lifecycle commands. Scheduled
+ * for removal in v2.0.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import * as path from 'path';
@@ -13,10 +21,12 @@ import {
 import { listJobs as listAllJobs } from '../lib/routines.js';
 import { JobScheduler } from '../lib/scheduler.js';
 
+/** Print a deprecation warning pointing to the replacement command. */
 function warnDeprecated(subcommand: string, replacement: string): void {
   console.log(chalk.yellow(`\u26a0  'agents daemon ${subcommand}' is deprecated and will be removed in v2.0. Use '${replacement}' instead.\n`));
 }
 
+/** Register the deprecated `agents daemon` command tree. */
 export function registerDaemonCommands(program: Command): void {
   const daemonCmd = program
     .command('daemon', { hidden: true })
@@ -127,3 +137,4 @@ you never need to start it manually.
       await runDaemon();
     });
 }
+

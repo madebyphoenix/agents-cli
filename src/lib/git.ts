@@ -1,3 +1,10 @@
+/**
+ * Git operations for the agents-cli system repo and package repositories.
+ *
+ * Handles cloning, pulling, syncing, and inspecting git repos used by
+ * the agents version management and plugin/package system. Includes
+ * source parsing for GitHub shorthand, SSH, HTTPS, and local paths.
+ */
 import simpleGit, { SimpleGit } from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -9,7 +16,7 @@ import { DEFAULT_SYSTEM_REPO, LEGACY_SYSTEM_REPO, systemRepoSlug } from './types
  *
  * Why: `git config core.hooksPath` is a known sandbox-escape vector and is
  * blocked by some sandboxed environments (e.g. Claude Code). Symlinks inside
- * `.git/hooks/` sidestep that restriction entirely — Git runs them the same way.
+ * `.git/hooks/` sidestep that restriction entirely -- Git runs them the same way.
  */
 function installGithooksSymlinks(repoDir: string): void {
   const githooksDir = path.join(repoDir, '.githooks');
@@ -32,6 +39,7 @@ function installGithooksSymlinks(repoDir: string): void {
   }
 }
 
+/** Parsed representation of a git source string (GitHub, generic URL, or local path). */
 export interface GitSource {
   type: 'github' | 'url' | 'local';
   url: string;
@@ -172,6 +180,7 @@ export function parseSource(source: string): GitSource {
   throw new Error(`Invalid source: ${source}. Supported formats: gh:owner/repo, owner/repo, github.com/owner/repo, https://github.com/owner/repo, or local path`);
 }
 
+/** Clone a remote repo or pull updates if it already exists locally. */
 export async function cloneOrPull(
   source: GitSource,
   targetDir: string
@@ -206,6 +215,7 @@ export async function cloneOrPull(
   return { isNew: true, commit: log.latest?.hash.slice(0, 8) || 'unknown' };
 }
 
+/** Clone a repository from a source string, returning the local path and commit hash. */
 export async function cloneRepo(source: string): Promise<{
   localPath: string;
   commit: string;
@@ -231,6 +241,7 @@ export async function cloneRepo(source: string): Promise<{
   };
 }
 
+/** Clone a package from a source string into the packages directory. */
 export async function clonePackage(source: string): Promise<{
   localPath: string;
   commit: string;
@@ -256,6 +267,7 @@ export async function clonePackage(source: string): Promise<{
   };
 }
 
+/** Get the short commit hash (8 chars) of the latest commit in a repo. */
 export async function getRepoCommit(repoPath: string): Promise<string> {
   try {
     const git = simpleGit(repoPath);
@@ -482,7 +494,7 @@ export async function hasLocalChanges(dir: string): Promise<boolean> {
 
 /**
  * Pull changes in an existing repo.
- * Refuses to pull if the working tree is dirty — user must commit or discard changes first.
+ * Refuses to pull if the working tree is dirty -- user must commit or discard changes first.
  */
 export async function pullRepo(dir: string): Promise<{ success: boolean; commit: string; error?: string }> {
   try {
@@ -517,13 +529,19 @@ export async function pullRepo(dir: string): Promise<{ success: boolean; commit:
  * Returns files categorized by their status relative to HEAD.
  */
 export interface GitSyncStatus {
-  synced: string[];      // Tracked and unchanged
-  modified: string[];    // Modified but not staged
-  new: string[];         // Untracked files
-  staged: string[];      // Staged for commit
-  deleted: string[];     // Deleted files
+  /** Tracked and unchanged files. */
+  synced: string[];
+  /** Modified but not staged files. */
+  modified: string[];
+  /** Untracked files. */
+  new: string[];
+  /** Staged for commit. */
+  staged: string[];
+  /** Deleted files. */
+  deleted: string[];
 }
 
+/** Compute the sync status of a git repo, optionally scoped to a subdirectory. */
 export async function getGitSyncStatus(dir: string, subdir?: string): Promise<GitSyncStatus | null> {
   if (!isGitRepo(dir)) {
     return null;

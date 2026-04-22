@@ -1,3 +1,10 @@
+/**
+ * Version management commands for installing, switching, and removing agent CLIs.
+ *
+ * Implements `agents add`, `agents remove`, `agents use`, and the deprecated
+ * `agents list`. Handles npm-based installation, shim creation, config symlink
+ * switching, resource sync prompts, and project-level version pinning.
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -125,6 +132,7 @@ function warnIfShimShadowed(agent: AgentId): void {
   console.log(chalk.gray(`  ${getPathSetupInstructions().split('\n').join('\n  ')}`));
 }
 
+/** Register `agents add`, `agents remove`, `agents use`, and `agents list` (deprecated). */
 export function registerVersionsCommands(program: Command): void {
   program
     .command('add <specs...>')

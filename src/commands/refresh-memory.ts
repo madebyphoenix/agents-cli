@@ -1,3 +1,11 @@
+/**
+ * Internal memory refresh command.
+ *
+ * Registers the hidden `agents refresh-memory` command invoked by
+ * shims for agents that do not natively resolve @-imports in their
+ * memory file. Recompiles memory only when source files have changed.
+ */
+
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { AGENTS } from '../lib/agents.js';

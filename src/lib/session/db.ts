@@ -1,3 +1,12 @@
+/**
+ * SQLite-backed session index and full-text search.
+ *
+ * Stores session metadata and user-prompt text in a WAL-mode SQLite database
+ * at ~/.agents/sessions/sessions.db. Provides incremental upsert, scan-stamp
+ * ledger (mtime/size tracking to skip unchanged files), FTS5 search with
+ * BM25 ranking, and label-first search for /rename'd sessions.
+ */
+
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -8,12 +17,15 @@ const HOME = os.homedir();
 const SESSIONS_DIR = path.join(HOME, '.agents', 'sessions');
 const DB_PATH = path.join(SESSIONS_DIR, 'sessions.db');
 
+/** Current schema version; bumped when migrations are added. */
 const SCHEMA_VERSION = 4;
 
 // BM25 column weights for session_text: label > topic > project > content.
 // Higher weights make matches in that column rank higher.
+/** BM25 column weights for FTS5: label > topic > project > content. */
 const BM25_WEIGHTS = [5.0, 2.0, 1.5, 1.0] as const;
 
+/** DDL for the sessions database (tables, indexes, FTS5 virtual table). */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -66,6 +78,7 @@ CREATE TABLE IF NOT EXISTS scan_ledger (
 );
 `;
 
+/** Raw row shape returned from the sessions table. */
 export interface SessionRow {
   id: string;
   short_id: string;
@@ -87,11 +100,13 @@ export interface SessionRow {
   is_team_origin: number;
 }
 
+/** File stat snapshot used to detect changes between scan runs. */
 export interface ScanStamp {
   fileMtimeMs: number;
   fileSize: number;
 }
 
+/** Filter and pagination options for querying the sessions table. */
 export interface QueryOptions {
   agent?: SessionAgentId;
   agents?: SessionAgentId[];
@@ -157,6 +172,7 @@ function migrateSchema(db: Database.Database, fromVersion: number): void {
   }
 }
 
+/** Open (or return the cached) sessions database, applying migrations as needed. */
 export function getDB(): Database.Database {
   if (dbInstance) return dbInstance;
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -194,6 +210,7 @@ export function getDB(): Database.Database {
   return db;
 }
 
+/** Close the cached database connection. */
 export function closeDB(): void {
   if (dbInstance) {
     dbInstance.close();
@@ -201,6 +218,7 @@ export function closeDB(): void {
   }
 }
 
+/** Return the absolute path to the sessions database file. */
 export function getDBPath(): string {
   return DB_PATH;
 }
@@ -364,6 +382,7 @@ export function upsertSession(meta: SessionMeta, content: string, scan?: ScanSta
   txn();
 }
 
+/** Batch-upsert sessions with their FTS5 content and scan stamps in a single transaction. */
 export function upsertSessionsBatch(
   entries: Array<{ meta: SessionMeta; content: string; scan?: ScanStamp }>,
 ): void {
@@ -458,6 +477,7 @@ export function syncLabels(labelMap: Map<string, string | null>): number {
   return updates.length;
 }
 
+/** Convert a raw database row into a SessionMeta object. */
 function rowToMeta(row: SessionRow): SessionMeta {
   return {
     id: row.id,
@@ -478,6 +498,7 @@ function rowToMeta(row: SessionRow): SessionMeta {
   };
 }
 
+/** Build a parameterized WHERE clause from query options. */
 function buildSessionWhere(options: QueryOptions): { clause: string; params: any[] } {
   const where: string[] = [];
   const params: any[] = [];
@@ -532,6 +553,7 @@ function buildSessionWhere(options: QueryOptions): { clause: string; params: any
   return { clause, params };
 }
 
+/** Query sessions from the database, applying filters and ordering by timestamp descending. */
 export function querySessions(options: QueryOptions = {}): SessionMeta[] {
   const db = getDB();
   const { clause, params } = buildSessionWhere(options);
@@ -541,6 +563,7 @@ export function querySessions(options: QueryOptions = {}): SessionMeta[] {
   return rows.map(rowToMeta);
 }
 
+/** Count sessions matching the given filter options. */
 export function countSessions(options: QueryOptions = {}): number {
   const db = getDB();
   const { clause, params } = buildSessionWhere(options);
@@ -549,12 +572,14 @@ export function countSessions(options: QueryOptions = {}): number {
   return row ? row.n : 0;
 }
 
+/** Return the set of all file paths currently tracked in the sessions table. */
 export function getAllFilePaths(): Set<string> {
   const db = getDB();
   const rows = db.prepare(`SELECT file_path FROM sessions`).all() as { file_path: string }[];
   return new Set(rows.map(r => r.file_path));
 }
 
+/** Look up sessions by their source file paths. */
 export function getSessionsByFilePaths(paths: string[]): Map<string, SessionMeta> {
   if (paths.length === 0) return new Map();
   const db = getDB();
@@ -567,12 +592,14 @@ export function getSessionsByFilePaths(paths: string[]): Map<string, SessionMeta
   return result;
 }
 
+/** Look up a single session by its unique ID. */
 export function getSessionById(id: string): SessionMeta | null {
   const db = getDB();
   const row = db.prepare(`SELECT * FROM sessions WHERE id = ?`).get(id) as SessionRow | undefined;
   return row ? rowToMeta(row) : null;
 }
 
+/** A single full-text search result with ranking score. */
 export interface FtsHit {
   sessionId: string;
   score: number;
@@ -673,6 +700,7 @@ export function ftsSearch(input: string, limit = 200): FtsHit[] {
   return hits.slice(0, limit);
 }
 
+/** Return the total row counts for the sessions and FTS5 tables (diagnostic). */
 export function getRowCount(): { sessions: number; textRows: number } {
   const db = getDB();
   const sessions = (db.prepare(`SELECT COUNT(*) AS c FROM sessions`).get() as { c: number }).c;

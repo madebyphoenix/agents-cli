@@ -1,8 +1,17 @@
+/**
+ * Internal resource sync command.
+ *
+ * Registers the hidden `agents sync` command invoked by shims to
+ * synchronize resources (commands, skills, hooks, memory, MCP, etc.)
+ * into a specific agent version home before launch.
+ */
+
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { AGENTS } from '../lib/agents.js';
 import { isVersionInstalled, syncResourcesToVersion } from '../lib/versions.js';
 
+/** Register the hidden `agents sync` command. */
 export function registerSyncCommand(program: Command): void {
   program
     .command('sync', { hidden: true })

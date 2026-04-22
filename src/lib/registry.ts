@@ -1,3 +1,11 @@
+/**
+ * Package registry client -- search, resolve, and install from remote registries.
+ *
+ * Queries the MCP registry (registry.modelcontextprotocol.io) and future skill
+ * registries to find packages, then resolves them into installable entries
+ * with transport, runtime, and argument metadata.
+ */
+
 import * as fs from 'fs';
 import type {
   RegistryType,
@@ -11,6 +19,7 @@ import type {
 import { DEFAULT_REGISTRIES } from './types.js';
 import { readMeta, writeMeta } from './state.js';
 
+/** Get all registries of a given type, merging defaults with user overrides. */
 export function getRegistries(type: RegistryType): Record<string, RegistryConfig> {
   const meta = readMeta();
   const defaultRegs = DEFAULT_REGISTRIES[type] || {};
@@ -20,6 +29,7 @@ export function getRegistries(type: RegistryType): Record<string, RegistryConfig
   return { ...defaultRegs, ...userRegs };
 }
 
+/** Get only the enabled registries of a given type. */
 export function getEnabledRegistries(type: RegistryType): Array<{ name: string; config: RegistryConfig }> {
   const registries = getRegistries(type);
   return Object.entries(registries)
@@ -27,6 +37,7 @@ export function getEnabledRegistries(type: RegistryType): Array<{ name: string; 
     .map(([name, config]) => ({ name, config }));
 }
 
+/** Add or update a registry configuration in agents.yaml. */
 export function setRegistry(
   type: RegistryType,
   name: string,
@@ -45,6 +56,7 @@ export function setRegistry(
   writeMeta(meta);
 }
 
+/** Remove a user-configured registry. Returns false if it did not exist. */
 export function removeRegistry(type: RegistryType, name: string): boolean {
   const meta = readMeta();
   if (meta.registries?.[type]?.[name]) {
@@ -81,6 +93,7 @@ async function fetchMcpRegistry(
   return response.json() as Promise<McpRegistryResponse>;
 }
 
+/** Search MCP registries for servers matching a query string. */
 export async function searchMcpRegistries(
   query: string,
   options?: { registry?: string; limit?: number }
@@ -127,6 +140,7 @@ export async function searchMcpRegistries(
   return results;
 }
 
+/** Look up detailed info for an MCP server by exact name. */
 export async function getMcpServerInfo(
   serverName: string,
   registryName?: string
@@ -160,6 +174,7 @@ export async function getMcpServerInfo(
   return null;
 }
 
+/** Search skill registries (stub -- skill registries are not yet available). */
 export async function searchSkillRegistries(
   _query: string,
   _options?: { registry?: string; limit?: number }
@@ -176,6 +191,7 @@ export async function searchSkillRegistries(
   return [];
 }
 
+/** Unified search across all enabled registries of the specified type(s). */
 export async function search(
   query: string,
   options?: { type?: RegistryType; registry?: string; limit?: number }
@@ -195,6 +211,7 @@ export async function search(
   return results;
 }
 
+/** Parse a package identifier into its type (mcp, skill, git) and name. */
 export function parsePackageIdentifier(identifier: string): {
   type: RegistryType | 'git' | 'unknown';
   name: string;
@@ -238,6 +255,7 @@ export function parsePackageIdentifier(identifier: string): {
   return { type: 'unknown', name: identifier };
 }
 
+/** Resolve a package identifier to an installable package with source metadata. */
 export async function resolvePackage(identifier: string): Promise<ResolvedPackage | null> {
   const parsed = parsePackageIdentifier(identifier);
 

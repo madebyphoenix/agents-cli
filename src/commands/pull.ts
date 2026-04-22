@@ -1,3 +1,11 @@
+/**
+ * Config pull command.
+ *
+ * Registers the `agents pull` command which clones or updates the
+ * user's ~/.agents/ git repo and syncs CLI versions, MCP servers,
+ * resources, and hooks to installed agent versions.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -91,6 +99,7 @@ function migratePromptcutsToRoot(agentsDir: string): void {
   }
 }
 
+/** Register the `agents pull` command. */
 export function registerPullCommand(program: Command): void {
   program
     .command('pull [source] [agent]')

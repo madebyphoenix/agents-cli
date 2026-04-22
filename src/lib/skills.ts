@@ -1,3 +1,12 @@
+/**
+ * Skill management -- discovery, installation, and syncing of SKILL.md bundles.
+ *
+ * Skills are knowledge packs stored in ~/.agents/skills/. Each skill directory
+ * contains a SKILL.md (with frontmatter metadata) and optional supporting files
+ * (rules/, examples/, etc.). This module handles parsing skill metadata,
+ * installing skills into agent version homes, and tracking installation state.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';

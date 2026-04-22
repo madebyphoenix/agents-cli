@@ -1,3 +1,10 @@
+/**
+ * Account rotation across agent versions.
+ *
+ * Detects which installed versions have expired credentials and rotates
+ * authentication tokens so users maintain active sessions across version switches.
+ */
+
 import type { AgentId } from './types.js';
 import { getAccountInfo, type AccountInfo } from './agents.js';
 import { listInstalledVersions, getVersionHomePath, getGlobalDefault } from './versions.js';

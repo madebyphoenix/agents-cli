@@ -1,12 +1,22 @@
+/**
+ * Session artifact discovery and resolution.
+ *
+ * Scans parsed session events for file-write tool calls (Write, Edit, etc.)
+ * and returns metadata about each artifact: path, authoring tool, existence
+ * on disk, and file size. Used by the artifacts subcommand and session detail views.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import type { SessionMeta, SessionArtifact } from './types.js';
 import { parseSession } from './parse.js';
 
+/** Tool names that produce file artifacts (writes, edits, patches). */
 const WRITE_TOOLS = new Set([
   'Write', 'Edit', 'write_file', 'edit_file', 'create_file', 'replace', 'patch',
 ]);
 
+/** Parse a session and return metadata for every file written or edited during it. */
 export function discoverArtifacts(meta: SessionMeta): SessionArtifact[] {
   let events;
   try {
@@ -58,10 +68,12 @@ export function discoverArtifacts(meta: SessionMeta): SessionArtifact[] {
   return artifacts;
 }
 
+/** Read the current contents of an artifact file from disk. */
 export function readArtifact(artifact: SessionArtifact): string {
   return fs.readFileSync(artifact.path, 'utf-8');
 }
 
+/** Resolve a user-provided name to an artifact by exact path, basename, or path suffix. */
 export function resolveArtifact(
   artifacts: SessionArtifact[],
   name: string,

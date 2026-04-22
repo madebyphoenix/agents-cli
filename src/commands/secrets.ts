@@ -1,3 +1,11 @@
+/**
+ * Secrets bundle management commands.
+ *
+ * Registers the `agents secrets` command tree for creating, viewing,
+ * and managing named bundles of environment variables backed by macOS
+ * Keychain. Bundles are injected at run time via `agents run --secrets`.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import * as fs from 'fs';
@@ -24,6 +32,7 @@ import {
 } from '../lib/secrets.js';
 import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
 
+/** Prompt the user for a secret value with masked input. Requires an interactive TTY. */
 async function promptForSecret(message: string): Promise<string> {
   if (!isInteractiveTerminal()) {
     throw new Error('A secret is required but the shell is not interactive. Pass --value, --value-stdin, or run from a TTY.');
@@ -32,6 +41,7 @@ async function promptForSecret(message: string): Promise<string> {
   return await password({ message, mask: true });
 }
 
+/** Read all available data from stdin synchronously, trimmed. */
 function readStdinSync(): string {
   const chunks: Buffer[] = [];
   const buf = Buffer.alloc(65536);
@@ -48,6 +58,7 @@ function readStdinSync(): string {
   return Buffer.concat(chunks).toString('utf-8').trim();
 }
 
+/** Format a single bundle as a table row for the `secrets list` output. */
 function renderBundleRow(b: SecretsBundle): string {
   const entries = describeBundle(b);
   const keys = entries.length;
@@ -55,6 +66,7 @@ function renderBundleRow(b: SecretsBundle): string {
   return `${chalk.cyan(b.name.padEnd(20))} ${String(keys).padEnd(6)} ${chalk.yellow(String(sensitive).padEnd(10))} ${chalk.gray(b.description || '')}`;
 }
 
+/** Colorize a variable source kind (literal, keychain, env, file, exec). */
 function kindLabel(kind: string): string {
   switch (kind) {
     case 'literal': return chalk.gray('literal');
@@ -66,12 +78,14 @@ function kindLabel(kind: string): string {
   }
 }
 
+/** Mask a value with asterisks unless reveal is true. */
 function redact(value: string, reveal: boolean): string {
   if (reveal) return value;
   if (!value) return '';
   return '*'.repeat(Math.min(value.length, 8));
 }
 
+/** Register the `agents secrets` command tree. */
 export function registerSecretsCommands(program: Command): void {
   const cmd = program
     .command('secrets')

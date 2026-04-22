@@ -1,3 +1,11 @@
+/**
+ * Rules management commands for controlling agent behavior via persistent instructions.
+ *
+ * Implements `agents rules` -- list, add, view, and remove markdown rule files
+ * (AGENTS.md, CLAUDE.md, .cursorrules, etc.) that guide agent behavior across
+ * sessions. Central storage lives in ~/.agents/memory/ and rules are synced
+ * to individual version homes.
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -44,6 +52,7 @@ import {
   requireDestructiveArg,
 } from './utils.js';
 
+/** Register the `agents rules` command tree (list, add, view, remove). */
 export function registerRulesCommands(program: Command): void {
   const rulesCmd = program
     .command('rules')

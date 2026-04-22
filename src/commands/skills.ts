@@ -1,3 +1,11 @@
+/**
+ * Skill management commands for adding domain-specific capabilities to agents.
+ *
+ * Implements `agents skills` -- list, add, remove, sync, prune, and view
+ * packaged SKILL.md bundles (with optional rules/ directories). Central
+ * storage lives in ~/.agents/skills/ and skills are synced to individual
+ * version homes via copy or symlink.
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -57,6 +65,7 @@ import {
   type SyncTarget,
 } from './resource-view.js';
 
+/** Register the `agents skills` command tree (list, add, remove, sync, prune, view). */
 export function registerSkillsCommands(program: Command): void {
   const skillsCmd = program
     .command('skills')

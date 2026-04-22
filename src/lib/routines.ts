@@ -1,3 +1,12 @@
+/**
+ * Scheduled job (routine) configuration and run history management.
+ *
+ * Routines are YAML files in ~/.agents/routines/ that define recurring or
+ * one-shot agent tasks. This module handles CRUD operations on job configs,
+ * run metadata persistence, prompt variable expansion, and one-shot "at" time
+ * scheduling.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
@@ -6,12 +15,14 @@ import { getRoutinesDir, getRunsDir, ensureAgentsDir } from './state.js';
 import type { AgentId } from './types.js';
 import { ALL_AGENT_IDS } from './agents.js';
 
+/** Tool/site/directory allow-list for sandboxed job execution. */
 export interface JobAllowConfig {
   tools?: string[];
   sites?: string[];
   dirs?: string[];
 }
 
+/** Full configuration for a scheduled routine (persisted as YAML). */
 export interface JobConfig {
   name: string;
   schedule: string;
@@ -30,6 +41,7 @@ export interface JobConfig {
   runOnce?: boolean;
 }
 
+/** Metadata for a single job execution, persisted as JSON in the run directory. */
 export interface RunMeta {
   jobName: string;
   runId: string;
@@ -41,6 +53,7 @@ export interface RunMeta {
   exitCode: number | null;
 }
 
+/** Default values applied to every job config when fields are omitted. */
 const JOB_DEFAULTS: Partial<JobConfig> = {
   mode: 'plan',
   effort: 'auto',
@@ -48,6 +61,7 @@ const JOB_DEFAULTS: Partial<JobConfig> = {
   enabled: true,
 };
 
+/** List all job configs from ~/.agents/routines/. */
 export function listJobs(): JobConfig[] {
   ensureAgentsDir();
   const jobsDir = getRoutinesDir();
@@ -62,6 +76,7 @@ export function listJobs(): JobConfig[] {
   return jobs;
 }
 
+/** Read a single job config by name. Returns null if not found. */
 export function readJob(name: string): JobConfig | null {
   ensureAgentsDir();
   const jobsDir = getRoutinesDir();
@@ -90,6 +105,7 @@ function readJobFile(filePath: string): JobConfig | null {
   }
 }
 
+/** Write a job config to disk, omitting fields that match defaults. */
 export function writeJob(config: JobConfig): void {
   ensureAgentsDir();
   const jobsDir = getRoutinesDir();
@@ -105,6 +121,7 @@ export function writeJob(config: JobConfig): void {
   fs.writeFileSync(filePath, yaml.stringify(output), 'utf-8');
 }
 
+/** Delete a job config file by name. Returns true if the file existed. */
 export function deleteJob(name: string): boolean {
   const jobsDir = getRoutinesDir();
   for (const ext of ['.yml', '.yaml']) {
@@ -117,6 +134,7 @@ export function deleteJob(name: string): boolean {
   return false;
 }
 
+/** Enable or disable a job by name. */
 export function setJobEnabled(name: string, enabled: boolean): void {
   const job = readJob(name);
   if (!job) throw new Error(`Job '${name}' not found`);
@@ -124,6 +142,7 @@ export function setJobEnabled(name: string, enabled: boolean): void {
   writeJob(job);
 }
 
+/** Validate a partial job config, returning a list of human-readable errors. */
 export function validateJob(config: Partial<JobConfig>): string[] {
   const errors: string[] = [];
 
@@ -162,6 +181,7 @@ export function validateJob(config: Partial<JobConfig>): string[] {
   return errors;
 }
 
+/** Expand built-in and user-defined template variables in a job's prompt string. */
 export function resolveJobPrompt(config: JobConfig): string {
   const now = new Date();
   const tz = config.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -206,6 +226,7 @@ export function resolveJobPrompt(config: JobConfig): string {
   return prompt;
 }
 
+/** Parse a human-readable timeout string (e.g. "30m", "2h", "1h30m") into milliseconds. */
 export function parseTimeout(timeout: string): number | null {
   const match = timeout.match(/^(?:(\d+)h)?(?:(\d+)m)?$/);
   if (!match) return null;
@@ -216,6 +237,7 @@ export function parseTimeout(timeout: string): number | null {
   return ms > 0 ? ms : null;
 }
 
+/** List all run metadata entries for a job, sorted chronologically. */
 export function listRuns(jobName: string): RunMeta[] {
   const runsDir = getRunsDir();
   const jobRunsDir = path.join(runsDir, jobName);
@@ -234,11 +256,13 @@ export function listRuns(jobName: string): RunMeta[] {
   return runs;
 }
 
+/** Get the most recent run for a job, or null if never run. */
 export function getLatestRun(jobName: string): RunMeta | null {
   const runs = listRuns(jobName);
   return runs.length > 0 ? runs[runs.length - 1] : null;
 }
 
+/** Persist run metadata to its run directory as meta.json. */
 export function writeRunMeta(meta: RunMeta): void {
   ensureAgentsDir();
   const runDir = path.join(getRunsDir(), meta.jobName, meta.runId);
@@ -246,6 +270,7 @@ export function writeRunMeta(meta: RunMeta): void {
   fs.writeFileSync(path.join(runDir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf-8');
 }
 
+/** Read run metadata from disk. Returns null if missing or corrupt. */
 export function readRunMeta(jobName: string, runId: string): RunMeta | null {
   const metaPath = path.join(getRunsDir(), jobName, runId, 'meta.json');
   if (!fs.existsSync(metaPath)) return null;
@@ -256,10 +281,12 @@ export function readRunMeta(jobName: string, runId: string): RunMeta | null {
   }
 }
 
+/** Get the filesystem path for a specific run's directory. */
 export function getRunDir(jobName: string, runId: string): string {
   return path.join(getRunsDir(), jobName, runId);
 }
 
+/** Discover routine YAML files in a repository's routines/ directory. */
 export function discoverJobsFromRepo(repoPath: string): Array<{ name: string; path: string }> {
   const jobsPath = path.join(repoPath, 'routines');
   if (!fs.existsSync(jobsPath)) return [];
@@ -272,10 +299,12 @@ export function discoverJobsFromRepo(repoPath: string): Array<{ name: string; pa
     }));
 }
 
+/** Check whether a job with the given name exists on disk. */
 export function jobExists(name: string): boolean {
   return readJob(name) !== null;
 }
 
+/** Get the filesystem path of a job's YAML config file, or null if not found. */
 export function getJobPath(name: string): string | null {
   const jobsDir = getRoutinesDir();
   for (const ext of ['.yml', '.yaml']) {
@@ -338,6 +367,7 @@ export function parseAtTime(atTime: string): { schedule: string; runOnce: boolea
   return null;
 }
 
+/** Check if an installed job's normalized YAML matches the source file. */
 export function jobContentMatches(name: string, sourcePath: string): boolean {
   const existing = readJob(name);
   if (!existing) return false;
@@ -356,6 +386,7 @@ export function jobContentMatches(name: string, sourcePath: string): boolean {
   }
 }
 
+/** Install a job by reading and validating a YAML source file. */
 export function installJobFromSource(sourcePath: string, name: string): { success: boolean; error?: string } {
   try {
     const content = fs.readFileSync(sourcePath, 'utf-8');

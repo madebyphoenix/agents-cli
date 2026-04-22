@@ -1,3 +1,12 @@
+/**
+ * Shared resource list and detail view.
+ *
+ * Provides a reusable picker (TTY) / table (piped) presentation layer
+ * for resource-type commands (plugins, subagents, skills, etc.). Each
+ * resource supplies rows with sync targets; this module handles layout,
+ * filtering, and paging.
+ */
+
 import chalk from 'chalk';
 import type { AgentId } from '../lib/types.js';
 import { agentLabel } from '../lib/agents.js';
@@ -33,7 +42,7 @@ export interface ResourceViewOptions {
   filterVersion?: string;
 }
 
-/** Entry point: picker in TTY, table otherwise. */
+/** Display a resource list: interactive picker in TTY mode, plain table otherwise. */
 export async function showResourceList(opts: ResourceViewOptions): Promise<void> {
   if (opts.rows.length === 0) {
     console.log(chalk.gray(opts.emptyMessage));
@@ -70,6 +79,7 @@ export async function showResourceList(opts: ResourceViewOptions): Promise<void>
   printWithPager(detail, lines.length);
 }
 
+/** Build the prompt message shown above the picker, including any scope label. */
 function buildPickerMessage(opts: ResourceViewOptions): string {
   const scope = opts.filterVersion
     ? ` (${opts.filterAgent}@${opts.filterVersion})`
@@ -79,6 +89,7 @@ function buildPickerMessage(opts: ResourceViewOptions): string {
   return `Search ${opts.resourcePlural}${scope}:`;
 }
 
+/** Filter rows by a case-insensitive substring match on name or description. */
 function filterRows(rows: ResourceRow[], query: string): ResourceRow[] {
   const q = query.trim().toLowerCase();
   if (!q) return rows;
@@ -100,7 +111,7 @@ function formatPickerRow(row: ResourceRow, opts: ResourceViewOptions): string {
   return `${name} ${extra}${desc} ${sync}`;
 }
 
-/** Table mode (piped output). */
+/** Render resources as a plain-text table (used when output is piped). */
 function printResourceTable(opts: ResourceViewOptions): void {
   const header = buildTableHeader(opts);
   console.log(header);
@@ -127,6 +138,7 @@ function printResourceTable(opts: ResourceViewOptions): void {
   console.log(chalk.gray(summary.join(' · ')));
 }
 
+/** Build the column header line for the plain-text table. */
 function buildTableHeader(opts: ResourceViewOptions): string {
   const name = chalk.bold(padRight('Name', 22));
   const extra = opts.extraLabel
@@ -137,7 +149,7 @@ function buildTableHeader(opts: ResourceViewOptions): string {
   return `${name} ${extra}${desc} ${sync}`;
 }
 
-/** Human-readable sync status: "everywhere", "14 of 16 installs", "not installed". */
+/** Compact sync summary: "everywhere", "14 of 16 installs", or "not installed". */
 function formatSyncSummary(targets: SyncTarget[], opts: ResourceViewOptions): string {
   if (targets.length === 0) {
     return chalk.gray('no installed versions');
@@ -183,7 +195,7 @@ function formatSyncSummary(targets: SyncTarget[], opts: ResourceViewOptions): st
   return parts.join(chalk.gray(' · '));
 }
 
-/** Build the detail pane text shown when a row is focused. */
+/** Build the sync targets section showing version pills grouped by agent. */
 export function buildTargetsSection(targets: SyncTarget[]): string {
   if (targets.length === 0) return chalk.gray('  No capable agent versions installed.');
 
@@ -204,6 +216,7 @@ export function buildTargetsSection(targets: SyncTarget[]): string {
   return lines.join('\n');
 }
 
+/** Render a single version as a colored pill (green/yellow/strikethrough). */
 function formatVersionPill(t: SyncTarget): string {
   const star = t.isDefault ? chalk.yellow('★ ') : '';
   const vtxt = `v${t.version}`;
@@ -217,6 +230,7 @@ function formatVersionPill(t: SyncTarget): string {
   }
 }
 
+/** Pad a string to a fixed width, accounting for ANSI escape codes in length calculation. */
 function padRight(s: string, width: number): string {
   // Strip ANSI for length calc
   const raw = s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -224,6 +238,7 @@ function padRight(s: string, width: number): string {
   return s + ' '.repeat(width - raw.length);
 }
 
+/** Truncate a string to a maximum length, appending an ellipsis if needed. */
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + '…';

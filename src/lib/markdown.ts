@@ -1,3 +1,9 @@
+/**
+ * Terminal-aware Markdown rendering using marked and marked-terminal.
+ *
+ * Provides a single function for converting Markdown content into
+ * ANSI-formatted text suitable for terminal output.
+ */
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 

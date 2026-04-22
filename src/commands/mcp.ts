@@ -1,3 +1,11 @@
+/**
+ * MCP (Model Context Protocol) server management commands.
+ *
+ * Implements `agents mcp` -- list, add, remove, view, and register MCP
+ * servers that give agents runtime access to databases, APIs, and external
+ * services. Servers are declared in ~/.agents/mcp/ YAML files or the
+ * agents.yaml manifest, then registered into each agent version's config.
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -38,6 +46,7 @@ import {
   type SyncTarget,
 } from './resource-view.js';
 
+/** Parse a comma-separated --agents string into validated agent IDs and optional version targets. */
 function parseMcpAgentTargets(value: string): {
   agents: AgentId[];
   agentVersions?: Partial<Record<AgentId, string[]>>;
@@ -112,6 +121,7 @@ function formatTargetLabel(agentId: AgentId, version?: string): string {
   return version ? `${agentLabel(agentId)}@${version}` : agentLabel(agentId);
 }
 
+/** Register the `agents mcp` command tree (list, add, remove, view, register). */
 export function registerMcpCommands(program: Command): void {
   const mcpCmd = program
     .command('mcp')

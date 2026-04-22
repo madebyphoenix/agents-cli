@@ -1,11 +1,14 @@
 /**
- * Template resolution utilities
- * Ported from agents/halo/cli/pkg/template
+ * Template resolution utilities.
+ * Ported from agents/halo/cli/pkg/template.
+ *
+ * Supports {{artifact.*}} and {{preflight.*}} placeholder patterns used in
+ * artifact action input mappings.
  */
 
 /**
- * Resolve template placeholders with artifact and preflight data
- * Replaces {{artifact.*}} and {{preflight.*}} patterns
+ * Resolve template placeholders with artifact and preflight data.
+ * Replaces {{artifact.*}} and {{preflight.*}} patterns.
  *
  * @param tmpl - Template string with placeholders
  * @param artifact - Map of artifact key-value pairs
@@ -43,7 +46,7 @@ export function resolveTemplate(
 }
 
 /**
- * Extract all template variables from a template string
+ * Extract all template variables from a template string.
  * @param tmpl - Template string
  * @returns Object with artifact and preflight variable names
  */

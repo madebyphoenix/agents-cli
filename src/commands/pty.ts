@@ -22,6 +22,7 @@ import { ptyRequest, unescapeInput } from '../lib/pty-client.js';
 import { isPtyServerRunning, runPtyServer, getPtyPidPath, getPtyLogPath } from '../lib/pty-server.js';
 import * as fs from 'fs';
 
+/** Register the `agents pty` command tree. */
 export function registerPtyCommands(program: Command): void {
   const pty = program
     .command('pty')
@@ -399,6 +400,7 @@ Example:
     });
 }
 
+/** Format a millisecond duration as a compact human-readable string (e.g. "5m", "2h 30m"). */
 function formatAge(ms: number): string {
   const secs = Math.floor(ms / 1000);
   if (secs < 60) return `${secs}s`;

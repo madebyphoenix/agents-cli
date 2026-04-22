@@ -1,3 +1,11 @@
+/**
+ * Plugin discovery, validation, and syncing.
+ *
+ * Plugins are bundles in ~/.agents/plugins/ that package skills, hooks, and
+ * scripts under a single manifest (plugin.yaml). This module discovers plugins,
+ * validates their manifests, and syncs their contents into agent version homes.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import type { AgentId, DiscoveredPlugin, PluginManifest } from './types.js';

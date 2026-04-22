@@ -1,3 +1,11 @@
+/**
+ * Filesystem layout and persistent state for agents-cli.
+ *
+ * Owns the canonical paths under ~/.agents/, the agents.yaml metadata file,
+ * and the per-version resource tracking that survives across CLI invocations.
+ * Every module that needs a path or reads/writes agents.yaml goes through here.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -33,10 +41,12 @@ const META_HEADER = `# agents-cli metadata
 
 `;
 
+/** Root of the agents-cli data directory (~/.agents/). */
 export function getAgentsDir(): string {
   return AGENTS_DIR;
 }
 
+/** Walk up from startPath to find a project-scoped .agents/ directory (skipping ~/.agents/). */
 export function getProjectAgentsDir(startPath: string = process.cwd()): string | null {
   let dir = path.resolve(startPath);
 
@@ -64,6 +74,7 @@ export function getProjectAgentsDir(startPath: string = process.cwd()): string |
   return null;
 }
 
+/** Return all .agents/ directories in scope, project first then user. */
 export function getScopedAgentsDirs(startPath: string = process.cwd()): Array<{ scope: 'project' | 'user'; path: string }> {
   const dirs: Array<{ scope: 'project' | 'user'; path: string }> = [];
   const projectDir = getProjectAgentsDir(startPath);
@@ -74,70 +85,87 @@ export function getScopedAgentsDirs(startPath: string = process.cwd()): Array<{ 
   return dirs;
 }
 
+/** Path to cloned packages (~/.agents/packages/). */
 export function getPackagesDir(): string {
   return PACKAGES_DIR;
 }
 
+/** Path to routine YAML definitions (~/.agents/routines/). */
 export function getRoutinesDir(): string {
   return ROUTINES_DIR;
 }
 
+/** Path to routine execution logs (~/.agents/runs/). */
 export function getRunsDir(): string {
   return RUNS_DIR;
 }
 
+/** Path to installed agent CLI binaries (~/.agents/versions/). */
 export function getVersionsDir(): string {
   return VERSIONS_DIR;
 }
 
+/** Path to version-switching shim scripts (~/.agents/shims/). */
 export function getShimsDir(): string {
   return SHIMS_DIR;
 }
 
+/** Path to permission group YAML files (~/.agents/permissions/). */
 export function getPermissionsDir(): string {
   return PERMISSIONS_DIR;
 }
 
+/** Path to MCP server YAML configs (~/.agents/mcp/). */
 export function getMcpDir(): string {
   return MCP_DIR;
 }
 
+/** Path to config backups created during version switches (~/.agents/backups/). */
 export function getBackupsDir(): string {
   return BACKUPS_DIR;
 }
 
+/** Path to subagent definition directories (~/.agents/subagents/). */
 export function getSubagentsDir(): string {
   return SUBAGENTS_DIR;
 }
 
+/** Path to plugin bundles (~/.agents/plugins/). */
 export function getPluginsDir(): string {
   return PLUGINS_DIR;
 }
 
+/** Path to synced remote session data (~/.agents/drive/). */
 export function getDriveDir(): string {
   return DRIVE_DIR;
 }
 
+/** Path to encrypted secret bundles (~/.agents/secrets/). */
 export function getSecretsDir(): string {
   return SECRETS_DIR;
 }
 
+/** Path to slash command markdown files (~/.agents/commands/). */
 export function getCommandsDir(): string {
   return COMMANDS_DIR;
 }
 
+/** Path to hook script directories (~/.agents/hooks/). */
 export function getHooksDir(): string {
   return HOOKS_DIR;
 }
 
+/** Path to skill bundles (~/.agents/skills/). */
 export function getSkillsDir(): string {
   return SKILLS_DIR;
 }
 
+/** Path to memory/rules files (~/.agents/memory/). */
 export function getMemoryDir(): string {
   return MEMORY_DIR;
 }
 
+/** Path to the global instructions file (~/.agents/instructions.md). */
 export function getInstructionsPath(): string {
   return INSTRUCTIONS_FILE;
 }
@@ -151,10 +179,12 @@ export function getPromptcutsPath(): string {
   return PROMPTCUTS_FILE;
 }
 
+/** Path to the legacy MCP config JSON (~/.agents/mcp.json). */
 export function getMcpConfigPath(): string {
   return MCP_CONFIG_FILE;
 }
 
+/** Create the ~/.agents/ directory tree if any subdirectories are missing. */
 export function ensureAgentsDir(): void {
   if (!fs.existsSync(AGENTS_DIR)) {
     fs.mkdirSync(AGENTS_DIR, { recursive: true });
@@ -198,12 +228,14 @@ export function ensureAgentsDir(): void {
 }
 
 
+/** Return an empty Meta object used when no agents.yaml exists yet. */
 export function createDefaultMeta(): Meta {
   return {};
 }
 
 let metaCache: { mtime: number; meta: Meta } | null = null;
 
+/** Read and cache ~/.agents/agents.yaml, migrating from the legacy meta.yaml format if needed. */
 export function readMeta(): Meta {
   ensureAgentsDir();
 
@@ -267,6 +299,7 @@ export function readMeta(): Meta {
   return createDefaultMeta();
 }
 
+/** Serialize and write agents.yaml, invalidating the in-memory cache. */
 export function writeMeta(meta: Meta): void {
   ensureAgentsDir();
   const content = META_HEADER + yaml.stringify(meta);
@@ -274,6 +307,7 @@ export function writeMeta(meta: Meta): void {
   metaCache = null;
 }
 
+/** Shallow-merge updates into agents.yaml and return the new state. */
 export function updateMeta(updates: Partial<Meta>): Meta {
   const meta = readMeta();
   const newMeta = { ...meta, ...updates };
@@ -281,6 +315,7 @@ export function updateMeta(updates: Partial<Meta>): Meta {
   return newMeta;
 }
 
+/** Derive a filesystem-safe local clone path for a package source URL. */
 export function getPackageLocalPath(source: string): string {
   const sanitized = source
     .replace(/^gh:/, '')

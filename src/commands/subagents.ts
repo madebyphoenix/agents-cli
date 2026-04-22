@@ -1,3 +1,11 @@
+/**
+ * Subagent management commands.
+ *
+ * Registers the `agents subagents` command tree for listing, viewing,
+ * installing, and removing lightweight agent definitions (AGENT.md files)
+ * that parent agents can spawn for focused subtasks.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -37,6 +45,7 @@ import {
   type SyncTarget,
 } from './resource-view.js';
 
+/** Replace the home directory prefix with ~ for display. */
 function formatPath(p: string): string {
   const home = process.env.HOME || '';
   if (home && p.startsWith(home)) {
@@ -45,6 +54,7 @@ function formatPath(p: string): string {
   return p;
 }
 
+/** Register the `agents subagents` command tree. */
 export function registerSubagentsCommands(program: Command): void {
   const subagentsCmd = program
     .command('subagents')
@@ -324,6 +334,7 @@ function buildSubagentTargets(name: string): SyncTarget[] {
   return targets;
 }
 
+/** Build resource rows for all centrally-installed subagents with sync status. */
 function buildSubagentRows(): ResourceRow[] {
   const central = listInstalledSubagents();
   if (central.length === 0) return [];
@@ -369,6 +380,7 @@ function buildSubagentRows(): ResourceRow[] {
   return rows;
 }
 
+/** Build the multi-line detail pane shown when a subagent is selected in the picker. */
 function formatSubagentDetail(sub: InstalledSubagent, targets: SyncTarget[]): string {
   const lines: string[] = [];
   lines.push(chalk.bold.cyan(sub.name));

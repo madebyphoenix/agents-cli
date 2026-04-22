@@ -1,9 +1,19 @@
+/**
+ * Agent event stream parsers.
+ *
+ * Normalizes the heterogeneous JSON event formats emitted by each agent CLI
+ * (Claude, Codex, Gemini, Cursor, OpenCode) into a unified event schema
+ * with consistent types: init, message, tool_use, bash, file_read, file_write,
+ * file_create, file_delete, result, error, and others.
+ */
 import { extractFileOpsFromBash } from './file_ops.js';
 
+/** Supported agent CLI types for team spawning. */
 export type AgentType = 'codex' | 'gemini' | 'cursor' | 'claude' | 'opencode';
 
 const claudeToolUseMap = new Map<string, { tool: string; command?: string; path?: string }>();
 
+/** Normalize a raw JSON event from any agent type into an array of unified event objects. */
 export function normalizeEvents(agentType: AgentType, raw: any): any[] {
   if (agentType === 'codex') {
     return normalizeCodex(raw);
@@ -26,6 +36,7 @@ export function normalizeEvents(agentType: AgentType, raw: any): any[] {
   }];
 }
 
+/** Normalize a raw JSON event, returning only the first unified event (convenience wrapper). */
 export function normalizeEvent(agentType: AgentType, raw: any): any {
   const events = normalizeEvents(agentType, raw);
   if (events.length > 0) {
@@ -841,6 +852,7 @@ function normalizeOpencode(raw: any): any[] {
   }];
 }
 
+/** Parse a single JSONL line into normalized events. Returns null if the line is not valid JSON. */
 export function parseEvent(agentType: AgentType, line: string): any[] | null {
   try {
     const raw = JSON.parse(line);

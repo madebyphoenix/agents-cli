@@ -1,7 +1,18 @@
+/**
+ * Core type definitions for agents-cli.
+ *
+ * Every data structure that flows between modules lives here: agent identity,
+ * configuration schemas, resource tracking, registry types, and permission
+ * formats for each supported agent.
+ */
+
+/** Unique identifier for a supported AI coding agent. */
 export type AgentId = 'claude' | 'codex' | 'gemini' | 'cursor' | 'opencode' | 'openclaw' | 'copilot' | 'amp' | 'kiro' | 'goose' | 'roo';
 
+/** Subset of chalk color names used for agent-specific terminal output. */
 export type ChalkColor = 'magenta' | 'green' | 'blue' | 'cyan' | 'yellowBright' | 'redBright' | 'whiteBright' | 'blueBright' | 'greenBright' | 'magentaBright' | 'cyanBright';
 
+/** Static configuration for a single agent -- paths, capabilities, and format conventions. */
 export interface AgentConfig {
   id: AgentId;
   name: string;
@@ -36,6 +47,7 @@ export interface AgentConfig {
   };
 }
 
+/** Configuration for a single MCP server as stored in ~/.agents/mcp/. */
 export interface McpServerConfig {
   command?: string;
   url?: string;
@@ -47,12 +59,14 @@ export interface McpServerConfig {
   headers?: Record<string, string>;
 }
 
+/** User-facing hook definition (name + script path). */
 export interface HookConfig {
   name: string;
   script: string;
   dataFile?: string;
 }
 
+/** Hook entry as declared in a package manifest (agents.yaml). */
 export interface ManifestHook {
   script: string;
   events: string[];
@@ -61,6 +75,7 @@ export interface ManifestHook {
   agents?: AgentId[];
 }
 
+/** Lightweight hook descriptor used in resource listings. */
 export interface HookResourceEntry {
   name: string;
   events: string[];
@@ -68,6 +83,7 @@ export interface HookResourceEntry {
   matcher?: string;
 }
 
+/** A hook that has been synced into a specific agent version's config. */
 export interface InstalledHook {
   name: string;
   path: string;
@@ -76,6 +92,7 @@ export interface InstalledHook {
   agent: AgentId;
 }
 
+/** Package manifest (agents.yaml) found inside a cloned config repo or package. */
 export interface Manifest {
   agents?: Partial<Record<AgentId, string>>;
   dependencies?: Record<string, string>;
@@ -87,11 +104,13 @@ export interface Manifest {
   };
 }
 
+/** Record of how a slash command was installed into an agent version. */
 export interface CommandInstallation {
   path: string;
   method: 'symlink' | 'copy';
 }
 
+/** Metadata parsed from a SKILL.md frontmatter block. */
 export interface SkillMetadata {
   name: string;
   description: string;
@@ -101,17 +120,20 @@ export interface SkillMetadata {
   keywords?: string[];
 }
 
+/** Record of how a skill was installed into an agent version. */
 export interface SkillInstallation {
   path: string;
   method: 'symlink' | 'copy';
 }
 
+/** Tracked state for a skill across all agent versions it's been synced to. */
 export interface SkillState {
   source: string;
   ruleCount: number;
   installations: Partial<Record<AgentId, SkillInstallation>>;
 }
 
+/** A skill that has been synced into a specific agent version's config. */
 export interface InstalledSkill {
   name: string;
   path: string;
@@ -121,6 +143,7 @@ export interface InstalledSkill {
   agent: AgentId;
 }
 
+/** Git remote metadata for the ~/.agents/ config repository. */
 export interface RepoInfo {
   source: string;
   branch: string;
@@ -128,22 +151,27 @@ export interface RepoInfo {
   lastSync: string;
 }
 
+/** Default upstream config repo used by `agents pull` / `agents fork`. */
 export const DEFAULT_SYSTEM_REPO = 'gh:phnx-labs/.agents';
+/** Previous default repo, kept for migration detection. */
 export const LEGACY_SYSTEM_REPO = 'gh:muqsitnawaz/.agents';
 
+/** Strip the `gh:` prefix and `.git` suffix to get a GitHub `owner/repo` slug. */
 export function systemRepoSlug(repo: string = DEFAULT_SYSTEM_REPO): string {
   return repo.replace(/^gh:/, '').replace(/\.git$/, '');
 }
 
-// Registry types
+/** Kind of package that can be searched and installed from a registry. */
 export type RegistryType = 'mcp' | 'skill';
 
+/** Connection details for a single package registry endpoint. */
 export interface RegistryConfig {
   url: string;
   enabled: boolean;
   apiKey?: string;
 }
 
+/** Built-in registry endpoints shipped with agents-cli. */
 export const DEFAULT_REGISTRIES: Record<RegistryType, Record<string, RegistryConfig>> = {
   mcp: {
     official: {
@@ -157,7 +185,7 @@ export const DEFAULT_REGISTRIES: Record<RegistryType, Record<string, RegistryCon
   },
 };
 
-// MCP Registry API response types
+/** A single installable package within an MCP server entry. */
 export interface McpPackage {
   registry_name: string;
   name: string;
@@ -171,6 +199,7 @@ export interface McpPackage {
   }>;
 }
 
+/** A server listing returned by the MCP registry API. */
 export interface McpServerEntry {
   name: string;
   description?: string;
@@ -186,6 +215,7 @@ export interface McpServerEntry {
   _meta?: Record<string, unknown>;
 }
 
+/** Paginated response from the MCP registry search endpoint. */
 export interface McpRegistryResponse {
   servers: Array<{ server: McpServerEntry }>;
   metadata?: {
@@ -194,7 +224,7 @@ export interface McpRegistryResponse {
   };
 }
 
-// Skill Registry API response types (for future use)
+/** A skill listing returned by a skill registry API (not yet available). */
 export interface SkillEntry {
   name: string;
   description?: string;
@@ -205,6 +235,7 @@ export interface SkillEntry {
   tags?: string[];
 }
 
+/** Paginated response from a skill registry search endpoint. */
 export interface SkillRegistryResponse {
   skills: SkillEntry[];
   metadata?: {
@@ -213,7 +244,7 @@ export interface SkillRegistryResponse {
   };
 }
 
-// Unified search result
+/** Provider-agnostic search result that merges MCP and skill registries. */
 export interface RegistrySearchResult {
   name: string;
   description?: string;
@@ -224,7 +255,7 @@ export interface RegistrySearchResult {
   installs?: number;
 }
 
-// Resolved package for installation
+/** A package that has been resolved from a registry and is ready to install. */
 export interface ResolvedPackage {
   type: 'mcp' | 'skill' | 'git';
   source: string;
@@ -232,9 +263,10 @@ export interface ResolvedPackage {
   skillEntry?: SkillEntry;
 }
 
-// Resource tracking per agent version
+/** Categories of resources that can be synced into an agent version home. */
 export type ResourceType = 'commands' | 'skills' | 'hooks' | 'memory' | 'mcp' | 'permissions' | 'subagents' | 'plugins';
 
+/** Map of resource names synced to a specific agent version, keyed by type. */
 export interface VersionResources {
   commands?: string[];
   skills?: string[];
@@ -246,7 +278,7 @@ export interface VersionResources {
   plugins?: string[];
 }
 
-// Plugin types
+/** Manifest file (plugin.yaml) at the root of a plugin bundle. */
 export interface PluginManifest {
   name: string;
   description: string;
@@ -254,6 +286,7 @@ export interface PluginManifest {
   agents?: AgentId[];
 }
 
+/** A plugin found on disk with its parsed manifest and resource inventory. */
 export interface DiscoveredPlugin {
   name: string;
   root: string;
@@ -263,7 +296,7 @@ export interface DiscoveredPlugin {
   scripts: string[];
 }
 
-// Subagent types
+/** Frontmatter fields parsed from a subagent's agent.md file. */
 export interface SubagentFrontmatter {
   name: string;
   description: string;
@@ -271,6 +304,7 @@ export interface SubagentFrontmatter {
   color?: string;
 }
 
+/** A subagent definition found in ~/.agents/subagents/. */
 export interface DiscoveredSubagent {
   name: string;
   path: string;
@@ -279,6 +313,7 @@ export interface DiscoveredSubagent {
   frontmatter: SubagentFrontmatter;
 }
 
+/** A subagent that has been synced into a specific agent version's config. */
 export interface InstalledSubagent {
   name: string;
   path: string;
@@ -286,6 +321,7 @@ export interface InstalledSubagent {
   frontmatter: SubagentFrontmatter;
 }
 
+/** Top-level structure of ~/.agents/agents.yaml -- the CLI's persistent state. */
 export interface Meta {
   agents?: Partial<Record<AgentId, string>>;
   registries?: Record<RegistryType, Record<string, RegistryConfig>>;
@@ -295,6 +331,7 @@ export interface Meta {
   source?: string;
 }
 
+/** Options controlling which agents and resources are synced during `agents pull` / `agents use`. */
 export interface SyncOptions {
   agents?: AgentId[];
   yes?: boolean;
@@ -304,7 +341,7 @@ export interface SyncOptions {
   skipMcp?: boolean;
 }
 
-// Permission types - canonical format uses Claude's syntax
+/** Agent-agnostic permission set (canonical format matches Claude's syntax). */
 export interface PermissionSet {
   name: string;
   description?: string;
@@ -313,13 +350,14 @@ export interface PermissionSet {
   additionalDirectories?: string[];
 }
 
+/** A permission set that has been applied to a specific agent version. */
 export interface InstalledPermission {
   name: string;
   path: string;
   set: PermissionSet;
 }
 
-// Agent-specific permission formats
+/** Claude's native settings.json permission format. */
 export interface ClaudePermissions {
   permissions: {
     allow: string[];
@@ -328,12 +366,14 @@ export interface ClaudePermissions {
   };
 }
 
+/** OpenCode's native permission format (per-command allow/deny/ask). */
 export interface OpenCodePermissions {
   permission: {
     bash: Record<string, 'allow' | 'deny' | 'ask'>;
   };
 }
 
+/** Codex's native permission format (approval policy + sandbox mode). */
 export interface CodexPermissions {
   approval_policy?: 'on-request' | 'on-failure' | 'never';
   sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access';

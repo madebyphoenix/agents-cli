@@ -1,3 +1,11 @@
+/**
+ * Hook management commands for automating workflows on agent events.
+ *
+ * Implements `agents hooks` -- list, add, remove, sync, prune, and view
+ * shell scripts that fire on agent lifecycle events (session start, file
+ * edit, task completion). Central storage lives in ~/.agents/hooks/ and
+ * scripts are synced to individual version homes.
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -47,6 +55,7 @@ import {
   requireInteractiveSelection,
 } from './utils.js';
 
+/** Register the `agents hooks` command tree (list, add, remove, sync, prune, view). */
 export function registerHooksCommands(program: Command): void {
   const hooksCmd = program.command('hooks')
     .description('Automate workflows by running shell scripts in response to agent events')

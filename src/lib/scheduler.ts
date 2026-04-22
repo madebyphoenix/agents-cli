@@ -1,12 +1,22 @@
+/**
+ * Cron-based job scheduler for routines.
+ *
+ * Wraps the croner library to manage scheduled jobs in-memory. The daemon
+ * process creates a single JobScheduler instance that loads enabled jobs
+ * on startup and reloads them on SIGHUP.
+ */
+
 import { Cron } from 'croner';
 import type { JobConfig } from './routines.js';
 import { listJobs, deleteJob } from './routines.js';
 
+/** A job config paired with its active cron instance. */
 interface ScheduledJob {
   config: JobConfig;
   cron: Cron;
 }
 
+/** In-memory cron scheduler that triggers a callback when jobs fire. */
 export class JobScheduler {
   private jobs = new Map<string, ScheduledJob>();
   private onTrigger: (config: JobConfig) => Promise<void>;

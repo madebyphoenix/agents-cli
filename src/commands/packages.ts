@@ -1,3 +1,11 @@
+/**
+ * Package registry and installation commands.
+ *
+ * Registers `agents registry`, `agents search`, and `agents install`
+ * for discovering and installing MCP servers, skills, commands, and
+ * hooks from configured registries or GitHub sources.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -50,9 +58,11 @@ import {
 } from './utils.js';
 import { itemPicker } from '../lib/picker.js';
 
-// Picker fallback for `registry enable/config [name]`. Returns the picked
-// name, or null if the user cancels. In non-TTY shells, hard-fails with a
-// clear reminder of the positional form.
+/**
+ * Picker fallback for `registry enable/config [name]`.
+ * Returns the picked name, or null if the user cancels. In non-TTY shells,
+ * hard-fails with a clear reminder of the positional form.
+ */
 async function pickRegistryName(
   type: RegistryType,
   verb: string,
@@ -98,6 +108,7 @@ async function pickRegistryName(
   }
 }
 
+/** Register the `agents registry`, `agents search`, and `agents install` commands. */
 export function registerPackagesCommands(program: Command): void {
   // ==========================================================================
   // REGISTRY COMMANDS

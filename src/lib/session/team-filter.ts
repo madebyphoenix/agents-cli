@@ -1,3 +1,12 @@
+/**
+ * Classification and filtering of team-spawned sessions.
+ *
+ * Sessions launched by `agents teams` carry an 'sdk-cli' entrypoint and
+ * optionally have a meta.json with handle/mode info. This module determines
+ * whether a session is team-origin and splits session lists into visible
+ * and hidden groups for the picker UI.
+ */
+
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -6,6 +15,7 @@ import type { SessionMeta, TeamOrigin } from './types.js';
 const HOME = os.homedir();
 
 // Default path; tests can override via AGENTS_TEAMS_DIR env var.
+/** Resolve the directory containing per-session team metadata files. */
 function teamsAgentsDir(): string {
   return process.env.AGENTS_TEAMS_DIR ?? path.join(HOME, '.agents', 'teams', 'agents');
 }
@@ -45,6 +55,7 @@ export function classifyTeamSession(session: SessionMeta): TeamOrigin | null {
   return null;
 }
 
+/** Result of splitting sessions into visible and hidden (team-origin) groups. */
 export interface FilterResult {
   visible: SessionMeta[];
   hiddenCount: number;

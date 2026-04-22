@@ -1,3 +1,11 @@
+/**
+ * Secret bundles -- named sets of keychain-backed environment variables.
+ *
+ * Each bundle is a YAML file in ~/.agents/secrets/ declaring key names.
+ * Values live in the macOS Keychain and are injected into the agent's
+ * environment at spawn time via `agents run --secrets <bundle>`.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
@@ -10,6 +18,7 @@ import {
   type SecretRef,
 } from './secrets.js';
 
+/** A named set of environment variable definitions backed by various secret providers. */
 export interface SecretsBundle {
   name: string;
   description?: string;
@@ -20,6 +29,7 @@ export interface SecretsBundle {
 const BUNDLE_NAME_PATTERN = /^[a-z0-9][a-z0-9-_]{0,48}$/i;
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/** Validate a bundle name against the allowed pattern. Throws on invalid input. */
 export function validateBundleName(name: string): void {
   if (!BUNDLE_NAME_PATTERN.test(name)) {
     throw new Error(`Invalid bundle name '${name}'. Use letters, digits, dash, underscore (max 48 chars).`);

@@ -1,3 +1,11 @@
+/**
+ * Agent execution command.
+ *
+ * Registers the `agents run` command which spawns agent CLIs interactively
+ * or headlessly. Supports profile resolution, version rotation, secrets
+ * injection, and multi-agent fallback chains for rate-limit resilience.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import {
@@ -35,10 +43,12 @@ interface ExecCommandActionOptions {
   rotate?: boolean;
 }
 
+/** Type guard that narrows a string to a known AgentId. */
 function isValidAgent(agent: string): agent is AgentId {
   return VALID_AGENTS.includes(agent);
 }
 
+/** Build a one-line banner describing which version the rotation picked. */
 function formatRotationBanner(result: RotateResult): string {
   const { picked, healthy, excluded } = result;
   const label = picked.email ? `${picked.email} · ${picked.agent}@${picked.version}` : `${picked.agent}@${picked.version}`;
@@ -46,6 +56,7 @@ function formatRotationBanner(result: RotateResult): string {
   return `[agents] rotation picked ${label} (${ratio})`;
 }
 
+/** Register the `agents run <agent> [prompt]` command. */
 export function registerRunCommand(program: Command): void {
   program
     .command('run <agent> [prompt]')

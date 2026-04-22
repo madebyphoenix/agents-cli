@@ -1,8 +1,17 @@
+/**
+ * Format conversion between Markdown (Claude/Codex) and TOML (Gemini) command files.
+ *
+ * Handles frontmatter parsing and bidirectional translation so that slash commands
+ * authored in one format can be synced to agents that expect the other.
+ */
+
+/** Parsed YAML frontmatter from a Markdown command file. */
 export interface MarkdownFrontmatter {
   description?: string;
   [key: string]: unknown;
 }
 
+/** Extract YAML frontmatter and body from a Markdown string. Returns empty frontmatter if none found. */
 export function parseMarkdownFrontmatter(content: string): {
   frontmatter: MarkdownFrontmatter;
   body: string;
@@ -28,6 +37,7 @@ export function parseMarkdownFrontmatter(content: string): {
   return { frontmatter, body };
 }
 
+/** Convert a Markdown command file to Gemini's TOML format, translating $ARGUMENTS to {{args}}. */
 export function markdownToToml(skillName: string, markdown: string): string {
   const { frontmatter, body } = parseMarkdownFrontmatter(markdown);
   const description = frontmatter.description || `Run ${skillName} command`;
@@ -48,6 +58,7 @@ export function markdownToToml(skillName: string, markdown: string): string {
   return lines.join('\n');
 }
 
+/** Convert a Gemini TOML command file back to Markdown format, translating {{args}} to $ARGUMENTS. */
 export function tomlToMarkdown(toml: string): string {
   const nameMatch = toml.match(/name\s*=\s*"([^"]+)"/);
   const descMatch = toml.match(/description\s*=\s*"([^"]+)"/);

@@ -1,3 +1,12 @@
+/**
+ * Session discovery across Claude, Codex, Gemini, OpenCode, and OpenClaw.
+ *
+ * Performs incremental scans: each agent's session files are stat'd and compared
+ * to a scan-stamp ledger in SQLite. Only files whose mtime or size changed since
+ * the last run are re-parsed. All metadata is upserted into the sessions DB so
+ * subsequent queries are served entirely from the cache.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -32,6 +41,7 @@ const OPENCLAW_TTL_MS = 60_000;
 
 let cachedOpenClawWorkspaces: Map<string, string> | null = null;
 
+/** Options controlling which sessions to discover and how to report progress. */
 export interface DiscoverOptions {
   agent?: SessionAgentId;
   version?: string;
@@ -53,12 +63,14 @@ export interface DiscoverOptions {
   onProgress?: (progress: ScanProgress) => void;
 }
 
+/** Progress report emitted during incremental scanning. */
 export interface ScanProgress {
   agent: SessionAgentId;
   parsed: number;
   total: number;
 }
 
+/** Lightweight metadata extracted from a Claude JSONL file during incremental scan. */
 interface ClaudeSessionScan {
   timestamp?: string;
   cwd?: string;
@@ -76,6 +88,7 @@ interface ClaudeSessionScan {
   contentText?: string;
 }
 
+/** Lightweight metadata extracted from a Codex JSONL file during incremental scan. */
 interface CodexSessionScan {
   sessionId?: string;
   timestamp?: string;
@@ -90,6 +103,7 @@ interface CodexSessionScan {
 
 const cachedAgentVersions = new Map<SessionAgentId, Promise<string | undefined>>();
 
+/** A session ready for batch upsert: metadata, searchable text, and file stamp. */
 interface ScanEntry {
   meta: SessionMeta;
   content: string;
@@ -134,6 +148,7 @@ export function countSessionsInScope(options: DiscoverOptions): number {
   return countSessions(buildQueryOptions(options, agents, { includeLimit: false }));
 }
 
+/** Translate DiscoverOptions into the QueryOptions shape expected by the DB layer. */
 function buildQueryOptions(
   options: DiscoverOptions | undefined,
   agents: SessionAgentId[],
@@ -166,6 +181,7 @@ function buildQueryOptions(
   };
 }
 
+/** Resolve and canonicalize a working directory path (follows symlinks). */
 function normalizeCwd(cwd?: string): string {
   if (!cwd) return '';
   const resolved = path.resolve(cwd);
@@ -297,6 +313,7 @@ export function getAgentSessionDirs(agent: string, subdir: string): string[] {
 
 let cachedClaudeAccount: string | undefined;
 
+/** Read the Claude OAuth account email from .claude.json across all version homes. */
 function getClaudeAccount(): string | undefined {
   if (cachedClaudeAccount !== undefined) return cachedClaudeAccount || undefined;
 
@@ -375,6 +392,7 @@ function buildClaudeLabelMap(): Map<string, string | null> {
   return out;
 }
 
+/** Incrementally re-scan changed Claude session files and upsert into the DB. */
 async function scanClaudeIncremental(onProgress?: (p: ScanProgress) => void): Promise<void> {
   const account = getClaudeAccount();
   const labelMap = buildClaudeLabelMap();
@@ -444,6 +462,7 @@ async function scanClaudeIncremental(onProgress?: (p: ScanProgress) => void): Pr
   if (labelMap.size > 0) syncLabels(labelMap);
 }
 
+/** Stream-parse a single Claude JSONL file to extract session metadata. */
 async function readClaudeMeta(
   filePath: string,
   sessionId: string,
@@ -499,6 +518,7 @@ async function readClaudeMeta(
 
 let cachedCodexAccount: string | undefined;
 
+/** Extract the Codex account email from the JWT id_token in auth.json. */
 function getCodexAccount(): string | undefined {
   if (cachedCodexAccount !== undefined) return cachedCodexAccount || undefined;
 
@@ -539,6 +559,7 @@ function getCodexAccount(): string | undefined {
 // Codex
 // ---------------------------------------------------------------------------
 
+/** Incrementally re-scan changed Codex session files and upsert into the DB. */
 async function scanCodexIncremental(onProgress?: (p: ScanProgress) => void): Promise<void> {
   const account = getCodexAccount();
   const currentVersion = await getCurrentAgentVersion('codex');
@@ -580,6 +601,7 @@ async function scanCodexIncremental(onProgress?: (p: ScanProgress) => void): Pro
   recordScans(touched);
 }
 
+/** Stream-parse a single Codex JSONL file to extract session metadata. */
 async function readCodexMeta(
   filePath: string,
   account?: string,
@@ -612,6 +634,7 @@ async function readCodexMeta(
 // Gemini
 // ---------------------------------------------------------------------------
 
+/** Incrementally re-scan changed Gemini session files and upsert into the DB. */
 async function scanGeminiIncremental(onProgress?: (p: ScanProgress) => void): Promise<void> {
   const currentVersion = await getCurrentAgentVersion('gemini');
   const projectMap = buildGeminiProjectMap();
@@ -675,6 +698,7 @@ async function scanGeminiIncremental(onProgress?: (p: ScanProgress) => void): Pr
   recordScans(touched);
 }
 
+/** Parse a single Gemini JSON session file to extract session metadata. */
 function readGeminiMeta(
   filePath: string,
   hashDir: string,
@@ -748,6 +772,7 @@ function readGeminiMeta(
   return { meta, content: userTexts.join('\n') };
 }
 
+/** Build a hash-to-project mapping from Gemini's projects.json and history directories. */
 function buildGeminiProjectMap(): Map<string, { name: string; path: string }> {
   const map = new Map<string, { name: string; path: string }>();
   const projectsJsonPath = path.join(HOME, '.gemini', 'projects.json');
@@ -805,6 +830,7 @@ const OPENCODE_DB = path.join(HOME, '.local', 'share', 'opencode', 'opencode.db'
 
 let cachedOpenCodeAccount: string | undefined;
 
+/** Query the active OpenCode account email from its SQLite database. */
 function getOpenCodeAccount(): string | undefined {
   if (cachedOpenCodeAccount !== undefined) return cachedOpenCodeAccount || undefined;
 
@@ -825,6 +851,7 @@ function getOpenCodeAccount(): string | undefined {
   return undefined;
 }
 
+/** Scan OpenCode sessions from its SQLite database when the DB file has changed. */
 async function scanOpenCodeIncremental(): Promise<void> {
   if (!fs.existsSync(OPENCODE_DB)) return;
 
@@ -927,6 +954,7 @@ async function scanOpenCodeIncremental(): Promise<void> {
 // OpenClaw
 // ---------------------------------------------------------------------------
 
+/** Scan active OpenClaw channels and cron jobs via the openclaw CLI. */
 async function scanOpenClawIncremental(): Promise<void> {
   // Check if openclaw is installed — silently skip if not.
   try {
@@ -1023,6 +1051,7 @@ async function scanOpenClawIncremental(): Promise<void> {
   db.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('openclaw_last_scan_ms', ?)`).run(String(Date.now()));
 }
 
+/** Stream a Claude JSONL file and extract scan-level metadata (timestamp, cwd, topic, tokens). */
 async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
   const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -1110,6 +1139,7 @@ async function scanClaudeSession(filePath: string): Promise<ClaudeSessionScan> {
   };
 }
 
+/** Stream a Codex JSONL file and extract scan-level metadata (session ID, cwd, topic, tokens). */
 async function scanCodexSession(filePath: string): Promise<CodexSessionScan> {
   const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -1182,6 +1212,7 @@ async function scanCodexSession(filePath: string): Promise<CodexSessionScan> {
   };
 }
 
+/** Resolve the working directory for an OpenClaw agent from its workspace config. */
 function getOpenClawSessionCwd(agentId?: string): string {
   const workspace = agentId ? getOpenClawWorkspaceMap().get(agentId) : undefined;
   if (workspace) return workspace;
@@ -1190,6 +1221,7 @@ function getOpenClawSessionCwd(agentId?: string): string {
   return safeRealpathSync(configDir) || configDir;
 }
 
+/** Build a cached map of OpenClaw agent ID to workspace path from openclaw.json. */
 function getOpenClawWorkspaceMap(): Map<string, string> {
   if (cachedOpenClawWorkspaces) return cachedOpenClawWorkspaces;
 
@@ -1221,6 +1253,7 @@ function getOpenClawWorkspaceMap(): Map<string, string> {
 // Utilities
 // ---------------------------------------------------------------------------
 
+/** Read up to maxLines non-empty lines from the beginning of a file. */
 export function readFirstLines(filePath: string, maxLines: number): Promise<string[]> {
   return new Promise((resolve) => {
     const lines: string[] = [];
@@ -1276,10 +1309,12 @@ export function walkForFiles(dir: string, ext: string, limit: number): string[] 
   return results.slice(0, limit).map(r => r.path);
 }
 
+/** Compute the SHA-256 hex digest of a string. */
 function sha256(input: string): string {
   return crypto.createHash('sha256').update(input).digest('hex');
 }
 
+/** Stat a path, returning null on any error. */
 function safeStatSync(p: string): fs.Stats | null {
   try {
     return fs.statSync(p);
@@ -1288,6 +1323,7 @@ function safeStatSync(p: string): fs.Stats | null {
   }
 }
 
+/** Resolve a path to its real path, returning null on any error. */
 function safeRealpathSync(p: string): string | null {
   try {
     return fs.realpathSync(p);
@@ -1296,6 +1332,7 @@ function safeRealpathSync(p: string): string | null {
   }
 }
 
+/** Extract meaningful user text from a Claude JSONL user event, skipping meta and local-command messages. */
 function extractClaudeUserText(parsed: any): string | undefined {
   if (parsed.isMeta === true) return undefined;
 
@@ -1316,10 +1353,12 @@ function extractClaudeUserText(parsed: any): string | undefined {
   return text;
 }
 
+/** Check whether a message is a local-command wrapper rather than real user input. */
 function isLocalCommandMessage(text: string): boolean {
   return /<local-command-caveat>|<bash-(input|stdout|stderr)>/i.test(text);
 }
 
+/** Sum all token usage fields from a Claude assistant message's usage object. */
 function getClaudeUsageTotal(usage: any): number | null {
   if (!usage || typeof usage !== 'object') return null;
   return sumKnownNumbers([
@@ -1330,6 +1369,7 @@ function getClaudeUsageTotal(usage: any): number | null {
   ]);
 }
 
+/** Extract text from Codex message content blocks, filtering out system instructions for user messages. */
 function extractCodexMessageText(contentBlocks: any, role: 'user' | 'assistant'): string | undefined {
   if (!Array.isArray(contentBlocks)) return undefined;
 
@@ -1350,11 +1390,13 @@ function extractCodexMessageText(contentBlocks: any, role: 'user' | 'assistant')
   return text || undefined;
 }
 
+/** Trim and normalize a version string, returning undefined for empty values. */
 function normalizeVersion(version?: string | null): string | undefined {
   const trimmed = version?.trim();
   return trimmed ? trimmed : undefined;
 }
 
+/** Extract the version number from a managed ~/.agents/versions/<agent>/<version>/... path. */
 function extractVersionFromManagedPath(agent: SessionAgentId, sourcePath?: string): string | undefined {
   if (!sourcePath) return undefined;
 
@@ -1373,6 +1415,7 @@ function extractVersionFromManagedPath(agent: SessionAgentId, sourcePath?: strin
   return undefined;
 }
 
+/** Resolve the current version of an agent CLI (symlink version or live CLI output, cached). */
 async function getCurrentAgentVersion(agent: SessionAgentId): Promise<string | undefined> {
   const cached = cachedAgentVersions.get(agent);
   if (cached) return cached;
@@ -1387,6 +1430,7 @@ async function getCurrentAgentVersion(agent: SessionAgentId): Promise<string | u
   return promise;
 }
 
+/** Resolve a session's version: embedded in file > extracted from managed path > current CLI version. */
 function resolveSessionVersion(
   agent: SessionAgentId,
   sourcePath: string | undefined,
@@ -1398,6 +1442,7 @@ function resolveSessionVersion(
     || normalizeVersion(currentVersion);
 }
 
+/** Sum all token usage fields from a Codex total_token_usage object. */
 function getCodexTokenCount(totalTokenUsage: any): number | null {
   if (!totalTokenUsage || typeof totalTokenUsage !== 'object') return null;
   return sumKnownNumbers([
@@ -1408,6 +1453,7 @@ function getCodexTokenCount(totalTokenUsage: any): number | null {
   ]);
 }
 
+/** Extract text from a Gemini message content field (string or array of parts). */
 function extractGeminiMessageText(content: any): string {
   if (typeof content === 'string') return content.trim();
   if (Array.isArray(content)) {
@@ -1423,6 +1469,7 @@ function extractGeminiMessageText(content: any): string {
   return '';
 }
 
+/** Extract the total token count from a Gemini message's tokens object. */
 function getGeminiTokenCount(tokens: any): number | null {
   if (!tokens || typeof tokens !== 'object') return null;
   if (typeof tokens.total === 'number') return tokens.total;
@@ -1435,6 +1482,7 @@ function getGeminiTokenCount(tokens: any): number | null {
   ]);
 }
 
+/** Sum all numeric values in an array, returning null if none are valid numbers. */
 function sumKnownNumbers(values: unknown[]): number | null {
   let total = 0;
   let found = false;
@@ -1452,6 +1500,7 @@ function sumKnownNumbers(values: unknown[]): number | null {
 // Time range parsing
 // ---------------------------------------------------------------------------
 
+/** Parse a time filter string (relative like '7d' or ISO timestamp) into epoch milliseconds. */
 export function parseTimeFilter(input: string): number {
   const relativeMatch = input.match(/^(\d+)([mhdw])$/i);
   if (relativeMatch) {

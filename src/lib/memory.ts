@@ -1,3 +1,12 @@
+/**
+ * Memory file management -- reading, writing, and syncing agent instructions.
+ *
+ * The "memory" is the main instructions file (AGENTS.md) that gets symlinked
+ * into each agent's config directory under their native name (CLAUDE.md,
+ * GEMINI.md, etc.). This module handles reading, managing includes, and
+ * refreshing memory files across version homes.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';

@@ -1,3 +1,11 @@
+/**
+ * Permission management commands for controlling agent access boundaries.
+ *
+ * Implements `agents permissions` -- list, add, remove, and view permission
+ * sets (allow/deny rules for bash, tools, and filesystem). Supports importing
+ * from agent config files, GitHub repos, and YAML, with merge/replace
+ * semantics and multi-version targeting.
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -44,6 +52,7 @@ import {
   requireInteractiveSelection,
 } from './utils.js';
 
+/** Register the `agents permissions` command tree (list, add, remove, view). */
 export function registerPermissionsCommands(program: Command): void {
   const permissionsCmd = program
     .command('permissions')

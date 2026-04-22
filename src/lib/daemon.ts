@@ -1,3 +1,12 @@
+/**
+ * Daemon lifecycle management for the routines scheduler.
+ *
+ * The daemon is a long-running process that holds a JobScheduler and
+ * triggers jobs on their cron schedules. It can be managed via launchd
+ * (macOS), systemd (Linux), or as a plain detached process. PID tracking,
+ * log output, reload (SIGHUP), and graceful shutdown are handled here.
+ */
+
 import { spawn, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -28,6 +37,7 @@ function getSystemdUnitPath(): string {
   return path.join(os.homedir(), '.config', 'systemd', 'user', `${SYSTEMD_UNIT}`);
 }
 
+/** Read the stored daemon PID from disk. Returns null if not present or invalid. */
 export function readDaemonPid(): number | null {
   const pidPath = getPidPath();
   if (!fs.existsSync(pidPath)) return null;
@@ -39,10 +49,12 @@ export function readDaemonPid(): number | null {
   }
 }
 
+/** Write the daemon PID to the pid file. */
 export function writeDaemonPid(pid: number): void {
   fs.writeFileSync(getPidPath(), String(pid), 'utf-8');
 }
 
+/** Remove the daemon PID file. */
 export function removeDaemonPid(): void {
   const pidPath = getPidPath();
   if (fs.existsSync(pidPath)) {
@@ -50,6 +62,7 @@ export function removeDaemonPid(): void {
   }
 }
 
+/** Check if the daemon process is alive by sending signal 0 to the stored PID. */
 export function isDaemonRunning(): boolean {
   const pid = readDaemonPid();
   if (!pid) return false;
@@ -62,12 +75,14 @@ export function isDaemonRunning(): boolean {
   }
 }
 
+/** Append a timestamped log line to the daemon log file. */
 export function log(level: string, message: string): void {
   const timestamp = new Date().toISOString();
   const line = `[${timestamp}] [${level.toUpperCase()}] ${message}\n`;
   fs.appendFileSync(getLogPath(), line, 'utf-8');
 }
 
+/** Main daemon loop: load jobs, schedule crons, monitor runs, and handle signals. */
 export async function runDaemon(): Promise<void> {
   writeDaemonPid(process.pid);
   log('INFO', `Daemon started (PID: ${process.pid})`);
@@ -115,6 +130,7 @@ export async function runDaemon(): Promise<void> {
   await new Promise(() => {});
 }
 
+/** Generate a macOS launchd plist for auto-starting the daemon. */
 export function generateLaunchdPlist(): string {
   const agentsBin = getAgentsBinPath();
   const logPath = getLogPath();
@@ -148,6 +164,7 @@ export function generateLaunchdPlist(): string {
 </plist>`;
 }
 
+/** Generate a Linux systemd user unit for auto-starting the daemon. */
 export function generateSystemdUnit(): string {
   const agentsBin = getAgentsBinPath();
 
@@ -174,6 +191,7 @@ function getAgentsBinPath(): string {
   }
 }
 
+/** Start the daemon via launchd, systemd, or as a detached process. */
 export function startDaemon(): { pid: number | null; method: string } {
   if (isDaemonRunning()) {
     const pid = readDaemonPid();
@@ -253,6 +271,7 @@ function waitForPid(timeoutMs: number): number | null {
   return readDaemonPid();
 }
 
+/** Stop the daemon, unloading it from launchd/systemd if applicable. */
 export function stopDaemon(): boolean {
   const platform = os.platform();
 
@@ -303,6 +322,7 @@ export function stopDaemon(): boolean {
   return true;
 }
 
+/** Get current daemon status including running state, PID, and enabled job count. */
 export function getDaemonStatus(): {
   running: boolean;
   pid: number | null;
@@ -320,6 +340,7 @@ export function getDaemonStatus(): {
   return { running, pid, jobCount, logPath: getLogPath() };
 }
 
+/** Read the daemon log, optionally limited to the last N lines. */
 export function readDaemonLog(lines?: number): string {
   const logPath = getLogPath();
   if (!fs.existsSync(logPath)) return '(no log file)';
@@ -331,6 +352,7 @@ export function readDaemonLog(lines?: number): string {
   return allLines.slice(-lines).join('\n');
 }
 
+/** Send SIGHUP to the daemon to trigger a job reload. */
 export function signalDaemonReload(): boolean {
   const pid = readDaemonPid();
   if (!pid) return false;

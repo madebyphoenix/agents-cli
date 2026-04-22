@@ -1,3 +1,12 @@
+/**
+ * Remote drive sync for agent sessions and config.
+ *
+ * Provides rsync-based push/pull between the local ~/.agents/drive/
+ * directory and a remote host, plus attach/detach to swap the active
+ * agent's config directory symlink to the drive directory (for working
+ * with a remote machine's session data locally).
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -11,6 +20,7 @@ const execAsync = promisify(exec);
 
 const AGENT: AgentId = 'claude';
 
+/** Persisted drive configuration stored at ~/.agents/drive/config.json. */
 export interface DriveConfig {
   remote: string | null;
   attached: boolean;
@@ -26,6 +36,7 @@ function configPath(): string {
   return path.join(getDriveDir(), 'config.json');
 }
 
+/** Read drive config from disk, returning defaults if missing. */
 export function readDriveConfig(): DriveConfig {
   const p = configPath();
   if (fs.existsSync(p)) {
@@ -38,6 +49,7 @@ export function readDriveConfig(): DriveConfig {
   return { remote: null, attached: false, previousTargets: null, lastPull: null, lastPush: null };
 }
 
+/** Write drive config to disk. */
 export function writeDriveConfig(config: DriveConfig): void {
   const dir = getDriveDir();
   if (!fs.existsSync(dir)) {
@@ -46,6 +58,7 @@ export function writeDriveConfig(config: DriveConfig): void {
   fs.writeFileSync(configPath(), JSON.stringify(config, null, 2));
 }
 
+/** Set the remote target (user@host) for rsync operations. */
 export function setRemote(target: string): void {
   if (!target.match(/^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+$/)) {
     throw new Error(`Invalid remote: ${target}. Expected: user@host`);
@@ -55,6 +68,7 @@ export function setRemote(target: string): void {
   writeDriveConfig(config);
 }
 
+/** Pull drive data from the remote host via rsync. */
 export async function pull(): Promise<void> {
   const config = readDriveConfig();
   if (!config.remote) throw new Error('No remote configured. Run: agents drive remote <user@host>');
@@ -68,6 +82,7 @@ export async function pull(): Promise<void> {
   writeDriveConfig(config);
 }
 
+/** Push local drive data to the remote host via rsync. */
 export async function push(): Promise<void> {
   const config = readDriveConfig();
   if (!config.remote) throw new Error('No remote configured. Run: agents drive remote <user@host>');
@@ -83,6 +98,7 @@ export async function push(): Promise<void> {
   writeDriveConfig(config);
 }
 
+/** Attach drive by swapping the agent's config directory symlink to the drive directory. */
 export function attach(): void {
   const config = readDriveConfig();
   if (config.attached) throw new Error('Drive is already attached');
@@ -152,6 +168,7 @@ export function attach(): void {
   writeDriveConfig(config);
 }
 
+/** Detach drive by restoring the agent's config directory to its previous symlink target. */
 export function detach(): void {
   const config = readDriveConfig();
   if (!config.attached) throw new Error('Drive is not attached');
@@ -180,6 +197,7 @@ export function detach(): void {
   writeDriveConfig(config);
 }
 
+/** Current drive state for display purposes. */
 export interface DriveStatus {
   remote: string | null;
   attached: boolean;
@@ -190,6 +208,7 @@ export interface DriveStatus {
   homeFileTargets: Record<string, string | null>;
 }
 
+/** Gather current drive status by inspecting config, symlinks, and timestamps. */
 export function getDriveStatus(): DriveStatus {
   const config = readDriveConfig();
   const home = os.homedir();

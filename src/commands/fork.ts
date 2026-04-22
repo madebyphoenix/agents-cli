@@ -1,3 +1,11 @@
+/**
+ * Repository fork command.
+ *
+ * Registers the `agents fork` command which forks the default system
+ * config repo to the user's GitHub account, reconfigures remotes
+ * (origin -> user fork, upstream -> system repo), and pushes.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -15,6 +23,7 @@ import {
 import { DEFAULT_SYSTEM_REPO, systemRepoSlug } from '../lib/types.js';
 import { isPromptCancelled } from './utils.js';
 
+/** Register the `agents fork` command. */
 export function registerForkCommand(program: Command): void {
   program
     .command('fork')

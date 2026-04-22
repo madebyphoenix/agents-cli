@@ -1,3 +1,11 @@
+/**
+ * Drive sync commands.
+ *
+ * Registers the `agents drive` command tree for syncing agent session
+ * history across machines via rsync. Supports pull, push, attach
+ * (redirect agent homes to drive), and detach operations.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -10,6 +18,7 @@ import {
   getDriveStatus,
 } from '../lib/drive-sync.js';
 
+/** Register the `agents drive` command tree. */
 export function registerDriveCommands(program: Command): void {
   const driveCmd = program
     .command('drive')
@@ -158,6 +167,7 @@ Example:
     });
 }
 
+/** Format an ISO timestamp as a human-readable relative time (e.g. "5 min ago"). */
 function formatTime(iso: string): string {
   const d = new Date(iso);
   const now = Date.now();

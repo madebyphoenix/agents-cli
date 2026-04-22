@@ -1,3 +1,10 @@
+/**
+ * macOS Keychain integration for secure credential storage.
+ *
+ * Wraps the `security` command to store and retrieve API keys and tokens
+ * in the system keychain rather than environment variables or plaintext files.
+ */
+
 import { execFileSync, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -5,8 +12,10 @@ import * as path from 'path';
 
 const SERVICE_PREFIX = 'agents-cli';
 
+/** Supported secret resolution backends. */
 export type SecretProvider = 'keychain' | 'env' | 'file' | 'exec';
 
+/** A typed reference to a secret, consisting of a provider and a provider-specific value. */
 export interface SecretRef {
   provider: SecretProvider;
   value: string;
@@ -14,11 +23,14 @@ export interface SecretRef {
 
 const REF_PATTERN = /^(keychain|env|file|exec):(.+)$/s;
 
-// A bundle YAML value is either a string (literal OR provider-prefixed ref) or
-// an object of shape {value: string} used to escape a literal that would
-// otherwise be parsed as a ref (e.g. a URL that happens to start with 'env:').
+/**
+ * A bundle YAML value: either a string (literal or provider-prefixed ref) or
+ * an object `{value: string}` used to escape a literal that would otherwise
+ * be parsed as a ref (e.g. a URL that happens to start with 'env:').
+ */
 export type BundleValue = string | { value: string };
 
+/** Parse a bundle YAML value into either a literal string or a typed secret ref. */
 export function parseBundleValue(raw: BundleValue): { literal: string } | { ref: SecretRef } {
   if (typeof raw === 'object' && raw !== null && typeof (raw as any).value === 'string') {
     return { literal: (raw as { value: string }).value };
@@ -31,6 +43,7 @@ export function parseBundleValue(raw: BundleValue): { literal: string } | { ref:
   return { ref: { provider: match[1] as SecretProvider, value: match[2] } };
 }
 
+/** Serialize a secret ref back to its `provider:value` string form. */
 export function serializeRef(ref: SecretRef): string {
   return `${ref.provider}:${ref.value}`;
 }
@@ -41,16 +54,17 @@ function assertMacOS(): void {
   }
 }
 
-// Keychain items for profile tokens: agents-cli.<provider>.token
+/** Build the keychain item name for a profile provider token. */
 export function profileKeychainItem(provider: string): string {
   return `${SERVICE_PREFIX}.${provider}.token`;
 }
 
-// Keychain items for secrets bundles: agents-cli.secrets.<bundle>.<KEY>
+/** Build the keychain item name for a secrets-bundle key. */
 export function secretsKeychainItem(bundle: string, key: string): string {
   return `${SERVICE_PREFIX}.secrets.${bundle}.${key}`;
 }
 
+/** Check if a keychain item exists (macOS only). */
 export function hasKeychainToken(item: string): boolean {
   assertMacOS();
   const result = spawnSync('security', ['find-generic-password', '-a', os.userInfo().username, '-s', item, '-w'], {
@@ -59,6 +73,7 @@ export function hasKeychainToken(item: string): boolean {
   return result.status === 0;
 }
 
+/** Retrieve a secret value from the macOS Keychain. Throws if not found. */
 export function getKeychainToken(item: string): string {
   assertMacOS();
   try {
@@ -78,6 +93,7 @@ export function getKeychainToken(item: string): string {
   }
 }
 
+/** Store or update a secret value in the macOS Keychain. */
 export function setKeychainToken(item: string, value: string): void {
   assertMacOS();
   if (!value || !value.trim()) {
@@ -94,6 +110,7 @@ export function setKeychainToken(item: string, value: string): void {
   }
 }
 
+/** Delete a keychain item. Returns true if it existed. */
 export function deleteKeychainToken(item: string): boolean {
   assertMacOS();
   const result = spawnSync(
@@ -104,16 +121,13 @@ export function deleteKeychainToken(item: string): boolean {
   return result.status === 0;
 }
 
+/** Options controlling how secret refs are resolved. */
 export interface ResolveOptions {
-  // When resolving a bundle's keychain ref, we translate the short identifier
-  // into the fully namespaced item name. Callers that don't resolve bundle
-  // refs (e.g. profiles) pass through with keychainItemFor=undefined.
+  /** Translate a short keychain ID to a fully namespaced item name. */
   keychainItemFor?: (shortId: string) => string;
-  // Bundle-level opt-in for exec refs. Off means exec refs throw.
+  /** Allow exec: refs. When false (default), exec refs throw. */
   allowExec?: boolean;
-  // Allowlist of parent process env vars that env: refs may read. When
-  // undefined, any env var may be read. When set, reads outside the list
-  // throw to prevent accidental inheritance of unrelated secrets.
+  /** Restrict env: refs to this allowlist. When undefined, any env var may be read. */
   envAllowlist?: string[];
 }
 
@@ -124,6 +138,7 @@ function expandHome(p: string): string {
   return p;
 }
 
+/** Resolve a secret ref to its plaintext value using the appropriate provider. */
 export function resolveRef(ref: SecretRef, opts: ResolveOptions = {}): string {
   switch (ref.provider) {
     case 'keychain': {

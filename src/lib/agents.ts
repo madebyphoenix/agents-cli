@@ -1,3 +1,13 @@
+/**
+ * Core agent configuration and detection module.
+ *
+ * Defines the canonical registry of all supported AI coding agents (Claude, Codex,
+ * Gemini, Cursor, OpenCode, OpenClaw, Copilot, Amp, Kiro, Goose, Roo) with their
+ * CLI commands, config paths, capability flags, and MCP integration points.
+ *
+ * Provides functions for detecting installed CLIs, resolving version-managed binaries,
+ * reading account/auth info, and managing MCP server registrations across agents.
+ */
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
@@ -11,6 +21,7 @@ import { getVersionsDir, getShimsDir } from './state.js';
 import { resolveVersion, getVersionHomePath, getBinaryPath } from './versions.js';
 import { loadClaudeOauth } from './usage.js';
 
+/** Represents the installation state of an agent's CLI binary. */
 export interface CliState {
   installed: boolean;
   version: string | null;
@@ -21,6 +32,7 @@ const execAsync = promisify(exec);
 
 const HOME = os.homedir();
 
+/** Minimum Codex CLI version that supports hooks. */
 export const CODEX_HOOKS_MIN_VERSION = '0.116.0';
 
 const CLI_VERSION_CACHE_PATH = path.join(HOME, '.agents', '.cli-version-cache.json');
@@ -55,7 +67,7 @@ function saveCliVersionCache(): void {
   }
 }
 
-/** Synchronous PATH search — no subprocess. Returns first matching binary path. */
+/** Synchronous PATH search -- no subprocess. Returns first matching binary path. */
 function findInPath(command: string): string | null {
   const pathEnv = process.env.PATH || '';
   const pathExt = process.platform === 'win32' ? (process.env.PATHEXT || '').split(';') : [''];
@@ -74,6 +86,13 @@ function findInPath(command: string): string | null {
   return null;
 }
 
+/**
+ * Master registry of all supported agents keyed by AgentId.
+ *
+ * Each entry defines the agent's CLI command, npm package, config directory layout,
+ * instructions file name, slash-command format, and capability flags. This is the
+ * single source of truth for agent metadata consumed throughout the codebase.
+ */
 export const AGENTS: Record<AgentId, AgentConfig> = {
   claude: {
     id: 'claude',
@@ -270,17 +289,28 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
   },
 };
 
+/** All registered agent IDs derived from the AGENTS registry. */
 export const ALL_AGENT_IDS: AgentId[] = Object.keys(AGENTS) as AgentId[];
+
+/** Agents that support MCP (Model Context Protocol) server integration. */
 export const MCP_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
   (id) => AGENTS[id].capabilities.mcp
 );
+
+/** Agents that support skills (SKILL.md + rules/ bundles). */
 export const SKILLS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
   (id) => AGENTS[id].capabilities.skills
 );
+
+/** Agents that support file-based slash commands. */
 export const COMMANDS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
   (id) => AGENTS[id].capabilities.commands
 );
+
+/** Agents that support event hooks (pre/post lifecycle callbacks). */
 export const HOOKS_CAPABLE_AGENTS = ['claude', 'codex', 'gemini', 'openclaw'] as const;
+
+/** Agents that support the plugin system. */
 export const PLUGINS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
   (id) => AGENTS[id].capabilities.plugins
 );
@@ -299,11 +329,13 @@ export function agentLabel(agentId: string): string {
   return chalk[agent.color](agent.name);
 }
 
+/** Check whether the given agent's CLI binary is present on PATH. */
 export async function isCliInstalled(agentId: AgentId): Promise<boolean> {
   const agent = AGENTS[agentId];
   return findInPath(agent.cliCommand) !== null;
 }
 
+/** Return the installed CLI version for the given agent, or null if not found. */
 export async function getCliVersion(agentId: AgentId): Promise<string | null> {
   const agent = AGENTS[agentId];
   const binaryPath = findInPath(agent.cliCommand);
@@ -311,6 +343,7 @@ export async function getCliVersion(agentId: AgentId): Promise<string | null> {
   return getCachedVersionForBinary(agentId, binaryPath);
 }
 
+/** Return the absolute path to the agent's CLI binary on PATH, or null. */
 export async function getCliPath(agentId: AgentId): Promise<string | null> {
   return findInPath(AGENTS[agentId].cliCommand);
 }
@@ -352,6 +385,11 @@ async function getCachedVersionForBinary(agentId: AgentId, binaryPath: string): 
   return version;
 }
 
+/**
+ * Resolve the full CLI state for an agent: whether it is installed, its version,
+ * and the path to the binary. Checks version-managed installs first, then falls
+ * back to a plain PATH lookup.
+ */
 export async function getCliState(agentId: AgentId): Promise<CliState> {
   // Fast path: if version-managed, derive state from filesystem (no subprocesses)
   const agent = AGENTS[agentId];
@@ -400,6 +438,7 @@ export async function getCliState(agentId: AgentId): Promise<CliState> {
   };
 }
 
+/** Resolve CLI state for all registered agents in parallel. */
 export async function getAllCliStates(): Promise<Partial<Record<AgentId, CliState>>> {
   const states: Partial<Record<AgentId, CliState>> = {};
   const results = await Promise.all(
@@ -414,11 +453,13 @@ export async function getAllCliStates(): Promise<Partial<Record<AgentId, CliStat
   return states;
 }
 
+/** Check whether the agent's config directory exists on disk. */
 export function isConfigured(agentId: AgentId): boolean {
   const agent = AGENTS[agentId];
   return fs.existsSync(agent.configDir);
 }
 
+/** Create the agent's slash-commands directory if it does not exist. */
 export function ensureCommandsDir(agentId: AgentId): void {
   const agent = AGENTS[agentId];
   if (!fs.existsSync(agent.commandsDir)) {
@@ -426,6 +467,7 @@ export function ensureCommandsDir(agentId: AgentId): void {
   }
 }
 
+/** Create the agent's skills directory if it does not exist. */
 export function ensureSkillsDir(agentId: AgentId): void {
   const agent = AGENTS[agentId];
   if (!fs.existsSync(agent.skillsDir)) {
@@ -433,6 +475,7 @@ export function ensureSkillsDir(agentId: AgentId): void {
   }
 }
 
+/** Account identity and billing information extracted from an agent's auth config. */
 export interface AccountInfo {
   accountKey: string | null;
   usageKey: string | null;
@@ -446,6 +489,7 @@ export interface AccountInfo {
   lastActive: Date | null;
 }
 
+/** Return the email address associated with the agent's auth config, or null. */
 export async function getAccountEmail(
   agentId: AgentId,
   home?: string
@@ -454,6 +498,10 @@ export async function getAccountEmail(
   return info.email;
 }
 
+/**
+ * Extract full account information (identity, plan, usage status, credits) from
+ * the agent's local auth/config files. Supports Claude, Codex, and Gemini.
+ */
 export async function getAccountInfo(
   agentId: AgentId,
   home?: string
@@ -595,6 +643,7 @@ export async function getAccountInfo(
   }
 }
 
+/** Determine when the agent was last used by checking session file mtimes, falling back to config mtime. */
 function resolveLastActive(
   agentId: AgentId,
   base: string,
@@ -617,6 +666,7 @@ function resolveLastActive(
   }
 }
 
+/** Return the root directory where the agent stores session files, or null if unknown. */
 function getSessionDir(agentId: AgentId, base: string): string | null {
   switch (agentId) {
     case 'claude':
@@ -630,6 +680,7 @@ function getSessionDir(agentId: AgentId, base: string): string | null {
   }
 }
 
+/** Return the file extension used for session files by the given agent. */
 function getSessionExtension(agentId: AgentId): string | null {
   switch (agentId) {
     case 'claude':
@@ -642,6 +693,7 @@ function getSessionExtension(agentId: AgentId): string | null {
   }
 }
 
+/** Walk a directory for files matching the extension and return the mtime of the most recent one. */
 function getLatestFileMtime(dir: string, ext: string): Date | null {
   if (!fs.existsSync(dir)) return null;
   const [latest] = walkForFiles(dir, ext, 1);
@@ -653,6 +705,7 @@ function getLatestFileMtime(dir: string, ext: string): Date | null {
   }
 }
 
+/** Decode the payload section of a JWT token without verifying its signature. */
 function decodeJwtPayload(token: string): Record<string, any> | null {
   const payload = token.split('.')[1];
   if (!payload) return null;
@@ -663,6 +716,7 @@ function decodeJwtPayload(token: string): Record<string, any> | null {
   }
 }
 
+/** Extract the default organization ID from a Codex/OpenAI auth claim. */
 function getCodexDefaultOrgId(authClaim: any): string | null {
   const organizations = authClaim?.organizations;
   if (!Array.isArray(organizations)) return null;
@@ -670,12 +724,14 @@ function getCodexDefaultOrgId(authClaim: any): string | null {
   return typeof first?.id === 'string' ? first.id : null;
 }
 
+/** Trim and normalize an identity string, returning null for empty or non-string values. */
 function normalizeIdentityPart(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed || null;
 }
 
+/** Build a composite identity key like "claude:account=abc:org=xyz" from labeled parts. */
 function buildIdentityKey(
   agentId: AgentId,
   parts: Array<[label: string, value: string | null]>
@@ -687,6 +743,7 @@ function buildIdentityKey(
   return `${agentId}:${encoded.join(':')}`;
 }
 
+/** Check whether a named MCP server is registered with the agent's CLI. */
 export async function isMcpRegistered(agentId: AgentId, mcpName: string): Promise<boolean> {
   const agent = AGENTS[agentId];
   if (!agent.capabilities.mcp || !(await isCliInstalled(agentId))) {
@@ -701,6 +758,7 @@ export async function isMcpRegistered(agentId: AgentId, mcpName: string): Promis
   }
 }
 
+/** Register an MCP server with an agent's CLI via `mcp add`. */
 export async function registerMcp(
   agentId: AgentId,
   name: string,
@@ -735,6 +793,7 @@ export async function registerMcp(
   }
 }
 
+/** Unregister (remove) a named MCP server from an agent's CLI config. */
 export async function unregisterMcp(
   agentId: AgentId,
   name: string,
@@ -758,6 +817,7 @@ export async function unregisterMcp(
   }
 }
 
+/** Result of an MCP registration or removal operation targeting a specific agent and optional version. */
 export interface McpTargetOperationResult {
   agentId: AgentId;
   version?: string;
@@ -765,6 +825,10 @@ export interface McpTargetOperationResult {
   error?: string;
 }
 
+/**
+ * Register an MCP server across multiple agent targets, including both direct
+ * (non-version-managed) agents and specific version-managed installs.
+ */
 export async function registerMcpToTargets(
   targets: { directAgents: AgentId[]; versionSelections: Map<AgentId, string[]> },
   name: string,
@@ -792,6 +856,10 @@ export async function registerMcpToTargets(
   return results;
 }
 
+/**
+ * Unregister an MCP server from multiple agent targets, including both direct
+ * agents and specific version-managed installs.
+ */
 export async function unregisterMcpFromTargets(
   targets: { directAgents: AgentId[]; versionSelections: Map<AgentId, string[]> },
   name: string
@@ -816,8 +884,10 @@ export async function unregisterMcpFromTargets(
   return results;
 }
 
+/** Scope at which an MCP server is registered: user-global or per-project. */
 export type McpScope = 'user' | 'project';
 
+/** Describes an MCP server discovered in an agent's config, with its scope and command. */
 export interface InstalledMcp {
   name: string;
   scope: McpScope;
@@ -1209,7 +1279,7 @@ export function listInstalledMcpsWithScope(
   return results;
 }
 
-// Agent name aliases for flexible input
+/** Map of agent name aliases and shorthand identifiers to canonical AgentId values. */
 export const AGENT_NAME_ALIASES: Record<string, AgentId> = {
   claude: 'claude',
   'claude-code': 'claude',
@@ -1243,14 +1313,17 @@ export const AGENT_NAME_ALIASES: Record<string, AgentId> = {
   roocode: 'roo',
 };
 
+/** Resolve a user-provided agent name (alias, shorthand, or canonical) to its AgentId. */
 export function resolveAgentName(input: string): AgentId | null {
   return AGENT_NAME_ALIASES[input.toLowerCase()] || null;
 }
 
+/** Check whether the input string matches any known agent name or alias. */
 export function isAgentName(input: string): boolean {
   return resolveAgentName(input) !== null;
 }
 
+/** Format an error message for an unrecognized agent name, listing valid options. */
 export function formatAgentError(agentName: string, validAgents: AgentId[] = ALL_AGENT_IDS): string {
   return `Unknown agent '${agentName}'. Valid agents: ${validAgents.join(', ')}`;
 }

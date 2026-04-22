@@ -1,3 +1,19 @@
+/**
+ * Interactive fuzzy-filter picker built on @inquirer/core.
+ *
+ * Provides a searchable, paginated list UI with optional preview pane
+ * for selecting items in the terminal. Used by session picker, command
+ * picker, and other interactive selection flows.
+ */
+
+/**
+ * Custom inquirer prompt for searchable, scrollable selection lists.
+ *
+ * Extends @inquirer/core to support type-ahead filtering, column-aligned
+ * display, and keyboard navigation. Used by sessions, teams, and other
+ * interactive pickers throughout the CLI.
+ */
+
 import {
   createPrompt,
   useState,
@@ -15,6 +31,7 @@ import {
 } from '@inquirer/core';
 import chalk from 'chalk';
 
+/** Configuration for the interactive picker prompt. */
 export interface PickerConfig<T> {
   message: string;
   items: T[];
@@ -28,6 +45,7 @@ export interface PickerConfig<T> {
   enterHint?: string;
 }
 
+/** The result returned when the user selects an item. */
 export interface PickedItem<T> {
   item: T;
 }
@@ -37,6 +55,7 @@ interface Choice<T> {
   label: string;
 }
 
+/** Show an interactive fuzzy-filter picker and return the selected item, or null on cancel. */
 export function itemPicker<T>(config: PickerConfig<T>): Promise<PickedItem<T> | null> {
   const prompt = createPrompt<PickedItem<T> | null, PickerConfig<T>>((cfg, done) => {
     const theme = makeTheme({});

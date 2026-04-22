@@ -1,3 +1,10 @@
+/**
+ * Shared utilities for command implementations.
+ *
+ * Small helpers used across multiple commands: prompt cancellation detection,
+ * table formatting, spinner management, and platform-specific workarounds.
+ */
+
 import * as os from 'os';
 import { spawnSync } from 'child_process';
 import chalk from 'chalk';

@@ -1,5 +1,13 @@
+/**
+ * Built-in profile presets for popular model providers.
+ *
+ * Each preset bundles a host CLI, API base URL, default model, and provider
+ * name so users can `agents profiles add kimi` without manual configuration.
+ */
+
 import type { AgentId } from './types.js';
 
+/** A pre-configured profile template for a model provider. */
 export interface Preset {
   name: string;
   description: string;
@@ -98,14 +106,17 @@ export const PRESETS: Preset[] = [
   },
 ];
 
+/** Look up a preset by name (case-sensitive). */
 export function getPreset(name: string): Preset | undefined {
   return PRESETS.find((p) => p.name === name);
 }
 
+/** Return a copy of all available presets. */
 export function listPresets(): Preset[] {
   return [...PRESETS];
 }
 
+/** Return the unique set of provider names across all presets. */
 export function listProviders(): string[] {
   return [...new Set(PRESETS.map((p) => p.provider))];
 }

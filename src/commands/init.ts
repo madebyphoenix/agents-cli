@@ -1,3 +1,11 @@
+/**
+ * First-run initialization command.
+ *
+ * Registers the `agents init` command which walks the user through
+ * initial setup: choosing a config source (default repo or personal),
+ * cloning it, and installing agent CLIs with resource syncing.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import * as fs from 'fs';
@@ -9,6 +17,7 @@ import { getAgentsDir } from '../lib/state.js';
 import { isGitRepo } from '../lib/git.js';
 import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
 
+/** Validate a repo source input (gh:owner/repo, URL, or owner/repo shorthand). */
 function isValidSourceInput(value: string): true | string {
   const trimmed = value.trim();
   if (!trimmed) return 'Repo is required';
@@ -25,6 +34,7 @@ function isValidSourceInput(value: string): true | string {
   return 'Format: gh:owner/repo';
 }
 
+/** Interactive init wizard. Prompts for config source then delegates to `agents pull`. */
 export async function runInit(program: Command, options: { force?: boolean } = {}): Promise<void> {
   const agentsDir = getAgentsDir();
   const metaFile = path.join(agentsDir, 'agents.yaml');
@@ -96,6 +106,7 @@ export async function runInit(program: Command, options: { force?: boolean } = {
   }
 }
 
+/** Register the `agents init` command. */
 export function registerInitCommand(program: Command): void {
   program
     .command('init')

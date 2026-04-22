@@ -1,7 +1,19 @@
+/**
+ * Session data model.
+ *
+ * Normalized types that unify the different session storage formats used by
+ * Claude (JSONL), Codex (JSONL events), Gemini (single JSON), and OpenCode.
+ * Everything in the session pipeline -- discovery, parsing, rendering --
+ * speaks these types.
+ */
+
+/** Agents that store session data on disk and can be discovered by `agents sessions`. */
 export type SessionAgentId = 'claude' | 'codex' | 'gemini' | 'opencode' | 'openclaw';
 
+/** All agents with session discovery support, in display order. */
 export const SESSION_AGENTS: SessionAgentId[] = ['claude', 'codex', 'gemini', 'opencode', 'openclaw'];
 
+/** A single normalized event within a session (message, tool call, thinking, etc.). */
 export interface SessionEvent {
   type: 'message' | 'tool_use' | 'tool_result' | 'thinking' | 'error' | 'init' | 'result' | 'usage' | 'attachment';
   agent: SessionAgentId;
@@ -27,6 +39,7 @@ export interface SessionEvent {
   sizeBytes?: number;
 }
 
+/** Metadata attached when a session was spawned by `agents teams`. */
 export interface TeamOrigin {
   /** Teammate name if set, otherwise first 8 chars of the agent UUID. */
   handle?: string;
@@ -34,6 +47,7 @@ export interface TeamOrigin {
   mode?: string;
 }
 
+/** Lightweight metadata for a discovered session, used in listings and pickers. */
 export interface SessionMeta {
   id: string;
   shortId: string;
@@ -64,8 +78,10 @@ export interface SessionMeta {
   _bm25Score?: number;
 }
 
+/** Output format for rendering a session's content. */
 export type ViewMode = 'summary' | 'markdown' | 'json';
 
+/** A file created or modified during a session, discovered from tool_use events. */
 export interface SessionArtifact {
   path: string;
   tool: string;

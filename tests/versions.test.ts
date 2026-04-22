@@ -62,6 +62,9 @@ vi.mock('../src/lib/permissions.js', () => ({
   getTotalPermissionRuleCount: () => 0,
   buildPermissionsFromGroups: () => ({ allow: [], deny: [] }),
   CODEX_RULES_FILENAME: '.codex.rules',
+  getActivePermissionSetName: () => null,
+  readPermissionSetRecipe: () => null,
+  PERMISSION_SET_ENV_VAR: 'AGENTS_PERMISSION_SET',
 }));
 
 vi.mock('../src/lib/mcp.js', () => ({

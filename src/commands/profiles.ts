@@ -1,3 +1,12 @@
+/**
+ * Profile management commands.
+ *
+ * Registers the `agents profiles` command tree for creating, viewing,
+ * and removing named bundles of (host CLI, endpoint, model, keychain auth).
+ * Profiles let users run non-default providers (Kimi, DeepSeek, Qwen, etc.)
+ * through a standard agent CLI with no local proxy.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import * as fs from 'fs';
@@ -19,6 +28,7 @@ import {
 } from '../lib/profiles-keychain.js';
 import { isInteractiveTerminal } from './utils.js';
 
+/** Prompt the user for a secret value with masked input. Requires an interactive TTY. */
 async function promptForSecret(message: string): Promise<string> {
   if (!isInteractiveTerminal()) {
     throw new Error('A secret is required but the shell is not interactive. Pipe the key via stdin (--key-stdin).');
@@ -27,6 +37,7 @@ async function promptForSecret(message: string): Promise<string> {
   return await password({ message, mask: true });
 }
 
+/** Read all available data from stdin synchronously, trimmed. */
 function readStdinSync(): string {
   const chunks: Buffer[] = [];
   const buf = Buffer.alloc(65536);
@@ -43,6 +54,7 @@ function readStdinSync(): string {
   return Buffer.concat(chunks).toString('utf-8').trim();
 }
 
+/** Ensure a provider API key exists in keychain, prompting or reading stdin if missing. */
 async function ensureProviderToken(provider: string, signupUrl?: string, fromStdin?: boolean): Promise<void> {
   const item = keychainItemName(provider);
   if (hasKeychainToken(item)) {
@@ -62,6 +74,7 @@ async function ensureProviderToken(provider: string, signupUrl?: string, fromStd
   console.log(chalk.green(`Stored in keychain: ${item}`));
 }
 
+/** Format a single profile as a table row for the `profiles list` output. */
 function renderProfileRow(p: ReturnType<typeof listProfiles>[number]): string {
   const host = p.host.version ? `${p.host.agent}@${p.host.version}` : p.host.agent;
   const model = p.env.ANTHROPIC_MODEL || p.env.OPENAI_MODEL || p.env.GEMINI_MODEL || '-';
@@ -69,6 +82,7 @@ function renderProfileRow(p: ReturnType<typeof listProfiles>[number]): string {
   return `${chalk.cyan(p.name.padEnd(16))} ${host.padEnd(14)} ${provider.padEnd(12)} ${chalk.gray(model)}`;
 }
 
+/** Register the `agents profiles` command tree. */
 export function registerProfilesCommands(program: Command): void {
   const cmd = program
     .command('profiles')

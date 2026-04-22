@@ -1,5 +1,12 @@
+/**
+ * Custom help formatting for the CLI.
+ *
+ * Overrides commander's default help layout to show Commands before Options,
+ * and applies consistent conventions (short -h flag, no implicit help subcommand).
+ */
 import type { Command, Help } from 'commander';
 
+/** Format help output with Commands listed before Options for better discoverability. */
 function formatHelpCommandsFirst(cmd: Command, helper: Help): string {
   const termWidth = helper.padWidth(cmd, helper);
   const helpWidth = helper.helpWidth || 80;
@@ -58,6 +65,7 @@ function formatHelpCommandsFirst(cmd: Command, helper: Help): string {
   return output.join('\n');
 }
 
+/** Recursively apply help conventions (-h flag, no help subcommand, custom formatter). */
 function applyHelpConventionsRecursive(cmd: Command): void {
   cmd
     .helpOption('-h, --help', 'Show help')
@@ -71,6 +79,7 @@ function applyHelpConventionsRecursive(cmd: Command): void {
   }
 }
 
+/** Apply standardized help formatting to the root command and all subcommands. */
 export function applyGlobalHelpConventions(root: Command): void {
   applyHelpConventionsRecursive(root);
 }

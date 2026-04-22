@@ -1,3 +1,11 @@
+/**
+ * Memory file compilation -- resolving @-imports into a single flat file.
+ *
+ * Agents that do not natively resolve `@path/to/file` imports (Codex, Gemini)
+ * need a pre-compiled memory file with all imports inlined. This module
+ * handles that expansion.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -15,6 +23,7 @@ const COMPILED_HEADER =
   '<!-- Auto-compiled by agents-cli from ~/.agents/memory/AGENTS.md + imports.\n' +
   '     Edit the source files under ~/.agents/memory/ — edits to this file will be overwritten on next sync. -->\n\n';
 
+/** Sidecar manifest recording source file hashes for staleness detection. */
 export interface CompileManifest {
   compiledAt: string;
   sources: { path: string; sha256: string }[];
@@ -55,6 +64,7 @@ function restoreCodeRegions(content: string, fences: string[], inlines: string[]
   return restored;
 }
 
+/** Result of resolving @-imports in a memory file. */
 export interface ResolveResult {
   /** Fully-inlined content. */
   content: string;

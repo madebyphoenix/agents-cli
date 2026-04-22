@@ -1,3 +1,11 @@
+/**
+ * Model catalog inspection command.
+ *
+ * Registers the hidden `agents models` command for listing models
+ * supported by installed agent versions. Extracts model catalogs from
+ * each agent's CLI bundle and displays IDs, aliases, and metadata.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import * as fs from 'fs';
@@ -21,6 +29,7 @@ const MODEL_CAPABLE_AGENTS: AgentId[] = ['claude', 'codex', 'gemini', 'opencode'
  */
 const PATH_ONLY_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(['cursor']);
 
+/** Derive a version label from the PATH-installed binary location for agents without managed versions. */
 function fallbackPathVersion(agent: AgentId): string | null {
   const src = locateModelSource(agent, 'unresolved');
   if (!src) return null;
@@ -34,6 +43,7 @@ function fallbackPathVersion(agent: AgentId): string | null {
   return m ? m[1] : 'installed';
 }
 
+/** Register the hidden `agents models` command. */
 export function registerModelsCommand(program: Command): void {
   program
     .command('models [agentSpec]', { hidden: true })
@@ -70,6 +80,7 @@ interface Target {
   isDefault: boolean;
 }
 
+/** Resolve the agent spec into one or more (agent, version) pairs to inspect. */
 async function resolveTargets(agentSpec: string | undefined): Promise<Target[]> {
   if (!agentSpec) {
     const targets: Target[] = [];
@@ -117,6 +128,7 @@ async function resolveTargets(agentSpec: string | undefined): Promise<Target[]> 
   return [{ agent, version, isDefault: version === getGlobalDefault(agent) }];
 }
 
+/** Print the model catalog for a single agent version with optional cloud/reasoning details. */
 function printCatalog(agent: AgentId, version: string, isDefault: boolean, options: { cloud?: boolean; reasoning?: boolean }): void {
   const tag = isDefault ? chalk.gray(' (default)') : '';
   const header = `${agentLabel(agent)} ${chalk.bold(version)}${tag}`;
@@ -178,6 +190,7 @@ function printCatalog(agent: AgentId, version: string, isDefault: boolean, optio
   }
 }
 
+/** Abbreviate a path by replacing the home directory with ~. */
 function shortPath(p: string): string {
   return p.replace(process.env.HOME || '~', '~');
 }

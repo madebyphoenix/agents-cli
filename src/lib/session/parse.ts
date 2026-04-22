@@ -1,3 +1,11 @@
+/**
+ * Session file parsers for Claude, Codex, Gemini, and OpenCode.
+ *
+ * Each agent stores sessions in a different format (JSONL, JSON, SQLite).
+ * This module normalizes all of them into a flat array of SessionEvent
+ * objects suitable for rendering, filtering, and summarization.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
@@ -21,6 +29,7 @@ export function parseSession(filePath: string, agent?: SessionAgentId): SessionE
   }
 }
 
+/** Infer the agent type from a session file path using known directory conventions. */
 export function detectAgent(filePath: string): SessionAgentId | null {
   if (filePath.includes('/.claude/') || filePath.includes('\\.claude\\')) return 'claude';
   if (filePath.includes('/.codex/') || filePath.includes('\\.codex\\')) return 'codex';
@@ -81,10 +90,12 @@ export function summarizeToolUse(tool: string, args?: Record<string, any>): stri
   }
 }
 
+/** Truncate a string to n characters, appending '...' if shortened. */
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 3) + '...';
 }
 
+/** Replace the home directory prefix with ~ for display. */
 function shortenPath(p: string): string {
   const home = process.env.HOME || '';
   if (home && p.startsWith(home)) return '~' + p.slice(home.length);
@@ -95,6 +106,7 @@ function shortenPath(p: string): string {
 // Claude parser
 // ---------------------------------------------------------------------------
 
+/** Parse a Claude JSONL session file into normalized events. */
 export function parseClaude(filePath: string): SessionEvent[] {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.split('\n').filter(l => l.trim());
@@ -283,6 +295,7 @@ export function parseClaude(filePath: string): SessionEvent[] {
 // Codex parser
 // ---------------------------------------------------------------------------
 
+/** Parse a Codex JSONL session file into normalized events. */
 export function parseCodex(filePath: string): SessionEvent[] {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.split('\n').filter(l => l.trim());
@@ -414,6 +427,7 @@ export function parseCodex(filePath: string): SessionEvent[] {
 // Gemini parser
 // ---------------------------------------------------------------------------
 
+/** Parse a Gemini JSON session file into normalized events. */
 export function parseGemini(filePath: string): SessionEvent[] {
   const content = fs.readFileSync(filePath, 'utf-8');
   let session: any;

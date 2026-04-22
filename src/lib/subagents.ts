@@ -1,3 +1,12 @@
+/**
+ * Subagent management -- discovery, installation, and format conversion.
+ *
+ * Subagents are named agent definitions in ~/.agents/subagents/, each a directory
+ * with an agent.md file (frontmatter + instructions). This module discovers them,
+ * transforms them into agent-native formats (Claude .mdc, OpenClaw YAML),
+ * and syncs them into version homes.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
@@ -386,7 +395,7 @@ export function subagentContentMatches(installedDir: string, sourceDir: string):
   return true;
 }
 
-// Agents that support subagents
+/** Agents that support the subagent system (Claude via flattened .md, OpenClaw via directory copy). */
 export const SUBAGENT_CAPABLE_AGENTS: AgentId[] = ['claude', 'openclaw'];
 
 /**

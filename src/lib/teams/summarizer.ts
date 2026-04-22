@@ -1,3 +1,11 @@
+/**
+ * Event summarization and status reporting.
+ *
+ * Provides functions to collapse, group, and summarize normalized agent events
+ * into concise status reports, deltas, quick-status snapshots, and
+ * human-readable summaries used by the teams status/list commands and the
+ * MCP status handler.
+ */
 import { AgentType } from './parsers.js';
 import { extractFileOpsFromBash } from './file_ops.js';
 
@@ -23,6 +31,7 @@ function extractErrorFromRawEvents(events: any[], maxChars: number = 500): strin
   return null;
 }
 
+/** Event type priority tiers for filtering. Higher tiers surface more important events. */
 export const PRIORITY: Record<string, string[]> = {
   critical: [
     'error',
@@ -160,6 +169,7 @@ export function getToolBreakdown(events: any[]): Record<string, number> {
   return breakdown;
 }
 
+/** Group consecutive events of the same type into combined entries with counts and truncated content. */
 export function groupAndFlattenEvents(events: any[]): any[] {
   if (events.length === 0) return [];
 
@@ -282,6 +292,7 @@ export function groupAndFlattenEvents(events: any[]): any[] {
   return grouped;
 }
 
+/** Accumulated summary of an agent's activity: files touched, tools used, errors, and final message. */
 export class AgentSummary {
   agentId: string;
   agentType: string;
@@ -375,6 +386,7 @@ export class AgentSummary {
   }
 }
 
+/** Build an AgentSummary by walking all events and accumulating file ops, tool calls, errors, and messages. */
 export function summarizeEvents(
   agentId: string,
   agentType: string,
@@ -509,6 +521,10 @@ export function summarizeEvents(
   return summary;
 }
 
+/**
+ * Compute the delta of new activity since a given point in time (ISO timestamp)
+ * or event index. Used for incremental status polling.
+ */
 export function getDelta(
   agentId: string,
   agentType: string,
@@ -583,6 +599,7 @@ export function getDelta(
   };
 }
 
+/** Filter events to only those in the specified priority tiers (defaults to critical + important). */
 export function filterEventsByPriority(
   events: any[],
   includeLevels: string[] | null = null
@@ -602,6 +619,7 @@ export function filterEventsByPriority(
   return events.filter(e => allowedTypes.has(e.type));
 }
 
+/** Return the event type of the last tool-related or significant event, or null. */
 export function getLastTool(events: any[]): string | null {
   if (events.length === 0) return null;
 
@@ -616,6 +634,7 @@ export function getLastTool(events: any[]): string | null {
   return null;
 }
 
+/** Lightweight status snapshot with counts, recent commands, and error flag. */
 export interface QuickStatus {
   agent_id: string;
   agent_type: string;
@@ -630,6 +649,7 @@ export interface QuickStatus {
   last_message: string | null;
 }
 
+/** Extract all tool_use events as {tool, args} pairs. */
 export function getToolUses(events: any[]): Array<{tool: string, args: any}> {
   const toolUses: Array<{tool: string, args: any}> = [];
   
@@ -644,6 +664,7 @@ export function getToolUses(events: any[]): Array<{tool: string, args: any}> {
   return toolUses;
 }
 
+/** Extract the last N complete messages from the event stream, joining streaming deltas. */
 export function getLastMessages(events: any[], count: number = 3): string[] {
   const messages: string[] = [];
   let currentBuffer = '';
@@ -685,6 +706,7 @@ export function getLastMessages(events: any[], count: number = 3): string[] {
   return messages.slice(-count);
 }
 
+/** Build a lightweight QuickStatus snapshot from agent events. */
 export function getQuickStatus(
   agentId: string,
   agentType: string,
@@ -772,6 +794,7 @@ export function getQuickStatus(
   };
 }
 
+/** Produce a one-line human-readable status summary string (e.g. "Running, modified 3 files, used bash 5 times"). */
 export function getStatusSummary(
   agentId: string,
   agentType: string,

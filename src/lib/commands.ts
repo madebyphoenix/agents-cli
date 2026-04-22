@@ -1,3 +1,12 @@
+/**
+ * Slash command management -- discovery, installation, and syncing.
+ *
+ * Commands are markdown files in ~/.agents/commands/ exposed as `/command-name`
+ * shortcuts by agents. This module discovers them, converts between formats
+ * (markdown for Claude/Codex, TOML for Gemini), and installs them into
+ * agent version homes.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
@@ -7,19 +16,23 @@ import { getCommandsDir, getProjectAgentsDir } from './state.js';
 import { getEffectiveHome, getVersionHomePath, listInstalledVersions } from './versions.js';
 import type { AgentId, CommandInstallation } from './types.js';
 
+/** Scope of a command: user-global or project-local. */
 export type CommandScope = 'user' | 'project';
 
+/** Parsed metadata from a command file's YAML frontmatter. */
 export interface CommandMetadata {
   name: string;
   description: string;
 }
 
+/** Result of validating command metadata. */
 export interface ValidationResult {
   valid: boolean;
   errors: string[];
   warnings: string[];
 }
 
+/** A command discovered in a repository's commands/ directory. */
 export interface DiscoveredCommand {
   name: string;
   description: string;
@@ -28,6 +41,7 @@ export interface DiscoveredCommand {
   validation: ValidationResult;
 }
 
+/** A command installed in an agent's config directory. */
 export interface InstalledCommand {
   name: string;
   scope: CommandScope;
@@ -35,6 +49,7 @@ export interface InstalledCommand {
   description?: string;
 }
 
+/** Parse command metadata (name, description) from YAML frontmatter or TOML headers. */
 export function parseCommandMetadata(filePath: string): CommandMetadata | null {
   if (!fs.existsSync(filePath)) {
     return null;
@@ -74,6 +89,7 @@ export function parseCommandMetadata(filePath: string): CommandMetadata | null {
   }
 }
 
+/** Validate command metadata, returning errors and warnings. */
 export function validateCommandMetadata(
   metadata: CommandMetadata | null,
   commandName: string
@@ -102,6 +118,7 @@ export function validateCommandMetadata(
   return { valid: errors.length === 0, errors, warnings };
 }
 
+/** Discover all command markdown files in a repository's commands/ directory. */
 export function discoverCommands(repoPath: string): DiscoveredCommand[] {
   const commands: DiscoveredCommand[] = [];
 
@@ -138,6 +155,7 @@ function extractDescription(content: string): string {
   return firstLine?.slice(0, 80) || '';
 }
 
+/** Find the source path for a command in a repository. */
 export function resolveCommandSource(
   repoPath: string,
   commandName: string
@@ -150,6 +168,7 @@ export function resolveCommandSource(
   return null;
 }
 
+/** Install a command into an agent's config directory, with optional format conversion. */
 export function installCommand(
   sourcePath: string,
   agentId: AgentId,
@@ -369,6 +388,7 @@ export function iterCommandsCapableVersions(filter?: { agent?: AgentId; version?
   return pairs;
 }
 
+/** Remove a command from an agent's config directory. */
 export function uninstallCommand(agentId: AgentId, commandName: string): boolean {
   const agent = AGENTS[agentId];
   const home = getEffectiveHome(agentId);
@@ -383,6 +403,7 @@ export function uninstallCommand(agentId: AgentId, commandName: string): boolean
   return false;
 }
 
+/** List command names installed for an agent in the active version home. */
 export function listInstalledCommands(agentId: AgentId): string[] {
   const agent = AGENTS[agentId];
   const home = getEffectiveHome(agentId);

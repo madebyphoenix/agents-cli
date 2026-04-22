@@ -1,3 +1,11 @@
+/**
+ * Slash command management for extending agents with custom markdown commands.
+ *
+ * Implements `agents commands` -- list, add, remove, sync, prune, and view
+ * markdown files that agents invoke mid-session as slash commands. Central
+ * storage lives in ~/.agents/commands/ and commands are synced to individual
+ * version homes (with TOML conversion for Gemini).
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -56,6 +64,7 @@ import {
   requireInteractiveSelection,
 } from './utils.js';
 
+/** Register the `agents commands` command tree (list, add, remove, sync, prune, view). */
 export function registerCommandsCommands(program: Command): void {
   const commandsCmd = program
     .command('commands')

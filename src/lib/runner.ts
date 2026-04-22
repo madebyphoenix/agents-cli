@@ -1,3 +1,12 @@
+/**
+ * Job execution engine for routines.
+ *
+ * Builds agent-specific CLI commands from job configs, spawns them with
+ * sandboxed or unsandboxed environments, captures stdout to log files,
+ * enforces timeouts, and extracts the final assistant report from the
+ * agent's stream-JSON output.
+ */
+
 import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -14,17 +23,20 @@ import type { AgentId } from './types.js';
 import { prepareJobHome, buildSpawnEnv } from './sandbox.js';
 import { resolveModel, buildReasoningFlags } from './models.js';
 
+/** Result of a completed job execution, including metadata and optional report. */
 export interface RunResult {
   meta: RunMeta;
   reportPath: string | null;
 }
 
+/** CLI command templates per agent, with {prompt} as a placeholder. */
 const AGENT_COMMANDS: Record<string, string[]> = {
   claude: ['claude', '-p', '--verbose', '{prompt}', '--output-format', 'stream-json', '--permission-mode', 'plan'],
   codex: ['codex', 'exec', '--sandbox', 'workspace-write', '{prompt}', '--json'],
   gemini: ['gemini', '{prompt}', '--output-format', 'stream-json'],
 };
 
+/** Build the full CLI argv for executing a job, applying mode, model, and permission flags. */
 export function buildJobCommand(config: JobConfig, resolvedPrompt: string): string[] {
   const template = AGENT_COMMANDS[config.agent];
   if (!template) {
@@ -109,6 +121,7 @@ function generateRunId(): string {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
+/** Execute a job synchronously (waits for completion or timeout before resolving). */
 export async function executeJob(config: JobConfig): Promise<RunResult> {
   const resolvedPrompt = resolveJobPrompt(config);
   const cmd = buildJobCommand(config, resolvedPrompt);
@@ -209,6 +222,7 @@ export async function executeJob(config: JobConfig): Promise<RunResult> {
   });
 }
 
+/** Spawn a job as a detached process and return immediately with run metadata. */
 export async function executeJobDetached(config: JobConfig): Promise<RunMeta> {
   const resolvedPrompt = resolveJobPrompt(config);
   const cmd = buildJobCommand(config, resolvedPrompt);
@@ -274,6 +288,7 @@ function extractAndSaveReport(
   return null;
 }
 
+/** Extract the final assistant message from a stream-JSON log file as a markdown report. */
 export function extractReport(stdoutPath: string, agentType: AgentId): string | null {
   if (!fs.existsSync(stdoutPath)) return null;
 
@@ -319,6 +334,7 @@ export function extractReport(stdoutPath: string, agentType: AgentId): string | 
   }
 }
 
+/** Scan all runs marked "running" and finalize any whose process has exited. */
 export function monitorRunningJobs(): void {
   const runsDir = getRunsDir();
   if (!fs.existsSync(runsDir)) return;

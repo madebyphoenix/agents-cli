@@ -1,3 +1,13 @@
+/**
+ * Hook management -- discovery, registration, and syncing of event hooks.
+ *
+ * Hooks are shell scripts in ~/.agents/hooks/ that fire on agent events
+ * (tool calls, session start, etc.). Each hook directory contains a manifest
+ * (agents.yaml) declaring events, matchers, and timeout. This module handles
+ * parsing those manifests, registering hooks into agent-native settings files,
+ * and syncing them across version switches.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';

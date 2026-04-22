@@ -1,3 +1,11 @@
+/**
+ * Config push command.
+ *
+ * Registers the `agents push` command which commits and pushes the
+ * user's ~/.agents/ config to GitHub. Updates the manifest with
+ * current CLI versions and MCP server configs before pushing.
+ */
+
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -34,6 +42,7 @@ import {
 import { getEffectiveHome } from '../lib/versions.js';
 import { isPromptCancelled } from './utils.js';
 
+/** Register the `agents push` command. */
 export function registerPushCommand(program: Command): void {
   program
     .command('push')

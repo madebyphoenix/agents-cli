@@ -1,3 +1,12 @@
+/**
+ * Sandbox environment for routine job execution.
+ *
+ * Creates an overlay HOME directory per job with symlinked allowed
+ * directories and agent-specific config files (permissions, settings).
+ * The spawned agent process sees only the overlay, limiting filesystem
+ * access to explicitly allowed paths.
+ */
+
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -6,6 +15,7 @@ import { getRoutinesDir } from './state.js';
 
 const REAL_HOME = os.homedir();
 
+/** Environment variables forwarded from the parent process into the sandbox. */
 const ENV_ALLOWLIST = [
   'PATH',
   'SHELL',
@@ -29,15 +39,16 @@ const ENV_ALLOWLIST = [
   'FORCE_COLOR',
 ];
 
-// Tools safe to grant as wildcards (no filesystem access)
+/** Tools safe to grant as wildcards (no filesystem access). */
 const SAFE_TOOLS: Record<string, string> = {
   web_search: 'WebSearch(*)',
   web_fetch: 'WebFetch(*)',
 };
 
-// Bare tool names that get scoped to allow.dirs, never wildcarded
+/** Bare tool names that get scoped to allow.dirs, never wildcarded. */
 const DIR_SCOPED_TOOLS = new Set(['read', 'write', 'edit', 'glob', 'grep', 'notebook_edit']);
 
+/** Build a restricted environment for a sandboxed process, setting HOME to the overlay. */
 export function buildSpawnEnv(overlayHome: string, extraEnv?: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = { HOME: overlayHome };
 
@@ -54,10 +65,12 @@ export function buildSpawnEnv(overlayHome: string, extraEnv?: Record<string, str
   return env;
 }
 
+/** Get the overlay HOME directory path for a named job. */
 export function getJobHomePath(name: string): string {
   return path.join(getRoutinesDir(), name, 'home');
 }
 
+/** Create a fresh overlay HOME for a job, including agent config and allowed-dir symlinks. */
 export function prepareJobHome(config: JobConfig): string {
   const overlayHome = getJobHomePath(config.name);
 
@@ -79,6 +92,7 @@ export function prepareJobHome(config: JobConfig): string {
   return overlayHome;
 }
 
+/** Remove a job's overlay HOME directory entirely. */
 export function cleanJobHome(name: string): void {
   const overlayHome = getJobHomePath(name);
   if (fs.existsSync(overlayHome)) {
@@ -86,6 +100,7 @@ export function cleanJobHome(name: string): void {
   }
 }
 
+/** Symlink allowed directories into the overlay HOME, skipping paths outside the real HOME. */
 export function symlinkAllowedDirs(overlayHome: string, dirs: string[]): void {
   for (const dir of dirs) {
     const expanded = dir.replace(/^~/, REAL_HOME);
@@ -118,6 +133,7 @@ export function symlinkAllowedDirs(overlayHome: string, dirs: string[]): void {
   }
 }
 
+/** Generate a Claude settings.json in the overlay with scoped permissions from the job config. */
 export function generateClaudeConfig(overlayHome: string, config: JobConfig): void {
   const claudeDir = path.join(overlayHome, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
@@ -196,6 +212,7 @@ export function generateClaudeConfig(overlayHome: string, config: JobConfig): vo
   );
 }
 
+/** Generate a Codex config.toml in the overlay with model and approval-mode settings. */
 export function generateCodexConfig(overlayHome: string, config: JobConfig): void {
   const codexDir = path.join(overlayHome, '.codex');
   fs.mkdirSync(codexDir, { recursive: true });
@@ -231,6 +248,7 @@ export function generateCodexConfig(overlayHome: string, config: JobConfig): voi
   );
 }
 
+/** Generate a Gemini settings.json in the overlay from the job's config block. */
 export function generateGeminiConfig(overlayHome: string, config: JobConfig): void {
   const geminiDir = path.join(overlayHome, '.gemini');
   fs.mkdirSync(geminiDir, { recursive: true });
