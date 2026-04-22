@@ -1,3 +1,11 @@
+/**
+ * Usage and rate-limit tracking for Claude and Codex agents.
+ *
+ * Fetches live usage data from the Anthropic OAuth API (Claude) or parses
+ * rate-limit events from Codex session logs. Results are normalized into a
+ * common UsageSnapshot shape, cached to disk, and rendered as terminal
+ * progress bars for the `agents view` and `agents status` commands.
+ */
 import { execFile } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
@@ -27,7 +35,7 @@ const CLAUDE_SCOPES = [
   'user:file_upload',
 ];
 const CLAUDE_KEYCHAIN_SERVICE = 'Claude Code-credentials';
-const CLAUDE_USAGE_CACHE_PATH = path.join(getAgentsDir(), 'cache', 'claude-usage.json');
+const getClaudeUsageCachePath = () => path.join(getAgentsDir(), 'cache', 'claude-usage.json');
 const CACHED_CLAUDE_USAGE_SOURCE_LABEL = 'last seen live account data';
 
 const COMPACT_BAR_LEN = 5;
@@ -35,8 +43,10 @@ const USAGE_BAR_LEN = 10;
 const FULL = '\u2588';
 const EMPTY = '\u2591';
 
+/** Discriminator for usage window types. */
 export type UsageWindowKey = 'session' | 'week' | 'sonnet_week';
 
+/** A single rate-limit window with utilization percentage and reset time. */
 export interface UsageWindow {
   key: UsageWindowKey;
   label: string;
@@ -46,6 +56,7 @@ export interface UsageWindow {
   windowMinutes: number | null;
 }
 
+/** A point-in-time collection of usage windows from a single source. */
 export interface UsageSnapshot {
   source: 'live' | 'last_seen';
   sourceLabel: string;
@@ -53,11 +64,13 @@ export interface UsageSnapshot {
   windows: UsageWindow[];
 }
 
+/** Usage data plus any error encountered while fetching. */
 export interface UsageInfo {
   snapshot: UsageSnapshot | null;
   error: string | null;
 }
 
+/** Input needed to identify an account for usage lookup. */
 export interface UsageIdentityInput {
   agentId: AgentId;
   info: AccountInfo;
@@ -65,12 +78,14 @@ export interface UsageIdentityInput {
   cliVersion?: string | null;
 }
 
+/** Options for fetching usage data. */
 interface UsageOptions {
   home?: string;
   cliVersion?: string | null;
   organizationId?: string | null;
 }
 
+/** Canonical input for a single usage fetch operation. */
 export interface UsageFetchInput {
   agentId: AgentId;
   home?: string;
@@ -78,28 +93,33 @@ export interface UsageFetchInput {
   organizationId: string | null;
 }
 
+/** Raw rate-limit window from a Codex session event. */
 interface CodexRateLimitWindow {
   used_percent?: number | null;
   window_minutes?: number | null;
   resets_at?: number | string | null;
 }
 
+/** Raw rate-limit payload from a Codex token_count event. */
 interface CodexRateLimits {
   primary?: CodexRateLimitWindow | null;
   secondary?: CodexRateLimitWindow | null;
 }
 
+/** Raw usage window from the Claude OAuth usage API. */
 interface ClaudeUsageWindow {
   utilization?: number | null;
   resets_at?: number | string | null;
 }
 
+/** Response shape from the Claude OAuth usage endpoint. */
 interface ClaudeUsageResponse {
   five_hour?: ClaudeUsageWindow | null;
   seven_day?: ClaudeUsageWindow | null;
   seven_day_sonnet?: ClaudeUsageWindow | null;
 }
 
+/** Claude OAuth credentials stored in the macOS Keychain. */
 interface ClaudeOauthCredentials {
   accessToken?: string | null;
   refreshToken?: string | null;
@@ -110,11 +130,13 @@ interface ClaudeOauthCredentials {
   organizationUuid?: string | null;
 }
 
+/** Shape of the Keychain payload for Claude credentials. */
 interface ClaudeKeychainPayload {
   organizationUuid?: string | null;
   claudeAiOauth?: ClaudeOauthCredentials | null;
 }
 
+/** Response from the Claude OAuth token refresh endpoint. */
 interface ClaudeTokenResponse {
   access_token?: string;
   refresh_token?: string;
@@ -122,6 +144,7 @@ interface ClaudeTokenResponse {
   scope?: string;
 }
 
+/** Serialized usage window for the on-disk cache. */
 interface CachedUsageWindow {
   key: UsageWindowKey;
   label: string;
@@ -131,16 +154,19 @@ interface CachedUsageWindow {
   windowMinutes: number | null;
 }
 
+/** Serialized usage snapshot for the on-disk cache. */
 interface CachedUsageSnapshot {
   capturedAt: string | null;
   windows: CachedUsageWindow[];
 }
 
+/** Parsed rate-limit data extracted from a Codex session file. */
 interface CodexRateLimitMatch {
   capturedAt: Date | null;
   rateLimits: CodexRateLimits;
 }
 
+/** Fetch usage info for a given agent, dispatching to the agent-specific implementation. */
 export async function getUsageInfo(agentId: AgentId, options?: UsageOptions): Promise<UsageInfo> {
   switch (agentId) {
     case 'claude':
@@ -152,12 +178,17 @@ export async function getUsageInfo(agentId: AgentId, options?: UsageOptions): Pr
   }
 }
 
+/** Derive a stable lookup key from account info for usage deduplication. */
 export function getUsageLookupKey(
   info?: Pick<AccountInfo, 'usageKey' | 'accountKey'> | null
 ): string | null {
   return info?.usageKey || info?.accountKey || null;
 }
 
+/**
+ * Deduplicate identity inputs into canonical (most-recently-active) accounts
+ * and build the corresponding fetch inputs for each unique usage key.
+ */
 export function buildCanonicalUsageContext(inputs: UsageIdentityInput[]): {
   canonicalByUsageKey: Map<string, AccountInfo>;
   usageFetchInputs: Map<string, UsageFetchInput>;
@@ -188,6 +219,7 @@ export function buildCanonicalUsageContext(inputs: UsageIdentityInput[]): {
   return { canonicalByUsageKey, usageFetchInputs };
 }
 
+/** Fetch usage info for all unique accounts in parallel, keyed by usage key. */
 export async function getUsageInfoByIdentity(inputs: UsageIdentityInput[]): Promise<{
   canonicalByUsageKey: Map<string, AccountInfo>;
   usageByKey: Map<string, UsageInfo>;
@@ -213,6 +245,10 @@ export async function getUsageInfoByIdentity(inputs: UsageIdentityInput[]): Prom
 
 const USAGE_CACHE_FRESH_MS = 2 * 60 * 1000; // 2 minutes
 
+/**
+ * Fetch usage for a single identity, with a 2-minute cache fast path.
+ * Falls back to cached data when the live fetch fails.
+ */
 export async function getUsageInfoForIdentity(input: UsageIdentityInput): Promise<UsageInfo> {
   const usageKey = getUsageLookupKey(input.info);
 
@@ -227,7 +263,7 @@ export async function getUsageInfoForIdentity(input: UsageIdentityInput): Promis
     }
   }
 
-  // Cache miss or stale — make the network call.
+  // Cache miss or stale -- make the network call.
   const usage = await getUsageInfo(input.agentId, {
     home: input.home,
     cliVersion: input.cliVersion,
@@ -249,6 +285,7 @@ export async function getUsageInfoForIdentity(input: UsageIdentityInput): Promis
   return usage;
 }
 
+/** Format a one-line usage summary with compact bars for inline display. */
 export function formatUsageSummary(
   plan: string | null,
   snapshot: UsageSnapshot | null,
@@ -274,6 +311,7 @@ export function formatUsageSummary(
   return parts.join('  ');
 }
 
+/** Format a multi-line usage section for detailed agent views. */
 export function formatUsageSection(usage: UsageInfo): string[] {
   if (!usage.snapshot && !usage.error) {
     return [];
@@ -303,6 +341,7 @@ export function formatUsageSection(usage: UsageInfo): string[] {
   return lines;
 }
 
+/** Fetch Codex usage by scanning the most recent session files for rate-limit events. */
 async function getCodexUsageInfo(options?: UsageOptions): Promise<UsageInfo> {
   try {
     const files = collectCodexSessionFiles(options?.home);
@@ -330,6 +369,7 @@ async function getCodexUsageInfo(options?: UsageOptions): Promise<UsageInfo> {
   }
 }
 
+/** Fetch Claude usage via the Anthropic OAuth usage API. */
 async function getClaudeUsageInfo(options?: UsageOptions): Promise<UsageInfo> {
   try {
     const oauth = await loadClaudeOauth(options?.home);
@@ -383,6 +423,7 @@ async function getClaudeUsageInfo(options?: UsageOptions): Promise<UsageInfo> {
   }
 }
 
+/** Collect Codex JSONL session files sorted newest-first. */
 function collectCodexSessionFiles(home?: string): string[] {
   const base = home || os.homedir();
   const dir = path.join(base, '.codex', 'sessions');
@@ -403,6 +444,7 @@ function collectCodexSessionFiles(home?: string): string[] {
   return files.map((file) => file.path);
 }
 
+/** Stream a Codex JSONL file and return the last rate_limits payload found. */
 async function readLatestCodexRateLimits(filePath: string): Promise<CodexRateLimitMatch | null> {
   return new Promise((resolve) => {
     let latest: CodexRateLimitMatch | null = null;
@@ -431,6 +473,7 @@ async function readLatestCodexRateLimits(filePath: string): Promise<CodexRateLim
   });
 }
 
+/** Normalize Codex rate-limit windows into the common UsageWindow shape. */
 function normalizeCodexWindows(rateLimits: CodexRateLimits): UsageWindow[] {
   const windows: UsageWindow[] = [];
 
@@ -443,6 +486,7 @@ function normalizeCodexWindows(rateLimits: CodexRateLimits): UsageWindow[] {
   return windows;
 }
 
+/** Normalize a single Codex rate-limit window. */
 function normalizeCodexWindow(
   window: CodexRateLimitWindow | null | undefined,
   key: UsageWindowKey,
@@ -462,6 +506,7 @@ function normalizeCodexWindow(
   };
 }
 
+/** Normalize Claude API usage windows into the common UsageWindow shape. */
 function normalizeClaudeWindows(data: ClaudeUsageResponse): UsageWindow[] {
   const windows = [
     normalizeClaudeWindow(data.five_hour, 'session', 'Current session', 'S'),
@@ -472,6 +517,7 @@ function normalizeClaudeWindows(data: ClaudeUsageResponse): UsageWindow[] {
   return windows.filter((window): window is UsageWindow => window !== null);
 }
 
+/** Normalize a single Claude API usage window. */
 function normalizeClaudeWindow(
   window: ClaudeUsageWindow | null | undefined,
   key: UsageWindowKey,
@@ -491,6 +537,7 @@ function normalizeClaudeWindow(
   };
 }
 
+/** Load Claude OAuth credentials from the macOS Keychain. */
 export async function loadClaudeOauth(home?: string): Promise<ClaudeOauthCredentials | null> {
   if (process.platform !== 'darwin') {
     return null;
@@ -521,6 +568,10 @@ export async function loadClaudeOauth(home?: string): Promise<ClaudeOauthCredent
   }
 }
 
+/**
+ * Derive the Keychain service name for a Claude home directory.
+ * Managed (non-default) homes get a hash suffix for isolation.
+ */
 export function getClaudeKeychainService(home?: string): string {
   if (!home) {
     return CLAUDE_KEYCHAIN_SERVICE;
@@ -531,6 +582,10 @@ export function getClaudeKeychainService(home?: string): string {
   return `${CLAUDE_KEYCHAIN_SERVICE}-${hash}`;
 }
 
+/**
+ * Check whether a requested org ID matches the live OAuth org ID.
+ * Returns true when either is absent (no filtering) or when they match.
+ */
 export function isClaudeUsageOrgMatch(
   requestedOrgId: string | null | undefined,
   liveOrgId: string | null | undefined
@@ -540,9 +595,10 @@ export function isClaudeUsageOrgMatch(
   return !requested || !live || requested === live;
 }
 
+/** Read a cached usage snapshot for a given usage key. Returns null if absent or stale. */
 export function readClaudeUsageCache(
   usageKey: string,
-  cachePath = CLAUDE_USAGE_CACHE_PATH,
+  cachePath = getClaudeUsageCachePath(),
   now = new Date()
 ): UsageSnapshot | null {
   const cache = readClaudeUsageCacheFile(cachePath);
@@ -559,16 +615,18 @@ export function readClaudeUsageCache(
   return snapshot;
 }
 
+/** Write a usage snapshot to the on-disk cache. */
 export function writeClaudeUsageCache(
   usageKey: string,
   snapshot: UsageSnapshot,
-  cachePath = CLAUDE_USAGE_CACHE_PATH
+  cachePath = getClaudeUsageCachePath()
 ): void {
   const cache = readClaudeUsageCacheFile(cachePath);
   cache[usageKey] = serializeClaudeUsageSnapshot(snapshot);
   writeClaudeUsageCacheFile(cache, cachePath);
 }
 
+/** Read the entire usage cache file from disk. */
 function readClaudeUsageCacheFile(cachePath: string): Record<string, CachedUsageSnapshot> {
   if (!fs.existsSync(cachePath)) {
     return {};
@@ -582,6 +640,7 @@ function readClaudeUsageCacheFile(cachePath: string): Record<string, CachedUsage
   }
 }
 
+/** Write the entire usage cache to disk. Best-effort; failures are silent. */
 function writeClaudeUsageCacheFile(
   cache: Record<string, CachedUsageSnapshot>,
   cachePath: string
@@ -594,6 +653,7 @@ function writeClaudeUsageCacheFile(
   }
 }
 
+/** Convert a live UsageSnapshot to its JSON-serializable cached form. */
 function serializeClaudeUsageSnapshot(snapshot: UsageSnapshot): CachedUsageSnapshot {
   return {
     capturedAt: snapshot.capturedAt?.toISOString() || null,
@@ -608,6 +668,7 @@ function serializeClaudeUsageSnapshot(snapshot: UsageSnapshot): CachedUsageSnaps
   };
 }
 
+/** Deserialize a cached snapshot, zeroing out windows whose reset time has passed. */
 function deserializeClaudeUsageSnapshot(
   snapshot: CachedUsageSnapshot,
   now: Date
@@ -641,6 +702,7 @@ function deserializeClaudeUsageSnapshot(
   };
 }
 
+/** Check whether a cached usage window is still relevant (not expired or reset). */
 function isCachedUsageWindowFresh(
   window: UsageWindow,
   capturedAt: Date | null,
@@ -658,6 +720,7 @@ function isCachedUsageWindowFresh(
   return true;
 }
 
+/** Obtain a valid access token, refreshing if expired. */
 async function getClaudeAccessToken(oauth: ClaudeOauthCredentials): Promise<string | null> {
   const accessToken = oauth.accessToken?.trim();
   if (!accessToken) {
@@ -677,6 +740,7 @@ async function getClaudeAccessToken(oauth: ClaudeOauthCredentials): Promise<stri
   return refreshed?.accessToken?.trim() || null;
 }
 
+/** Refresh an expired Claude OAuth access token using the refresh token. */
 async function refreshClaudeToken(oauth: ClaudeOauthCredentials): Promise<ClaudeOauthCredentials | null> {
   const response = await fetch(CLAUDE_TOKEN_URL, {
     method: 'POST',
@@ -721,10 +785,12 @@ export async function isClaudeAuthValid(home?: string): Promise<boolean> {
   return token !== null;
 }
 
+/** Build a User-Agent string for Claude API requests. */
 function getClaudeUserAgent(cliVersion?: string | null): string {
   return cliVersion ? `claude-code/${cliVersion}` : 'claude-code';
 }
 
+/** Map an HTTP status code to a user-facing error message. */
 function formatClaudeUsageError(status: number): string {
   if (status === 429) {
     return 'Usage data unavailable right now.';
@@ -732,6 +798,7 @@ function formatClaudeUsageError(status: number): string {
   return 'Could not load usage data right now.';
 }
 
+/** Clamp a numeric value to 0..100, returning null for non-finite values. */
 function normalizePercent(value: number | null | undefined): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return null;
@@ -739,6 +806,7 @@ function normalizePercent(value: number | null | undefined): number | null {
   return Math.max(0, Math.min(100, value));
 }
 
+/** Validate and return a positive window duration, or null. */
 function normalizeWindowMinutes(value: number | null | undefined): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return null;
@@ -746,6 +814,7 @@ function normalizeWindowMinutes(value: number | null | undefined): number | null
   return value;
 }
 
+/** Infer the window duration in minutes from a well-known window key. */
 function inferWindowMinutes(key: UsageWindowKey): number | null {
   switch (key) {
     case 'session':
@@ -756,6 +825,7 @@ function inferWindowMinutes(key: UsageWindowKey): number | null {
   }
 }
 
+/** Parse a date value from a number (epoch seconds or ms) or ISO string. */
 function parseDateValue(value: unknown): Date | null {
   if (value === null || value === undefined || value === '') {
     return null;
@@ -777,20 +847,24 @@ function parseDateValue(value: unknown): Date | null {
   return null;
 }
 
+/** Trim and return a string, or null if empty/non-string. */
 function normalizeString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed || null;
 }
 
+/** Render a full-width usage bar for detailed views. */
 function renderUsageBar(usedPercent: number): string {
   return renderBar(usedPercent, USAGE_BAR_LEN);
 }
 
+/** Render a compact usage bar for inline summaries. */
 function renderCompactUsageBar(usedPercent: number): string {
   return renderBar(usedPercent, COMPACT_BAR_LEN, usedPercent > 0 ? 1 : 0);
 }
 
+/** Render a colored block-character progress bar. */
 function renderBar(usedPercent: number, length: number, minimumVisible = 0): string {
   const rounded = Math.round((usedPercent / 100) * length);
   const filled = Math.max(minimumVisible, Math.max(0, Math.min(length, rounded)));
@@ -798,21 +872,25 @@ function renderBar(usedPercent: number, length: number, minimumVisible = 0): str
   return color(FULL.repeat(filled)) + chalk.dim(EMPTY.repeat(length - filled));
 }
 
+/** Apply the appropriate color to a text string based on usage percentage. */
 function colorUsage(text: string, usedPercent: number): string {
   return getUsageColor(usedPercent)(text);
 }
 
+/** Return a chalk color function based on the usage percentage threshold. */
 function getUsageColor(usedPercent: number): (text: string) => string {
   if (usedPercent >= 100) return chalk.red;
   if (usedPercent >= 80) return chalk.yellow;
   return chalk.cyan;
 }
 
+/** Format a percentage value with at most one decimal place. */
 function formatPercent(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
+/** Format a reset timestamp as a human-readable relative or absolute time. */
 function formatResetAt(date: Date): string {
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const now = new Date();
@@ -842,6 +920,7 @@ function formatResetAt(date: Date): string {
   return `${date.toLocaleString('en-US', options)} (${timezone})`;
 }
 
+/** Safe wrapper around fs.realpathSync that returns null on error. */
 function safeRealpathSync(filePath: string): string | null {
   try {
     return fs.realpathSync(filePath);
@@ -850,6 +929,7 @@ function safeRealpathSync(filePath: string): string | null {
   }
 }
 
+/** Safe wrapper around fs.statSync that returns null on error. */
 function safeStatSync(filePath: string): fs.Stats | null {
   try {
     return fs.statSync(filePath);

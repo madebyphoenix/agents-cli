@@ -11,6 +11,7 @@ let META: { agents?: Record<string, string> };
 
 vi.mock('../src/lib/state.js', () => {
   return {
+    get getAgentsDir() { return () => AGENTS_DIR; },
     get getVersionsDir() { return () => path.join(AGENTS_DIR, 'versions'); },
     get getShimsDir() { return () => path.join(AGENTS_DIR, 'shims'); },
     get getCommandsDir() { return () => path.join(AGENTS_DIR, 'commands'); },
