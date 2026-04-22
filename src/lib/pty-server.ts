@@ -47,18 +47,22 @@ interface Session {
 
 // --- Path helpers ---
 
+/** Get the unix socket path for the PTY server. */
 export function getSocketPath(): string {
   return path.join(getAgentsDir(), SOCKET_NAME);
 }
 
+/** Get the path to the PTY server PID file. */
 export function getPtyPidPath(): string {
   return path.join(getAgentsDir(), PID_FILE);
 }
 
+/** Get the path to the PTY server log file. */
 export function getPtyLogPath(): string {
   return path.join(getAgentsDir(), LOG_FILE);
 }
 
+/** Check if the PTY server process is alive by probing the stored PID. */
 export function isPtyServerRunning(): boolean {
   const pidPath = getPtyPidPath();
   if (!fs.existsSync(pidPath)) return false;
@@ -85,6 +89,7 @@ function log(level: string, message: string): void {
 
 // --- Server ---
 
+/** Start the PTY sidecar server, listening on the unix socket for JSON requests. */
 export async function runPtyServer(): Promise<void> {
   // Dynamic imports for optional native deps
   let nodePty: any;

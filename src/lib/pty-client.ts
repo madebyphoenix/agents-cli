@@ -15,6 +15,7 @@ import { getSocketPath, getPtyPidPath, isPtyServerRunning } from './pty-server.j
 const CONNECT_TIMEOUT_MS = 5000;
 const RESPONSE_TIMEOUT_MS = 30000;
 
+/** JSON response envelope from the PTY server. */
 export interface PtyResponse {
   ok: boolean;
   error?: string;

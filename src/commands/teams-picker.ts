@@ -1,3 +1,11 @@
+/**
+ * Interactive team picker and table renderer.
+ *
+ * Provides the fuzzy-searchable team list for `agents teams list` in a TTY,
+ * and the non-interactive table fallback when output is piped. Builds rich
+ * preview panels showing teammate composition, status breakdown, and last
+ * activity for each team.
+ */
 import chalk from 'chalk';
 import { itemPicker } from '../lib/picker.js';
 import type { AgentStatusDetail, TaskInfo } from '../lib/teams/api.js';
@@ -137,6 +145,7 @@ function workCell(agents: AgentStatusDetail[]): string {
   return '';
 }
 
+/** Format a single team as a one-line row for the list table or picker label. */
 export function formatTeamRow(row: TeamRow, nameWidth: number, compositionWidth: number): string {
   const t = row.team;
   const name = chalk.cyan(t.task_name.padEnd(nameWidth));
@@ -156,6 +165,7 @@ function handle(a: AgentStatusDetail): string {
   return a.name || a.agent_id.slice(0, 8);
 }
 
+/** Build a multi-line preview string for the picker's detail pane. */
 export function buildTeamPreview(row: TeamRow): string {
   const t = row.team;
   const lines: string[] = [];
@@ -214,6 +224,7 @@ export function buildTeamPreview(row: TeamRow): string {
   return lines.join('\n');
 }
 
+/** Print a non-interactive team table to stdout (used when output is piped). */
 export function printTeamTable(rows: TeamRow[]): void {
   if (rows.length === 0) return;
   const nameWidth = Math.max(12, ...rows.map((r) => r.team.task_name.length));
@@ -254,6 +265,7 @@ function searchHaystack(row: TeamRow): string {
   return parts.join(' ').toLowerCase();
 }
 
+/** Show an interactive team picker with fuzzy search and return the selected team name. */
 export async function teamPicker(rows: TeamRow[], initialSearch?: string): Promise<PickedTeam | null> {
   const nameWidth = Math.max(12, ...rows.map((r) => r.team.task_name.length));
   const compositionWidth = Math.max(
