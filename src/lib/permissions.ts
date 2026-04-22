@@ -1,3 +1,12 @@
+/**
+ * Permission management for AI coding agents.
+ *
+ * Provides a canonical permission format (PermissionSet with allow/deny rules)
+ * and converters to/from each agent's native format (Claude settings.json,
+ * OpenCode opencode.jsonc, Codex config.toml + .rules). Handles discovery,
+ * installation, removal, and merging of permission groups stored in
+ * ~/.agents/permissions/groups/.
+ */
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -16,15 +25,15 @@ import { AGENTS } from './agents.js';
 
 const HOME = os.homedir();
 
-// Agents that support permissions
+/** Agents that support the permissions subsystem. */
 export const PERMISSIONS_CAPABLE_AGENTS: AgentId[] = ['claude', 'codex', 'opencode'];
 
-// Codex .rules file name for deny permissions
+/** Filename used for Codex Starlark deny-rules generated from permission groups. */
 export const CODEX_RULES_FILENAME = 'agents-deny.rules';
 
 /**
  * Convert canonical deny rules to Codex Starlark .rules format.
- * E.g. "Bash(git reset:*)" → prefix_rule(pattern=["git", "reset"], decision="forbidden")
+ * E.g. "Bash(git reset:*)" -> prefix_rule(pattern=["git", "reset"], decision="forbidden")
  */
 export function convertDenyToCodexRules(deny: string[]): string | null {
   const rules: string[] = [];
@@ -183,6 +192,54 @@ export function discoverPermissionGroups(): PermissionGroupInfo[] {
 export function getTotalPermissionRuleCount(): number {
   const groups = discoverPermissionGroups();
   return groups.reduce((sum, g) => sum + g.ruleCount, 0);
+}
+
+/**
+ * A permission set recipe — names a set and lists which groups it composes.
+ * Lives at ~/.agents/permissions/sets/<name>.yaml.
+ */
+export interface PermissionSetRecipe {
+  name: string;
+  description?: string;
+  includes: string[];
+}
+
+/** Env var that selects which set recipe to apply at sync time. */
+export const PERMISSION_SET_ENV_VAR = 'AGENTS_PERMISSION_SET';
+
+/**
+ * Read a permission set recipe by name from ~/.agents/permissions/sets/.
+ * Returns null if the recipe file is missing or malformed.
+ */
+export function readPermissionSetRecipe(name: string): PermissionSetRecipe | null {
+  const setsDir = path.join(getPermissionsDir(), 'sets');
+  for (const ext of ['.yaml', '.yml']) {
+    const filePath = path.join(setsDir, name + ext);
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const parsed = yaml.parse(content);
+      if (!parsed || typeof parsed !== 'object') return null;
+      if (!Array.isArray(parsed.includes)) return null;
+      return {
+        name: parsed.name || name,
+        description: parsed.description,
+        includes: parsed.includes.filter((v: unknown): v is string => typeof v === 'string'),
+      };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Return the active permission set name from AGENTS_PERMISSION_SET env var,
+ * or null if unset. Caller decides the default behavior when null.
+ */
+export function getActivePermissionSetName(): string | null {
+  const v = process.env[PERMISSION_SET_ENV_VAR];
+  return v && v.trim() ? v.trim() : null;
 }
 
 /**
@@ -371,6 +428,9 @@ function parseCanonicalPattern(permission: string): { tool: string; pattern: str
   return { tool: match[1].toLowerCase(), pattern: match[2] };
 }
 
+/** Blanket-Bash canonical forms that mean "allow any bash command". */
+const BLANKET_BASH_FORMS = new Set(['Bash', 'Bash(*)', 'Bash(**)']);
+
 /**
  * Convert canonical permission set to OpenCode format.
  * OpenCode uses: { permission: { bash: { "git *": "allow", "rm *": "deny" } } }
@@ -380,6 +440,12 @@ export function convertToOpenCodeFormat(set: PermissionSet): OpenCodePermissions
 
   // Process allow list
   for (const perm of set.allow) {
+    if (BLANKET_BASH_FORMS.has(perm)) {
+      // Bare "Bash" has no parens so parseCanonicalPattern returns null;
+      // normalize all three blanket forms to "*".
+      bashPermissions['*'] = 'allow';
+      continue;
+    }
     const parsed = parseCanonicalPattern(perm);
     if (parsed && parsed.tool === 'bash') {
       bashPermissions[parsed.pattern] = 'allow';
@@ -410,10 +476,15 @@ export function convertToOpenCodeFormat(set: PermissionSet): OpenCodePermissions
 export function convertToCodexFormat(set: PermissionSet, cwd?: string): CodexPermissions {
   const result: CodexPermissions = {};
 
-  // Check for broad bash permissions -> suggest full-auto
+  // Check for broad bash permissions -> suggest full-auto.
+  // Treat the bare blanket form "Bash" the same as "Bash(*)" / "Bash(**)";
+  // parseCanonicalPattern requires parens so "Bash" alone wouldn't match
+  // otherwise — the difference determines whether a pod runs unattended
+  // (approval_policy: 'never') or stalls on interactive approvals.
   const hasBroadBash = set.allow.some((p) => {
+    if (BLANKET_BASH_FORMS.has(p)) return true;
     const parsed = parseCanonicalPattern(p);
-    return parsed && parsed.tool === 'bash' && (parsed.pattern === '*' || parsed.pattern === '**');
+    return parsed !== null && parsed.tool === 'bash' && (parsed.pattern === '*' || parsed.pattern === '**');
   });
 
   if (hasBroadBash) {
@@ -1131,6 +1202,7 @@ export function savePermissionSet(set: PermissionSet): { success: boolean; error
   }
 }
 
+/** Name used for the default permission set in central storage. */
 const DEFAULT_PERMISSION_SET_NAME = 'default';
 
 /**

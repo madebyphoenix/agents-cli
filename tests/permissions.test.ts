@@ -203,6 +203,19 @@ describe('convertToOpenCodeFormat', () => {
     const result = convertToOpenCodeFormat(set);
     expect(result.permission.bash).toEqual({});
   });
+
+  it('maps the bare blanket form "Bash" to an allow-all bash pattern', () => {
+    // Shared permission groups use plain "Bash" (no parens) as the blanket
+    // rule. Without this mapping it would silently drop on the OpenCode
+    // side and the agent would end up with no bash permissions at all.
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash'],
+    };
+
+    const result = convertToOpenCodeFormat(set);
+    expect(result.permission.bash['*']).toBe('allow');
+  });
 });
 
 describe('convertToCodexFormat', () => {
@@ -210,6 +223,20 @@ describe('convertToCodexFormat', () => {
     const set: PermissionSet = {
       name: 'test',
       allow: ['Bash(*)'],
+    };
+
+    const result = convertToCodexFormat(set);
+    expect(result.approval_policy).toBe('never');
+    expect(result.sandbox_mode).toBe('workspace-write');
+  });
+
+  it('treats the bare blanket form "Bash" as broad bash (auto-approve)', () => {
+    // Permission groups often ship plain "Bash" as the blanket rule.
+    // Without this, pods got approval_policy='on-request' and would stall
+    // on ambiguous commands with no human to confirm.
+    const set: PermissionSet = {
+      name: 'test',
+      allow: ['Bash'],
     };
 
     const result = convertToCodexFormat(set);
