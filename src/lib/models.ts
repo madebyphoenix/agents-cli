@@ -1,3 +1,12 @@
+/**
+ * Model catalog extraction, caching, and resolution for all supported agents.
+ *
+ * Each agent ships its model list differently -- Claude and Codex embed it in
+ * compiled bundles/binaries, Gemini exports it from a JS module, and OpenCode/
+ * Cursor/OpenClaw expose it via CLI commands. This module provides a unified
+ * `getModelCatalog()` and `resolveModel()` interface over all of them, backed
+ * by a file-system cache keyed on source mtime.
+ */
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -5,6 +14,7 @@ import { execFileSync } from 'child_process';
 import type { AgentId } from './types.js';
 import { getVersionDir } from './versions.js';
 
+/** Model identifiers per cloud provider (used by Claude's multi-cloud routing). */
 export interface ModelPerCloud {
   firstParty: string;
   bedrock?: string;
@@ -14,11 +24,13 @@ export interface ModelPerCloud {
   mantle?: string | null;
 }
 
+/** A reasoning effort level exposed by an agent's model. */
 export interface ReasoningLevel {
   effort: string;
   description?: string;
 }
 
+/** Metadata for a single model within an agent's catalog. */
 export interface ModelInfo {
   id: string;
   displayName?: string;
@@ -35,6 +47,7 @@ export interface ModelInfo {
   defaultReasoningLevel?: string;
 }
 
+/** The complete model catalog for a specific (agent, version) pair. */
 export interface ModelCatalog {
   agent: AgentId;
   version: string;
@@ -53,12 +66,14 @@ const CACHE_PATH = path.join(os.homedir(), '.agents', '.models-cache.json');
  */
 const CACHE_SCHEMA_VERSION = 2;
 
+/** A single cached model catalog entry keyed by source path and mtime. */
 interface CacheEntry {
   sourcePath: string;
   mtime: number;
   catalog: ModelCatalog;
 }
 
+/** On-disk shape of the model catalog cache file. */
 interface CacheFile {
   schema: number;
   entries: Record<string, CacheEntry>;
@@ -70,6 +85,7 @@ function cacheKey(agent: AgentId, version: string): string {
   return `${agent}@${version}`;
 }
 
+/** Load the cache file from disk (or return the in-memory copy). */
 function loadCache(): CacheFile {
   if (memoryCache) return memoryCache;
   try {
@@ -77,7 +93,7 @@ function loadCache(): CacheFile {
     if (raw && raw.schema === CACHE_SCHEMA_VERSION && raw.entries) {
       memoryCache = raw as CacheFile;
     } else {
-      // Legacy (pre-schema) or stale-schema cache — drop it.
+      // Legacy (pre-schema) or stale-schema cache -- drop it.
       memoryCache = { schema: CACHE_SCHEMA_VERSION, entries: {} };
     }
   } catch {
@@ -86,6 +102,7 @@ function loadCache(): CacheFile {
   return memoryCache!;
 }
 
+/** Persist the in-memory cache to disk. Best-effort; failures are silent. */
 function saveCache(): void {
   if (!memoryCache) return;
   try {
@@ -97,8 +114,10 @@ function saveCache(): void {
   }
 }
 
+/** How the model catalog source was obtained. */
 export type ModelSourceKind = 'bundle' | 'binary' | 'js' | 'cli';
 
+/** Describes the location and extraction strategy for a model catalog source. */
 export interface ModelSource {
   path: string;
   kind: ModelSourceKind;
@@ -108,9 +127,9 @@ export interface ModelSource {
  * Locate the file that authoritatively describes the installed model catalog
  * for a given (agent, version). The `kind` tells `getModelCatalog` how to
  * read it:
- *   bundle/binary — strings(1)-style extraction (claude/codex)
- *   js            — read + regex-parse an exported JS module (gemini)
- *   cli           — spawn the agent's own `models` command (opencode/cursor/openclaw)
+ *   bundle/binary -- strings(1)-style extraction (claude/codex)
+ *   js            -- read + regex-parse an exported JS module (gemini)
+ *   cli           -- spawn the agent's own `models` command (opencode/cursor/openclaw)
  *
  * Returns null if nothing usable is found.
  */
@@ -154,7 +173,7 @@ export function locateModelSource(
   }
 
   if (agent === 'gemini') {
-    // Gemini ships a clean ES module with all constants and aliases — no need
+    // Gemini ships a clean ES module with all constants and aliases -- no need
     // to parse the minified CLI bundle.
     const modelsJs = path.join(
       versionDir,
@@ -190,7 +209,7 @@ export function locateModelSource(
 
   if (agent === 'cursor') {
     // cursor-agent is installed via curl script, not agents-cli. Version argument
-    // is accepted for API symmetry but ignored — cursor lives on PATH.
+    // is accepted for API symmetry but ignored -- cursor lives on PATH.
     const pathBin = findOnPath('cursor-agent');
     if (pathBin) return { path: pathBin, kind: 'cli' };
     return null;
@@ -199,6 +218,7 @@ export function locateModelSource(
   return null;
 }
 
+/** Search PATH for a command and return its absolute path, or null. */
 function findOnPath(command: string): string | null {
   const pathEnv = process.env.PATH || '';
   const exts = process.platform === 'win32' ? (process.env.PATHEXT || '').split(';') : [''];
@@ -216,6 +236,7 @@ function findOnPath(command: string): string | null {
   return null;
 }
 
+/** Map the current Node.js platform/arch pair to a Rust-style target triple. */
 function currentTargetTriple(): string | null {
   switch (`${process.platform}-${process.arch}`) {
     case 'darwin-arm64': return 'aarch64-apple-darwin';
@@ -390,7 +411,7 @@ function extractGeminiCatalog(text: string): { models: ModelInfo[]; aliases: Rec
       if (id) validIds.add(id);
     }
   }
-  // Fall back to any gemini-shaped id we saw in the constants map — useful
+  // Fall back to any gemini-shaped id we saw in the constants map -- useful
   // when the Set shape changes across gemini versions.
   if (validIds.size === 0) {
     for (const [name, value] of constants) {
@@ -427,7 +448,7 @@ function extractGeminiCatalog(text: string): { models: ModelInfo[]; aliases: Rec
 
   const displayNameFor = (id: string): string | undefined => {
     // Gemini has a `getDisplayString` for some aliases but the canonical id
-    // is human-readable enough ("gemini-3-pro-preview") — no separate map.
+    // is human-readable enough ("gemini-3-pro-preview") -- no separate map.
     return undefined;
   };
 
@@ -445,7 +466,7 @@ function extractGeminiCatalog(text: string): { models: ModelInfo[]; aliases: Rec
 
 /**
  * Extract OpenCode's catalog by invoking `opencode models --verbose`. The
- * output is a sequence of `<provider>/<id>\n{json}` blocks — we parse every
+ * output is a sequence of `<provider>/<id>\n{json}` blocks -- we parse every
  * JSON block that follows a provider/id line.
  *
  * OpenCode caches the models.dev snapshot internally, so this is a local,
@@ -500,7 +521,7 @@ function extractOpenCodeCatalog(binaryPath: string): { models: ModelInfo[]; alia
       const obj = JSON.parse(json);
       if (seen.has(fullKey)) continue;
       seen.add(fullKey);
-      // obj.status can be "active" | "deprecated" | "preview" — surface only
+      // obj.status can be "active" | "deprecated" | "preview" -- surface only
       // when it isn't the default so the consumer can flag stale models.
       const nonDefaultStatus = obj.status && obj.status !== 'active' ? obj.status : undefined;
       models.push({
@@ -680,11 +701,18 @@ export function getModelCatalog(agent: AgentId, version: string): ModelCatalog |
     aliases,
   };
 
-  cache.entries[key] = { sourcePath: src.path, mtime, catalog };
-  saveCache();
+  // Don't cache empty CLI extractions: the CLI may have been mid-install,
+  // network-dependent, or transiently failing. Caching 0 models would mask
+  // the real catalog forever (mtime won't change). Bundle/binary/js sources
+  // are deterministic, so cache those even when empty.
+  if (src.kind !== 'cli' || models.length > 0) {
+    cache.entries[key] = { sourcePath: src.path, mtime, catalog };
+    saveCache();
+  }
   return catalog;
 }
 
+/** The result of resolving a user-supplied model string against the catalog. */
 export interface ResolvedModel {
   /** The model string to forward to the CLI (canonical id when we can resolve, else passed through unchanged). */
   forwarded: string;
@@ -736,6 +764,7 @@ export function resolveModel(agent: AgentId, version: string, requested: string)
   };
 }
 
+/** Find the closest matching model ids/aliases using edit distance. */
 function pickSuggestions(requested: string, catalog: ModelCatalog): string[] {
   const all = [...catalog.models.map((m) => m.id), ...Object.keys(catalog.aliases)];
   return all
@@ -746,6 +775,7 @@ function pickSuggestions(requested: string, catalog: ModelCatalog): string[] {
     .map((s) => s.id);
 }
 
+/** Normalized Levenshtein similarity (0..1, where 1 is identical). */
 function similarity(a: string, b: string): number {
   const longer = a.length >= b.length ? a : b;
   const shorter = a.length >= b.length ? b : a;
@@ -754,6 +784,7 @@ function similarity(a: string, b: string): number {
   return (longer.length - distance) / longer.length;
 }
 
+/** Standard Levenshtein edit distance between two strings. */
 function levenshtein(a: string, b: string): number {
   const m = a.length;
   const n = b.length;
