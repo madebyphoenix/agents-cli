@@ -26,7 +26,7 @@ import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
 import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir, getProjectAgentsDir, getPromptcutsPath } from './state.js';
 import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig, resolveAgentName, formatAgentError, CODEX_HOOKS_MIN_VERSION } from './agents.js';
-import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME } from './permissions.js';
+import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME, getActivePermissionSetName, readPermissionSetRecipe, PERMISSION_SET_ENV_VAR } from './permissions.js';
 import { installMcpServers } from './mcp.js';
 import { markdownToToml } from './convert.js';
 import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion, ensureClaudeInsideSymlink } from './shims.js';
@@ -1552,13 +1552,41 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     }
   }
 
-  // Apply permissions (if agent supports them)
-  // Permissions are now stored as groups in ~/.agents/permissions/groups/
+  // Apply permissions (if agent supports them).
+  // Groups live in ~/.agents/permissions/groups/. Optional recipes in
+  // ~/.agents/permissions/sets/<name>.yaml pick a subset via `includes:`.
+  // If AGENTS_PERMISSION_SET is set, we resolve that recipe and use its
+  // includes list as the group filter (intersected with groups on disk).
   const permissionGroups = discoverPermissionGroups();
   const allGroupNames = permissionGroups.map(g => g.name);
-  const permsToSync = selection
-    ? resolveSelection(selection.permissions, allGroupNames)
-    : (PERMISSIONS_CAPABLE_AGENTS.includes(agent) ? allGroupNames : []);
+  const activeSetName = getActivePermissionSetName();
+  let setFilteredGroups: string[] | null = null;
+  if (activeSetName) {
+    const recipe = readPermissionSetRecipe(activeSetName);
+    if (recipe) {
+      const available = new Set(allGroupNames);
+      setFilteredGroups = recipe.includes.filter(g => available.has(g));
+    } else {
+      console.warn(`${PERMISSION_SET_ENV_VAR}=${activeSetName} but no recipe at ~/.agents/permissions/sets/${activeSetName}.yaml — falling back to all groups`);
+    }
+  }
+  let permsToSync: string[];
+  if (selection) {
+    permsToSync = resolveSelection(selection.permissions, allGroupNames);
+    // If a set recipe is active, the recipe's includes list always wins —
+    // even when the caller passed an explicit array via selection. Without
+    // this intersection, `agents add`'s buildAutomaticSelection would pass
+    // every group name discovered on disk (including 99-deny), bypassing
+    // the sandbox filter.
+    if (setFilteredGroups) {
+      const filterSet = new Set(setFilteredGroups);
+      permsToSync = permsToSync.filter(g => filterSet.has(g));
+    }
+  } else {
+    permsToSync = PERMISSIONS_CAPABLE_AGENTS.includes(agent)
+      ? (setFilteredGroups ?? allGroupNames)
+      : [];
+  }
 
   if (permsToSync.length > 0 && PERMISSIONS_CAPABLE_AGENTS.includes(agent)) {
     // Build permissions from selected groups
