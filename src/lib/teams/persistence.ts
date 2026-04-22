@@ -1,3 +1,11 @@
+/**
+ * Teams configuration persistence.
+ *
+ * Manages reading, writing, and migrating the teams config file
+ * (~/.agents/teams/config.json) that stores per-agent-type settings
+ * (command templates, enabled state, pinned models) and provider configs.
+ * Also resolves the base data directory for teammate process storage.
+ */
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { homedir, tmpdir } from 'os';
@@ -34,6 +42,7 @@ async function ensureWritableDir(p: string): Promise<boolean> {
   }
 }
 
+/** Resolve the base data directory for teams, preferring ~/.agents/teams/ with a temp fallback. */
 export async function resolveBaseDir(): Promise<string> {
   if (await ensureWritableDir(TEAMS_DIR)) {
     return TEAMS_DIR;
@@ -65,17 +74,22 @@ async function resolveLegacySwarmifyConfigPath(): Promise<string> {
   return path.join(LEGACY_BASE_DIR, 'agents', 'config.json');
 }
 
+/** Reasoning-intensity levels supported by the teams system. */
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
 
-// Retained for config-file back-compat: older configs pinned a model per
-// effort tier. We no longer act on those entries, but we won't error if they
-// exist in a user's JSON config on disk.
+/**
+ * Legacy type retained for config-file back-compat. Older configs pinned a
+ * model per effort tier; we no longer act on these entries but accept them
+ * without error when loading from disk.
+ */
 export type ModelOverrides = Partial<Record<AgentType, Partial<Record<EffortLevel, string>>>>;
 
+/** API endpoint configuration for a model provider. */
 export interface ProviderConfig {
   apiEndpoint: string | null;
 }
 
+/** Per-agent-type configuration: CLI command template, enabled state, optional pinned model, and provider. */
 export interface AgentConfig {
   command: string;
   enabled: boolean;
@@ -86,11 +100,13 @@ export interface AgentConfig {
   provider: string;
 }
 
+/** Top-level teams configuration structure persisted to config.json. */
 export interface SwarmConfig {
   agents: Record<AgentType, AgentConfig>;
   providers: Record<string, ProviderConfig>;
 }
 
+/** Result of reading the teams config, including resolved agent and provider configurations. */
 export interface ReadConfigResult {
   hasConfig: boolean;
   enabledAgents: AgentType[];
@@ -101,6 +117,7 @@ export interface ReadConfigResult {
 let AGENTS_DIR: string | null = null;
 let CONFIG_PATH: string | null = null;
 
+/** Resolve and ensure the agents subdirectory exists under the teams base dir. */
 export async function resolveAgentsDir(): Promise<string> {
   if (!AGENTS_DIR) {
     AGENTS_DIR = await resolveAgentsPath();
@@ -247,7 +264,7 @@ async function migrateLegacyConfig(): Promise<SwarmConfig | null> {
   return config;
 }
 
-// Read teams config, returns default config if file doesn't exist
+/** Read teams config from disk, migrating legacy formats if needed. Returns defaults when no config exists. */
 export async function readConfig(): Promise<ReadConfigResult> {
   const configPath = await ensureConfigPath();
 
@@ -342,13 +359,13 @@ export async function readConfig(): Promise<ReadConfigResult> {
   }
 }
 
-// Write teams config
+/** Write teams config to disk. */
 export async function writeConfig(config: SwarmConfig): Promise<void> {
   const configPath = await ensureConfigPath();
   await fs.writeFile(configPath, JSON.stringify(config, null, 2));
 }
 
-// Update agent enabled status
+/** Update the enabled/disabled status of a specific agent type in the config file. */
 export async function setAgentEnabled(agentType: AgentType, enabled: boolean): Promise<void> {
   const { agentConfigs } = await readConfig();
   agentConfigs[agentType].enabled = enabled;

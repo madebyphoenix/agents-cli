@@ -1,3 +1,12 @@
+/**
+ * Teams agent lifecycle management.
+ *
+ * Defines the AgentProcess and AgentManager classes that handle spawning,
+ * monitoring, stopping, and persisting teammate processes across all supported
+ * agent CLIs (Claude, Codex, Gemini, Cursor, OpenCode). Supports DAG-based
+ * dependency scheduling via --after, per-teammate model/effort overrides, and
+ * multiple permission modes (plan, edit, full).
+ */
 import { spawn, execSync, ChildProcess } from 'child_process';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -48,6 +57,7 @@ export function computePathLCA(paths: string[]): string | null {
   return lca;
 }
 
+/** Lifecycle status of a teammate process. */
 export enum AgentStatus {
   PENDING = 'pending',     // staged with unresolved --after deps
   RUNNING = 'running',
@@ -55,6 +65,16 @@ export enum AgentStatus {
   FAILED = 'failed',
   STOPPED = 'stopped',
 }
+
+/**
+ * Task type label for Software Factory workflows. Drives planner fan-out and
+ * the test-oracle loop (failed `test` tasks emit `bugfix` tasks). Optional —
+ * teammates without a task_type work exactly as before.
+ */
+export type TaskType = 'plan' | 'implement' | 'test' | 'review' | 'bugfix' | 'docs';
+export const VALID_TASK_TYPES: readonly TaskType[] = [
+  'plan', 'implement', 'test', 'review', 'bugfix', 'docs',
+] as const;
 
 /**
  * Walk the `after` chain from `startName` within the given map; returns true
@@ -89,9 +109,10 @@ export const AGENT_COMMANDS: Record<AgentType, string[]> = {
   opencode: ['opencode', 'run', '--format', 'json', '{prompt}'],
 };
 
-// Effort level type. Effort is a reasoning-intensity knob (see
-// buildReasoningFlags) — it no longer picks the model. Use --model to pin
-// a specific model per teammate; when unset, the agent's CLI default runs.
+/**
+ * Reasoning-intensity knob wired into buildReasoningFlags.
+ * Does not select a model; use --model separately to pin a specific model per teammate.
+ */
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
 
 // Minimal defaults — no per-effort model map. Configs on disk may still have
@@ -191,6 +212,7 @@ function extractTimestamp(raw: any): Date | null {
   return null;
 }
 
+/** Resolve a mode string to a validated Mode, falling back to the given default. */
 export function resolveMode(
   requestedMode: string | null | undefined,
   defaultMode: Mode = 'plan'
@@ -211,6 +233,7 @@ export function resolveMode(
   return normalizedDefault;
 }
 
+/** Ensure Gemini's settings.json has experimental.plan enabled for headless plan mode. */
 export async function ensureGeminiPlanMode(): Promise<void> {
   const settingsPath = path.join(os.homedir(), '.gemini', 'settings.json');
   try {
@@ -233,6 +256,7 @@ export async function ensureGeminiPlanMode(): Promise<void> {
   }
 }
 
+/** Check whether the CLI binary for a given agent type exists in PATH. Returns [available, pathOrError]. */
 export function checkCliAvailable(agentType: AgentType): [boolean, string | null] {
   const cmdTemplate = AGENT_COMMANDS[agentType];
   if (!cmdTemplate) {
@@ -248,6 +272,7 @@ export function checkCliAvailable(agentType: AgentType): [boolean, string | null
   }
 }
 
+/** Check availability of all known agent CLIs. Returns a map of agent type to install status. */
 export function checkAllClis(): Record<string, { installed: boolean; path: string | null; error: string | null }> {
   const results: Record<string, { installed: boolean; path: string | null; error: string | null }> = {};
   for (const agentType of Object.keys(AGENT_COMMANDS) as AgentType[]) {
@@ -263,6 +288,7 @@ export function checkAllClis(): Record<string, { installed: boolean; path: strin
 
 let AGENTS_DIR: string | null = null;
 
+/** Resolve and cache the base directory where teammate process data is stored. */
 export async function getAgentsDir(): Promise<string> {
   if (!AGENTS_DIR) {
     AGENTS_DIR = await resolveAgentsDir();
@@ -270,6 +296,13 @@ export async function getAgentsDir(): Promise<string> {
   return AGENTS_DIR;
 }
 
+/**
+ * Represents a single teammate process within a team.
+ *
+ * Tracks process metadata (PID, status, timestamps), reads incremental
+ * stdout events, persists state to disk as meta.json, and can be
+ * reconstituted from disk via loadFromDisk().
+ */
 export class AgentProcess {
   agentId: string;
   taskName: string;
@@ -301,6 +334,14 @@ export class AgentProcess {
   model: string | null = null;
   // Extra env vars passed through to the child process (from --env KEY=VALUE).
   envOverrides: Record<string, string> | null = null;
+  // Factory task-type label. When set, drives planner fan-out and the
+  // test-oracle loop. Null for plain teammates — no behavioral change.
+  taskType: TaskType | null = null;
+  // Repo/branch for cloud dispatches that stage behind --after. Captured
+  // at spawn time so startReady() can invoke the dispatcher with the same
+  // options the user originally supplied.
+  cloudRepo: string | null = null;
+  cloudBranch: string | null = null;
   private eventsCache: any[] = [];
   private lastReadPos: number = 0;
   private baseDir: string | null = null;
@@ -328,7 +369,10 @@ export class AgentProcess {
     after: string[] = [],
     effort: EffortLevel | null = null,
     model: string | null = null,
-    envOverrides: Record<string, string> | null = null
+    envOverrides: Record<string, string> | null = null,
+    taskType: TaskType | null = null,
+    cloudRepo: string | null = null,
+    cloudBranch: string | null = null
   ) {
     this.agentId = agentId;
     this.remoteSessionId = remoteSessionId;
@@ -337,6 +381,9 @@ export class AgentProcess {
     this.effort = effort;
     this.model = model;
     this.envOverrides = envOverrides;
+    this.taskType = taskType;
+    this.cloudRepo = cloudRepo;
+    this.cloudBranch = cloudBranch;
     this.taskName = taskName;
     this.agentType = agentType;
     this.prompt = prompt;
@@ -362,6 +409,46 @@ export class AgentProcess {
   async getAgentDir(): Promise<string> {
     const base = this.baseDir || await getAgentsDir();
     return path.join(base, this.agentId);
+  }
+
+  /**
+   * Dump the subset of state the Ledger sync hook needs. Keeps sync.ts
+   * free of any teams-internal imports.
+   */
+  async toSnapshot(): Promise<{
+    agent_id: string;
+    team_id: string;
+    teammate_name: string | null;
+    agent_type: string;
+    task_type: string | null;
+    status: string;
+    started_at: string;
+    completed_at: string | null;
+    after: string[];
+    cloud_provider: string | null;
+    cloud_session_id: string | null;
+    cloud_repo: string | null;
+    cloud_branch: string | null;
+    agent_dir: string;
+    cwd: string | null;
+  }> {
+    return {
+      agent_id: this.agentId,
+      team_id: this.taskName,
+      teammate_name: this.name,
+      agent_type: this.agentType,
+      task_type: this.taskType,
+      status: this.status,
+      started_at: this.startedAt.toISOString(),
+      completed_at: this.completedAt?.toISOString() ?? null,
+      after: this.after,
+      cloud_provider: this.cloudProvider,
+      cloud_session_id: this.cloudSessionId,
+      cloud_repo: this.cloudRepo,
+      cloud_branch: this.cloudBranch,
+      agent_dir: await this.getAgentDir(),
+      cwd: this.cwd,
+    };
   }
 
   async getStdoutPath(): Promise<string> {
@@ -395,6 +482,9 @@ export class AgentProcess {
       effort: this.effort,
       model: this.model,
       env_overrides: this.envOverrides,
+      task_type: this.taskType,
+      cloud_repo: this.cloudRepo,
+      cloud_branch: this.cloudBranch,
     };
   }
 
@@ -526,6 +616,9 @@ export class AgentProcess {
       effort: this.effort,
       model: this.model,
       env_overrides: this.envOverrides,
+      task_type: this.taskType,
+      cloud_repo: this.cloudRepo,
+      cloud_branch: this.cloudBranch,
     };
     const metaPath = await this.getMetaPath();
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2));
@@ -587,7 +680,12 @@ export class AgentProcess {
         Array.isArray(meta.after) ? meta.after : [],
         meta.effort || null,
         meta.model || null,
-        meta.env_overrides || null
+        meta.env_overrides || null,
+        meta.task_type && (VALID_TASK_TYPES as readonly string[]).includes(meta.task_type)
+          ? (meta.task_type as TaskType)
+          : null,
+        meta.cloud_repo || null,
+        meta.cloud_branch || null
       );
       return agent;
     } catch {
@@ -648,6 +746,27 @@ export class AgentProcess {
   }
 }
 
+/**
+ * Manages the full lifecycle of teammate agent processes.
+ *
+ * Handles spawning (with DAG dependency resolution), status polling,
+ * stopping, and automatic cleanup of old agents. Maintains an in-memory
+ * cache backed by on-disk meta.json files.
+ */
+/**
+ * Callback used to dispatch a cloud-backed teammate when its --after deps
+ * resolve. Teams.ts registers one via setCloudDispatcher() at startup; the
+ * MCP server path leaves it null (cloud teammates aren't dispatched from MCP).
+ */
+export type CloudDispatchFn = (agent: AgentProcess) => Promise<{ cloudSessionId: string }>;
+
+/**
+ * Called once a teammate transitions into a terminal status (completed,
+ * failed, stopped). Teams.ts registers one via setCompletionHook() to push
+ * outputs to the team Ledger. MCP package leaves it null.
+ */
+export type CompletionHook = (agent: AgentProcess) => Promise<void>;
+
  export class AgentManager {
   private agents: Map<string, AgentProcess> = new Map();
   private maxAgents: number;
@@ -659,6 +778,9 @@ export class AgentProcess {
   private agentConfigs!: Record<AgentType, AgentConfig>;
   private constructorAgentConfigs: Record<AgentType, AgentConfig> | null = null;
   private initPromise: Promise<void> | null = null;
+  private cloudDispatcher: CloudDispatchFn | null = null;
+  private completionHook: CompletionHook | null = null;
+  private syncedAgents: Set<string> = new Set();
 
   private constructorAgentsDir: string | null = null;
 
@@ -710,8 +832,59 @@ export class AgentProcess {
     this.agentConfigs = agentConfigs;
   }
 
+  /**
+   * Register the callback used to dispatch cloud-backed teammates when their
+   * --after deps resolve. Called once at CLI startup by `agents teams`.
+   */
+  setCloudDispatcher(fn: CloudDispatchFn | null): void {
+    this.cloudDispatcher = fn;
+  }
+
+  /**
+   * Register a hook to run once per teammate the first time it lands in a
+   * terminal status (completed / failed / stopped). The hook fires during
+   * listAll() / listByTask() status polling, so any CLI or MCP command that
+   * touches status triggers sync automatically.
+   */
+  setCompletionHook(fn: CompletionHook | null): void {
+    this.completionHook = fn;
+  }
+
   registerAgent(agent: AgentProcess): void {
     this.agents.set(agent.agentId, agent);
+  }
+
+  /**
+   * Scan the agents dir for meta.json files not already in the in-memory
+   * cache and load them. Needed when another process (e.g. a Planner
+   * teammate running `agents teams add`) creates new teammates while this
+   * manager is alive — the supervisor loop calls this each wave so
+   * dynamically-added teammates get picked up.
+   *
+   * Does not modify or re-load agents already in the cache; that path is
+   * covered by updateStatusFromProcess() which re-reads stdout.log.
+   */
+  async rescanFromDisk(): Promise<number> {
+    await this.initialize();
+    try {
+      await fs.access(this.agentsDir);
+    } catch {
+      return 0;
+    }
+    const entries = await fs.readdir(this.agentsDir);
+    let added = 0;
+    for (const entry of entries) {
+      if (this.agents.has(entry)) continue;
+      const agentDir = path.join(this.agentsDir, entry);
+      const stat = await fs.stat(agentDir).catch(() => null);
+      if (!stat || !stat.isDirectory()) continue;
+      const agent = await AgentProcess.loadFromDisk(entry, this.agentsDir);
+      if (!agent) continue;
+      if (this.filterByCwd !== null && agent.cwd !== this.filterByCwd) continue;
+      this.agents.set(entry, agent);
+      added++;
+    }
+    return added;
   }
 
   private async loadExistingAgents(): Promise<void> {
@@ -781,7 +954,12 @@ export class AgentProcess {
     name: string | null = null,
     after: string[] = [],
     model: string | null = null,
-    envOverrides: Record<string, string> | null = null
+    envOverrides: Record<string, string> | null = null,
+    taskType: TaskType | null = null,
+    cloudProvider: string | null = null,
+    cloudSessionId: string | null = null,
+    cloudRepo: string | null = null,
+    cloudBranch: string | null = null
   ): Promise<AgentProcess> {
     await this.initialize();
     const resolvedMode = resolveMode(mode, this.defaultMode);
@@ -836,9 +1014,15 @@ export class AgentProcess {
       }
     }
 
-    const [available, pathOrError] = checkCliAvailable(agentType);
-    if (!available) {
-      throw new Error(pathOrError || 'CLI tool not available');
+    // Cloud-backed teammates run on remote infrastructure; we don't need the
+    // local CLI for them (the pod has its own). The caller has already
+    // dispatched via the cloud provider and passed us the provider + session.
+    const isCloudBacked = Boolean(cloudProvider);
+    if (!isCloudBacked) {
+      const [available, pathOrError] = checkCliAvailable(agentType);
+      if (!available) {
+        throw new Error(pathOrError || 'CLI tool not available');
+      }
     }
 
     // Use a full UUIDv4 as the canonical agent_id. For Claude, we pass it via
@@ -860,8 +1044,8 @@ export class AgentProcess {
       this.agentsDir,
       parentSessionId,
       workspaceDir,
-      null,
-      null,
+      cloudSessionId,
+      cloudProvider,
       null,
       version,
       null,
@@ -869,7 +1053,10 @@ export class AgentProcess {
       cleanAfter,
       effort,
       model,
-      envOverrides && Object.keys(envOverrides).length > 0 ? envOverrides : null
+      envOverrides && Object.keys(envOverrides).length > 0 ? envOverrides : null,
+      taskType,
+      cloudRepo,
+      cloudBranch
     );
 
     const agentDir = await agent.getAgentDir();
@@ -881,10 +1068,14 @@ export class AgentProcess {
     await agent.saveMeta();
     this.agents.set(agentId, agent);
 
-    if (!isStaged) {
-      await this.launchProcess(agent);
-    } else {
+    if (isStaged) {
       debug(`Staged ${agentType} teammate '${name}' in team '${taskName}' (after: ${cleanAfter.join(', ')})`);
+    } else if (isCloudBacked) {
+      // Cloud-backed teammate: the provider already dispatched a remote task.
+      // No local process to launch; status polling walks the provider instead.
+      debug(`Cloud-backed ${agentType} teammate via ${cloudProvider} (session=${cloudSessionId})`);
+    } else {
+      await this.launchProcess(agent);
     }
 
     await this.cleanupOldAgents();
@@ -976,8 +1167,23 @@ export class AgentProcess {
       });
       if (!depsReady) continue;
       try {
-        await this.launchProcess(agent);
-        launched.push(agent);
+        if (agent.cloudProvider) {
+          if (!this.cloudDispatcher) {
+            console.error(
+              `Cannot start cloud-backed teammate ${agent.agentId}: no dispatcher registered.`
+            );
+            continue;
+          }
+          const { cloudSessionId } = await this.cloudDispatcher(agent);
+          agent.cloudSessionId = cloudSessionId;
+          agent.status = AgentStatus.RUNNING;
+          agent.startedAt = new Date();
+          await agent.saveMeta();
+          launched.push(agent);
+        } else {
+          await this.launchProcess(agent);
+          launched.push(agent);
+        }
       } catch (err) {
         console.error(`Could not launch ${agent.agentId}:`, err);
       }
@@ -1204,8 +1410,30 @@ export class AgentProcess {
     for (const agent of agents) {
       await agent.readNewEvents();
       await agent.updateStatusFromProcess();
+      await this.maybeFireCompletionHook(agent);
     }
     return agents;
+  }
+
+  /**
+   * Fire the completion hook exactly once per teammate when it transitions
+   * into a terminal state. Errors are logged but never thrown — a ledger
+   * backend outage must not break status polling.
+   */
+  private async maybeFireCompletionHook(agent: AgentProcess): Promise<void> {
+    if (!this.completionHook) return;
+    const terminal =
+      agent.status === AgentStatus.COMPLETED ||
+      agent.status === AgentStatus.FAILED ||
+      agent.status === AgentStatus.STOPPED;
+    if (!terminal) return;
+    if (this.syncedAgents.has(agent.agentId)) return;
+    this.syncedAgents.add(agent.agentId);
+    try {
+      await this.completionHook(agent);
+    } catch (err) {
+      console.warn(`[ledger sync] completion hook failed for ${agent.agentId}:`, err);
+    }
   }
 
   async listRunning(): Promise<AgentProcess[]> {

@@ -5,7 +5,7 @@
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
-import { AgentManager, AgentStatus, resolveMode } from './agents.js';
+import { AgentManager, AgentStatus, resolveMode, type TaskType } from './agents.js';
 import { AgentType } from './parsers.js';
 import { getDelta } from './summarizer.js';
 import { debug } from './debug.js';
@@ -26,6 +26,7 @@ function truncateBashCommand(cmd: string, maxLen: number = 120): string {
   return cmd.substring(0, maxLen - 3) + '...';
 }
 
+/** Result returned after spawning a new teammate. */
 export interface SpawnResult {
   task_name: string;
   agent_id: string;
@@ -36,8 +37,12 @@ export interface SpawnResult {
   remote_session_id?: string | null;
   name?: string | null;
   after?: string[];
+  task_type?: TaskType | null;
+  cloud_provider?: string | null;
+  cloud_session_id?: string | null;
 }
 
+/** Detailed status of a single teammate, including file ops, commands, and a cursor for delta polling. */
 export interface AgentStatusDetail {
   agent_id: string;
   agent_type: string;
@@ -60,8 +65,10 @@ export interface AgentStatusDetail {
   remote_session_id?: string | null;
   name?: string | null;
   after?: string[];
+  task_type?: TaskType | null;
 }
 
+/** Aggregated status of all teammates in a task, with per-status counts and a global cursor. */
 export interface TaskStatusResult {
   task_name: string;
   agents: AgentStatusDetail[];
@@ -69,6 +76,7 @@ export interface TaskStatusResult {
   cursor: string;  // ISO timestamp - max across all agents
 }
 
+/** Result of stopping one or more teammates. */
 export interface StopResult {
   task_name: string;
   stopped: string[];
@@ -76,6 +84,7 @@ export interface StopResult {
   not_found: string[];
 }
 
+/** Summary metadata for a single task (team), including agent counts by status and timestamps. */
 export interface TaskInfo {
   task_name: string;
   agent_count: number;
@@ -89,10 +98,12 @@ export interface TaskInfo {
   modified_at: string;  // Latest agent activity (completion or current time if running)
 }
 
+/** Paginated list of tasks sorted by most recent activity. */
 export interface TasksResult {
   tasks: TaskInfo[];
 }
 
+/** Spawn a new teammate in a task and return its initial metadata. */
 export async function handleSpawn(
   manager: AgentManager,
   taskName: string,
@@ -107,7 +118,12 @@ export async function handleSpawn(
   name: string | null = null,
   after: string[] = [],
   model: string | null = null,
-  envOverrides: Record<string, string> | null = null
+  envOverrides: Record<string, string> | null = null,
+  taskType: TaskType | null = null,
+  cloudProvider: string | null = null,
+  cloudSessionId: string | null = null,
+  cloudRepo: string | null = null,
+  cloudBranch: string | null = null
 ): Promise<SpawnResult> {
   const defaultMode = manager.getDefaultMode();
   const resolvedMode = resolveMode(mode, defaultMode);
@@ -130,7 +146,12 @@ export async function handleSpawn(
     name,
     after,
     model,
-    envOverrides
+    envOverrides,
+    taskType,
+    cloudProvider,
+    cloudSessionId,
+    cloudRepo,
+    cloudBranch
   );
 
   debug(`[spawn] Spawned ${agentType} agent ${agent.agentId} for task "${taskName}"`);
@@ -145,9 +166,13 @@ export async function handleSpawn(
     remote_session_id: agent.remoteSessionId,
     name: agent.name,
     after: agent.after,
+    task_type: agent.taskType,
+    cloud_provider: agent.cloudProvider,
+    cloud_session_id: agent.cloudSessionId,
   };
 }
 
+/** Retrieve the current status of all teammates in a task, with optional timestamp-based delta filtering. */
 export async function handleStatus(
   manager: AgentManager,
   taskName: string | null | undefined,
@@ -223,6 +248,9 @@ export async function handleStatus(
       remote_session_id: agent.remoteSessionId,
       name: agent.name,
       after: agent.after,
+      task_type: agent.taskType,
+      cloud_session_id: agent.cloudSessionId,
+      cloud_provider: agent.cloudProvider,
       files_created: delta.new_files_created,
       files_modified: delta.new_files_modified,
       files_read: delta.new_files_read,
@@ -247,6 +275,7 @@ export async function handleStatus(
   };
 }
 
+/** List all known tasks grouped by task name, sorted by most recent activity. */
 export async function handleTasks(
   manager: AgentManager,
   limit: number = 10
@@ -324,6 +353,7 @@ export async function handleTasks(
   return { tasks: limitedTasks };
 }
 
+/** Stop a specific teammate or all teammates in a task. */
 export async function handleStop(
   manager: AgentManager,
   taskName: string,

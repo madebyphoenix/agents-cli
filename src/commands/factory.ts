@@ -1,0 +1,491 @@
+/**
+ * Software Factory commands.
+ *
+ * `agents factory` is an ergonomic wrapper around `agents teams` for the
+ * planner → implement → test → review pipeline. Step 8 adds start/status/answer.
+ * Today we ship `evict` so pods can flush their state to the Ledger before
+ * SIGTERM takes them down.
+ */
+import type { Command } from 'commander';
+import chalk from 'chalk';
+import { spawn } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import { homedir } from 'os';
+import { AgentManager, VALID_TASK_TYPES } from '../lib/teams/agents.js';
+import { resolveLedger, syncOnEviction, syncTeammate } from '../lib/ledger/index.js';
+import { handleSpawn, handleStatus } from '../lib/teams/api.js';
+import { ensureTeam } from '../lib/teams/registry.js';
+import { resolveProvider } from '../lib/cloud/registry.js';
+import type { CloudProviderId } from '../lib/cloud/types.js';
+import { runSupervisor } from '../lib/teams/supervisor.js';
+import { maybeFileBugfix } from '../lib/teams/oracle.js';
+import {
+  readFactoryConfig,
+  writeFactoryConfig,
+  resolveDispatch,
+  type FactoryConfig,
+  type DispatchProvider,
+} from '../lib/factory/config.js';
+
+function die(msg: string, code = 1): never {
+  console.error(chalk.red(msg));
+  process.exit(code);
+}
+
+/** Per-team file where a detached supervisor streams its wave output. */
+function supervisorLogPath(team: string): string {
+  const safe = team.replace(/[/\\]/g, '_');
+  return path.join(homedir(), '.agents', 'factory', `${safe}.supervisor.log`);
+}
+
+function supervisorPidPath(team: string): string {
+  const safe = team.replace(/[/\\]/g, '_');
+  return path.join(homedir(), '.agents', 'factory', `${safe}.supervisor.pid`);
+}
+
+/**
+ * Fork a detached `agents factory run <team>` child that survives this
+ * parent process. Writes pid + log path to disk so `factory watch` and
+ * `factory stop` can find it.
+ */
+function startDetachedSupervisor(team: string): { pid: number; log: string } {
+  const log = supervisorLogPath(team);
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  const logFd = fs.openSync(log, 'a');
+
+  // Re-launch ourselves with `factory run <team>`. argv[0] is the node
+  // binary and argv[1] is this CLI entry point — that pair reconstructs
+  // the exact command the parent is running.
+  const child = spawn(process.argv[0], [process.argv[1], 'factory', 'run', team], {
+    detached: true,
+    stdio: ['ignore', logFd, logFd],
+    env: { ...process.env },
+  });
+  child.unref();
+
+  const pid = child.pid ?? -1;
+  if (pid > 0) {
+    fs.writeFileSync(supervisorPidPath(team), String(pid), 'utf-8');
+  }
+  return { pid, log };
+}
+
+/**
+ * Run the supervisor in-process for the foreground case. Thin wrapper that
+ * defers to the exact same code the `factory run` subcommand uses.
+ */
+async function runForegroundSupervisor(team: string): Promise<void> {
+  const ledger = resolveLedger();
+  const mgr = new AgentManager();
+  mgr.setCompletionHook(async (a) => {
+    const snap = await a.toSnapshot();
+    await syncTeammate(snap, ledger);
+    await maybeFileBugfix(a, mgr);
+  });
+  mgr.setCloudDispatcher(async (a) => {
+    if (!a.cloudProvider) throw new Error(`Teammate ${a.agentId} missing cloudProvider`);
+    const prov = resolveProvider(a.cloudProvider as CloudProviderId);
+    const ct = await prov.dispatch({
+      prompt: a.prompt, agent: a.agentType,
+      repo: a.cloudRepo ?? undefined, branch: a.cloudBranch ?? undefined,
+      model: a.model ?? undefined,
+    });
+    return { cloudSessionId: ct.id };
+  });
+  await runSupervisor(mgr, {
+    team,
+    intervalMs: 8000,
+    maxWaves: 1000,
+    onWave: (s) => {
+      const ts = s.timestamp.slice(11, 19);
+      const taskTypes = s.launched.map((l) => l.taskType ?? '?').join(',') || '-';
+      console.log(
+        `[${ts}] wave ${s.wave}  launched=${s.launched.length} (${taskTypes})  ` +
+        `running=${s.running}  pending=${s.pending}  done=${s.completed}  failed=${s.failed}`
+      );
+    },
+  });
+}
+
+export function registerFactoryCommands(program: Command): void {
+  const factory = program
+    .command('factory')
+    .description('Software Factory — planner/worker DAG with a shared team Ledger.');
+
+  // `agents factory start <brief>` — seed a team with a Planner teammate.
+  factory
+    .command('start <brief>')
+    .description('Start a new Software Factory run: spawns a Planner teammate who emits the DAG.')
+    .option('-t, --team <name>', 'Team name (defaults to factory-<timestamp>)')
+    .option('-a, --agent <type>', 'Agent type for the planner (defaults to factory config default_planner_agent)')
+    .option('--cwd <dir>', 'Working directory for all teammates', process.cwd())
+    .option('--cloud <provider>', 'Dispatch planner to cloud: rush | codex | factory. Defaults to your factory config priority (typically `rush`).')
+    .option('--local', 'Force-run the planner locally instead of dispatching to cloud. Escape hatch for debugging.')
+    .option('--repo <owner/repo>', 'GitHub repository (required with --cloud rush; auto-detected from git remote otherwise).')
+    .option('--detach', 'Also start the supervisor loop in the background; tail with `agents factory watch <team>`')
+    .option('--foreground', 'Also start the supervisor loop in the foreground (blocks until drained)')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (brief: string, opts: {
+      team?: string; agent?: string; cwd: string; cloud?: string; local?: boolean; repo?: string;
+      detach?: boolean; foreground?: boolean; json?: boolean;
+    }) => {
+      const teamId = opts.team || `factory-${Date.now()}`;
+      await ensureTeam(teamId);
+
+      const ledger = resolveLedger();
+      const mgr = new AgentManager();
+      mgr.setCompletionHook(async (a) => {
+        const snap = await a.toSnapshot();
+        await syncTeammate(snap, ledger);
+      });
+
+      const plannerPrompt = `You are the Planner teammate in a Software Factory team.
+
+Team id: ${teamId}
+Working directory: ${opts.cwd}
+Brief: ${brief}
+
+YOUR JOB: Seed an initial DAG of worker tasks by EXECUTING \`agents teams add\` commands via the Bash tool. You must actually run them — do not print them in a code block and stop.
+
+For each slice (narrow, file-scoped ask), run three Bash commands:
+  agents teams add ${teamId} codex "implement <slice>" --name impl-<slug> --task-type implement --cwd ${opts.cwd}
+  agents teams add ${teamId} codex "write tests for <slice>; run them; last line: TESTS: N passed, M failed" --name test-<slug> --task-type test --after impl-<slug> --cwd ${opts.cwd}
+  agents teams add ${teamId} codex "review diff from impl-<slug>; file bugs via LedgerNote" --name review-<slug> --task-type review --after impl-<slug>,test-<slug> --cwd ${opts.cwd}
+
+Use the agent type that matches your own type for workers (cheapest-and-adequate). Use --agent claude only where you need top capability.
+
+Rules:
+1. Plant the FIRST LAYER ONLY. Workers can add more tasks via \`agents teams add\` as they discover work; a background supervisor will pick them up.
+2. Split slices by file ownership — two implementers must not touch the same files in parallel.
+3. Names must be unique within the team (--name alice, --name bob). Dependencies reference the name via --after.
+4. Before exiting, print a one-paragraph strategy narrative. Do NOT spawn a separate process to do this — just print it as your final message.
+
+After you have run the teams-add commands and printed your strategy, STOP. The supervisor will drive the DAG from here.`;
+
+      // Resolve dispatch against the factory config priority. --cloud and
+      // --local are CLI overrides; otherwise we use the user's configured
+      // order (default: rush > codex > local).
+      const dispatch = await resolveDispatch(opts.cwd, opts.cloud, opts.local, opts.repo);
+      const plannerAgent = (opts.agent ?? (await readFactoryConfig()).default_planner_agent) as string;
+
+      let cloudSessionId: string | null = null;
+      let cloudProvider: string | null = null;
+      let cloudRepo: string | null = null;
+      if (dispatch.provider !== 'local') {
+        if (dispatch.provider === 'rush' && !dispatch.repo) {
+          die(`--cloud rush requires --repo (auto-detect from git remote failed). Pass --repo <owner/repo> or run in a git repo with an origin remote.`);
+        }
+        cloudProvider = dispatch.provider;
+        cloudRepo = dispatch.repo ?? null;
+        try {
+          const prov = resolveProvider(dispatch.provider as CloudProviderId);
+          const task = await prov.dispatch({
+            prompt: plannerPrompt,
+            agent: plannerAgent,
+            repo: dispatch.repo,
+          });
+          cloudSessionId = task.id;
+        } catch (err) {
+          die(`Cloud dispatch to ${dispatch.provider} failed: ${(err as Error).message}`);
+        }
+      }
+
+      const result = await handleSpawn(
+        mgr, teamId, plannerAgent as any, plannerPrompt,
+        opts.cwd, 'edit', 'medium', null, opts.cwd, null, 'planner', [], null, null,
+        'plan', cloudProvider, cloudSessionId, cloudRepo, null
+      );
+
+      // Auto-launch the supervisor unless the user explicitly opts out by
+      // passing neither --detach nor --foreground. Default is --detach: the
+      // factory is meant to be dynamic, so it'd be weird to leave the DAG
+      // stalled after the planner emits tasks.
+      const mode = opts.foreground ? 'foreground' : 'detach';
+      const supervisorInfo = mode === 'foreground' ? null : startDetachedSupervisor(teamId);
+
+      if (opts.json) {
+        console.log(JSON.stringify({
+          team_id: teamId,
+          planner_id: result.agent_id,
+          planner_agent: plannerAgent,
+          status: result.status,
+          dispatch: { provider: dispatch.provider, repo: dispatch.repo ?? null, considered: dispatch.considered },
+          supervisor: supervisorInfo,
+        }, null, 2));
+        if (mode === 'foreground') await runForegroundSupervisor(teamId);
+        return;
+      }
+
+      console.log(chalk.green(`Factory started: team ${chalk.cyan(teamId)}`));
+      console.log(`  ${chalk.gray('planner    ')}  ${result.name} (${result.agent_id.slice(0, 8)})  ${plannerAgent}`);
+      const dispatchLabel = dispatch.provider === 'local'
+        ? chalk.gray('local')
+        : `${chalk.magenta(dispatch.provider)}${dispatch.repo ? chalk.gray(` repo=${dispatch.repo}`) : ''}`;
+      console.log(`  ${chalk.gray('dispatch   ')}  ${dispatchLabel}`);
+      if (supervisorInfo) {
+        console.log(`  ${chalk.gray('supervisor ')}  pid ${supervisorInfo.pid}, log ${supervisorInfo.log}`);
+      } else {
+        console.log(chalk.gray(`  supervisor   foreground`));
+      }
+      console.log();
+      console.log(chalk.gray(`Watch live:    agents factory watch ${teamId}`));
+      console.log(chalk.gray(`Check status:  agents factory status ${teamId}`));
+      console.log(chalk.gray(`Q&A modal:     shows up in the Factory Floor pane when a teammate needs input`));
+
+      if (mode === 'foreground') await runForegroundSupervisor(teamId);
+    });
+
+  // `agents factory status <team>` — rolled-up view of teammates + DAG state.
+  factory
+    .command('status <team>')
+    .description('Show roll-up status for a Factory team: DAG state, blocked teammates, recent tasks.')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (team: string, opts: { json?: boolean }) => {
+      const mgr = new AgentManager();
+      const result = await handleStatus(mgr, team, 'all');
+      const byType: Record<string, number> = {};
+      for (const a of result.agents) {
+        const t = a.task_type ?? 'other';
+        byType[t] = (byType[t] ?? 0) + 1;
+      }
+      const input_required = result.agents.filter((a) => a.status === 'pending' && a.after?.length === 0).length;
+
+      if (opts.json) {
+        console.log(JSON.stringify({
+          team_id: team,
+          counts: result.summary,
+          by_task_type: byType,
+          input_required_count: input_required,
+          agents: result.agents,
+        }, null, 2));
+        return;
+      }
+
+      console.log(chalk.bold(`Factory ${chalk.cyan(team)}`));
+      console.log(`  ${chalk.gray('running  ')}  ${result.summary.running}`);
+      console.log(`  ${chalk.gray('pending  ')}  ${result.summary.pending}`);
+      console.log(`  ${chalk.gray('completed')}  ${result.summary.completed}`);
+      console.log(`  ${chalk.gray('failed   ')}  ${result.summary.failed}`);
+      if (Object.keys(byType).length > 0) {
+        console.log(`  ${chalk.gray('by type  ')}  ` +
+          Object.entries(byType).map(([k, v]) => `${k}:${v}`).join(' · '));
+      }
+      if (input_required > 0) {
+        console.log(chalk.yellow(`\n${input_required} teammate(s) waiting on user input — answer with: agents factory answer ${team} <text>`));
+      }
+    });
+
+  // `agents factory run <team>` — run the continuous DAG supervisor in the
+  // foreground. Drives the team dynamically: as teammates add more tasks via
+  // `agents teams add`, those tasks get picked up in the next wave.
+  factory
+    .command('run <team>')
+    .description('Drive a team dynamically: keep dispatching ready teammates until the DAG drains. Workers can add more tasks mid-flight and this loop picks them up.')
+    .option('--interval <seconds>', 'Seconds between waves', '8')
+    .option('--max-waves <n>', 'Safety cap on waves', '1000')
+    .option('--json', 'Emit one JSON object per wave')
+    .action(async (team: string, opts: { interval: string; maxWaves: string; json?: boolean }) => {
+      const ledger = resolveLedger();
+      const mgr = new AgentManager();
+      // Wire the same completion hook as `teams start` so failed tests
+      // auto-file bugfix teammates and outputs land in the Ledger.
+      mgr.setCompletionHook(async (a) => {
+        const snap = await a.toSnapshot();
+        await syncTeammate(snap, ledger);
+        await maybeFileBugfix(a, mgr);
+      });
+      mgr.setCloudDispatcher(async (a) => {
+        if (!a.cloudProvider) throw new Error(`Teammate ${a.agentId} missing cloudProvider`);
+        const prov = resolveProvider(a.cloudProvider as CloudProviderId);
+        const ct = await prov.dispatch({
+          prompt: a.prompt, agent: a.agentType,
+          repo: a.cloudRepo ?? undefined, branch: a.cloudBranch ?? undefined,
+          model: a.model ?? undefined,
+        });
+        return { cloudSessionId: ct.id };
+      });
+
+      const intervalMs = Math.max(1000, Number.parseInt(opts.interval, 10) * 1000 || 8000);
+      const maxWaves = Math.max(1, Number.parseInt(opts.maxWaves, 10) || 1000);
+
+      const result = await runSupervisor(mgr, {
+        team, intervalMs, maxWaves,
+        onWave: (s) => {
+          const ts = s.timestamp.slice(11, 19);
+          if (opts.json) {
+            console.log(JSON.stringify({
+              wave: s.wave, ts, team: s.team,
+              launched: s.launched.map((l) => ({ agent_id: l.agentId, name: l.name, task_type: l.taskType })),
+              pending: s.pending, running: s.running, completed: s.completed, failed: s.failed,
+            }));
+            return;
+          }
+          const taskTypes = s.launched.map((l) => l.taskType ?? '?').join(',') || '-';
+          console.log(
+            `[${ts}] wave ${s.wave}  ${chalk.cyan(s.team)}  ` +
+            `launched=${chalk.green(s.launched.length)} (${taskTypes})  ` +
+            `running=${chalk.yellow(s.running)}  pending=${chalk.blue(s.pending)}  ` +
+            `done=${chalk.green(s.completed)}  failed=${s.failed > 0 ? chalk.red(s.failed) : '0'}`
+          );
+        },
+      });
+
+      const elapsed = Math.floor(result.elapsed_ms / 1000);
+      if (result.stoppedBy === 'drained') {
+        console.log(chalk.green(`\nFactory drained in ${elapsed}s (${result.waves} waves).`));
+      } else if (result.stoppedBy === 'max-waves') {
+        console.error(chalk.yellow(`\nHit --max-waves=${maxWaves}; stopping.`));
+      } else if (result.stoppedBy === 'signal') {
+        console.error(chalk.yellow(`\nStopped by signal after ${result.waves} waves.`));
+      }
+    });
+
+  // `agents factory watch <team>` — tail the supervisor's log file written
+  // by a background `factory start`. Non-blocking view of a running factory.
+  factory
+    .command('watch <team>')
+    .description('Tail the supervisor log for a team started in the background. Press Ctrl-C to stop watching; the factory keeps running.')
+    .action(async (team: string) => {
+      const logPath = supervisorLogPath(team);
+      if (!fs.existsSync(logPath)) {
+        die(`No supervisor log at ${logPath}. Start one with: agents factory start "<brief>" --team ${team} --detach`);
+      }
+      // Use tail -F so we survive log rotation and missing files.
+      const tailProc = spawn('tail', ['-F', '-n', '200', logPath], { stdio: 'inherit' });
+      const onSig = () => tailProc.kill('SIGTERM');
+      process.once('SIGINT', onSig);
+      process.once('SIGTERM', onSig);
+    });
+
+  // `agents factory config` — show or edit the factory config file.
+  // Thin CLI shim over readFactoryConfig/writeFactoryConfig; the settings
+  // panel uses the same API for visual editing.
+  factory
+    .command('config')
+    .description('Show or edit ~/.agents/factory/config.json (cloud provider priority, auto-detect repo, default planner agent).')
+    .option('--set-priority <providers>', 'Comma-separated priority list, e.g. "rush,codex,local"')
+    .option('--set-planner <agent>', 'Default planner agent: claude|codex|gemini|cursor|opencode')
+    .option('--set-auto-detect-repo <bool>', '"true" or "false" — whether rush auto-detects --repo from git remote')
+    .option('--set-interval <seconds>', 'Seconds between supervisor waves')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (opts: {
+      setPriority?: string; setPlanner?: string; setAutoDetectRepo?: string; setInterval?: string; json?: boolean;
+    }) => {
+      const update: Partial<FactoryConfig> = {};
+      if (opts.setPriority) {
+        update.cloud_priority = opts.setPriority.split(',').map((s) => s.trim()) as DispatchProvider[];
+      }
+      if (opts.setPlanner) {
+        update.default_planner_agent = opts.setPlanner as FactoryConfig['default_planner_agent'];
+      }
+      if (opts.setAutoDetectRepo !== undefined) {
+        update.auto_detect_repo = opts.setAutoDetectRepo === 'true';
+      }
+      if (opts.setInterval) {
+        const n = Number.parseInt(opts.setInterval, 10);
+        if (Number.isFinite(n) && n >= 1) update.supervisor_interval_seconds = n;
+      }
+
+      const final = Object.keys(update).length > 0
+        ? await writeFactoryConfig(update)
+        : await readFactoryConfig();
+
+      if (opts.json) {
+        console.log(JSON.stringify(final, null, 2));
+        return;
+      }
+      console.log(chalk.bold('Factory config'));
+      console.log(`  ${chalk.gray('cloud_priority         ')}  ${final.cloud_priority.join(' > ')}`);
+      console.log(`  ${chalk.gray('default_planner_agent  ')}  ${final.default_planner_agent}`);
+      console.log(`  ${chalk.gray('auto_detect_repo       ')}  ${final.auto_detect_repo}`);
+      console.log(`  ${chalk.gray('supervisor_interval_s  ')}  ${final.supervisor_interval_seconds}`);
+    });
+
+  // `agents factory stop <team>` — kill the detached supervisor for this team.
+  // Teammate processes keep running; this only stops the wave dispatcher.
+  factory
+    .command('stop <team>')
+    .description("Stop a team's background supervisor loop. Running teammates keep running; new waves stop firing.")
+    .action((team: string) => {
+      const pidFile = supervisorPidPath(team);
+      if (!fs.existsSync(pidFile)) die(`No supervisor pid file for team '${team}'.`);
+      const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10);
+      if (!Number.isFinite(pid) || pid <= 0) die(`Invalid pid in ${pidFile}.`);
+      try {
+        process.kill(pid, 'SIGTERM');
+        console.log(chalk.green(`Sent SIGTERM to supervisor pid ${pid} for team ${team}.`));
+        fs.rmSync(pidFile, { force: true });
+      } catch (err: any) {
+        if (err?.code === 'ESRCH') {
+          console.log(chalk.gray(`Supervisor pid ${pid} already gone; cleaning up pidfile.`));
+          fs.rmSync(pidFile, { force: true });
+        } else {
+          die(`Failed to stop supervisor: ${err.message}`);
+        }
+      }
+    });
+
+  // `agents factory answer <team> <text>` — reply to the oldest input_required teammate.
+  factory
+    .command('answer <team> <text>')
+    .description("Answer an open question from a teammate — forwards the text to the oldest 'input_required' cloud task.")
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (team: string, text: string, opts: { json?: boolean }) => {
+      const mgr = new AgentManager();
+      const teammates = await mgr.listByTask(team);
+      // input_required is a cloud-task status, not a local AgentStatus. Detect
+      // via status string so we still work for non-cloud teams (if someone ever
+      // plumbs the same status through).
+      const waiting = teammates.filter((t) => (t.status as string) === 'input_required');
+      if (waiting.length === 0) {
+        die(`No teammates waiting on input in team '${team}'.`);
+      }
+      waiting.sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
+      const target = waiting[0];
+      if (!target.cloudProvider || !target.cloudSessionId) {
+        die(`Teammate '${target.name ?? target.agentId}' is waiting on input but has no cloud session to message.`);
+      }
+      try {
+        const prov = resolveProvider(target.cloudProvider as CloudProviderId);
+        await prov.message(target.cloudSessionId, text);
+      } catch (err) {
+        die(`Provider rejected the message: ${(err as Error).message}`);
+      }
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, teammate: target.name ?? target.agentId }, null, 2));
+        return;
+      }
+      console.log(chalk.green(`Replied to ${target.name ?? target.agentId.slice(0, 8)} on ${target.cloudProvider}.`));
+    });
+
+  // `agents factory evict <agent_id>`
+  //
+  // Designed to run from a Kubernetes pod's preStop hook. Flushes the local
+  // teammate state (session log, git diff, registry entry, note) to the
+  // configured Ledger backend so it survives SIGTERM.
+  factory
+    .command('evict <agent_id>')
+    .description("Pre-SIGTERM: flush this teammate's state to the Team Ledger so other teammates can still read it.")
+    .option('--reason <text>', 'Short note describing why eviction happened', 'pod eviction')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (agentId: string, opts: { reason: string; json?: boolean }) => {
+      const mgr = new AgentManager();
+      const agent = await mgr.get(agentId);
+      if (!agent) die(`No teammate with id '${agentId}'`);
+
+      const ledger = resolveLedger();
+      const snap = await agent.toSnapshot();
+      try {
+        await syncOnEviction(snap, ledger);
+      } catch (err) {
+        die(`Eviction sync failed: ${(err as Error).message}`);
+      }
+
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, agent_id: agentId, ledger: ledger.kind, reason: opts.reason }, null, 2));
+        return;
+      }
+      console.log(chalk.green(`Flushed ${agentId.slice(0, 8)} to ${ledger.kind} ledger (${opts.reason}).`));
+    });
+}
