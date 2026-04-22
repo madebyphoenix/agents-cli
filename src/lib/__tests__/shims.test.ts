@@ -3,8 +3,29 @@ import { describe, it, expect } from 'vitest';
 import { generateShimScript, SHIM_SCHEMA_VERSION } from '../shims.js';
 
 describe('SHIM_SCHEMA_VERSION', () => {
-  it('is 4', () => {
-    expect(SHIM_SCHEMA_VERSION).toBe(4);
+  it('is 5', () => {
+    expect(SHIM_SCHEMA_VERSION).toBe(5);
+  });
+});
+
+describe('generateShimScript — config-dir env vars', () => {
+  it('exports CLAUDE_CONFIG_DIR for claude', () => {
+    const script = generateShimScript('claude');
+    expect(script).toContain('export CLAUDE_CONFIG_DIR=');
+    expect(script).not.toContain('export CODEX_HOME=');
+  });
+
+  it('exports CODEX_HOME for codex so the versioned config/rules are read', () => {
+    const script = generateShimScript('codex');
+    expect(script).toContain('export CODEX_HOME=');
+    expect(script).toContain('"$VERSION_DIR/home/.codex"');
+    expect(script).not.toContain('export CLAUDE_CONFIG_DIR=');
+  });
+
+  it('does not export a managed config-dir var for other agents', () => {
+    const script = generateShimScript('opencode');
+    expect(script).not.toContain('export CLAUDE_CONFIG_DIR=');
+    expect(script).not.toContain('export CODEX_HOME=');
   });
 });
 

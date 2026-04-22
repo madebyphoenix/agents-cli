@@ -1,3 +1,9 @@
+/**
+ * Agent execution -- command building, process spawning, and rate-limit fallback.
+ *
+ * Translates high-level ExecOptions into CLI invocations for each supported agent,
+ * manages environment isolation per agent, and chains fallback agents on rate limits.
+ */
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
@@ -6,13 +12,17 @@ import { parseTimeout } from './routines.js';
 import { getVersionHomePath, isVersionInstalled, resolveVersion } from './versions.js';
 import { resolveModel, buildReasoningFlags } from './models.js';
 
+/** Agent execution modes controlling tool access and autonomy level. */
 export type ExecMode = 'plan' | 'edit' | 'full';
+
+/** Reasoning effort levels passed to agents that support them. 'auto' defers to the agent's default. */
 export type ExecEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
 
+/** Options for spawning an agent process. Omitting `prompt` launches the CLI interactively. */
 export interface ExecOptions {
   agent: AgentId;
   version?: string;
-  /** Omit to launch the CLI interactively — no prompt, no --print, stdio fully inherited. */
+  /** Omit to launch the CLI interactively -- no prompt, no --print, stdio fully inherited. */
   prompt?: string;
   mode: ExecMode;
   effort: ExecEffort;
@@ -27,8 +37,10 @@ export interface ExecOptions {
   env?: Record<string, string>;
 }
 
+/** Pattern for valid environment variable names (C identifier rules). */
 const EXEC_ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/** Parse a single KEY=VALUE string into a tuple, validating the key name. */
 function parseExecEnvEntry(entry: string): [string, string] {
   const separatorIndex = entry.indexOf('=');
   if (separatorIndex <= 0) {
@@ -45,6 +57,7 @@ function parseExecEnvEntry(entry: string): [string, string] {
   return [key, value];
 }
 
+/** Parse an array of KEY=VALUE strings into an env record. Returns undefined for empty input. */
 export function parseExecEnv(entries: string[]): Record<string, string> | undefined {
   if (entries.length === 0) {
     return undefined;
@@ -53,22 +66,35 @@ export function parseExecEnv(entries: string[]): Record<string, string> | undefi
   return Object.fromEntries(entries.map(parseExecEnvEntry));
 }
 
+/**
+ * Build the process environment for an agent invocation.
+ * Pins CLAUDE_CONFIG_DIR for Claude and CODEX_HOME for Codex; strips the
+ * other agent's env var so it doesn't leak into unrelated invocations.
+ */
 export function buildExecEnv(options: ExecOptions): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = { ...process.env };
 
-  // CLAUDE_CONFIG_DIR is Claude-specific. When the caller is running inside
-  // a Claude-managed shell, process.env already carries it; spreading into a
-  // non-Claude agent's env would leak a config pointer that the target CLI
-  // doesn't understand. Strip it unless we're actually invoking Claude, and
-  // when we are, pin it to the resolved version's home.
+  // Config-dir env vars are agent-specific. When the caller is running inside
+  // an agent-managed shell, process.env already carries one; spreading into a
+  // different agent's env would leak a config pointer the target CLI doesn't
+  // understand. Strip foreign vars and pin the right one to the versioned home.
   if (options.agent === 'claude') {
     const cwd = options.cwd || process.cwd();
     const version = options.version || resolveVersion('claude', cwd);
     if (version && isVersionInstalled('claude', version)) {
       result.CLAUDE_CONFIG_DIR = path.join(getVersionHomePath('claude', version), '.claude');
     }
+    delete result.CODEX_HOME;
+  } else if (options.agent === 'codex') {
+    const cwd = options.cwd || process.cwd();
+    const version = options.version || resolveVersion('codex', cwd);
+    if (version && isVersionInstalled('codex', version)) {
+      result.CODEX_HOME = path.join(getVersionHomePath('codex', version), '.codex');
+    }
+    delete result.CLAUDE_CONFIG_DIR;
   } else {
     delete result.CLAUDE_CONFIG_DIR;
+    delete result.CODEX_HOME;
   }
 
   return {
@@ -78,7 +104,7 @@ export function buildExecEnv(options: ExecOptions): NodeJS.ProcessEnv {
 }
 
 
-// Command templates per agent
+/** Describes how to translate ExecOptions into CLI arguments for a specific agent. */
 export interface AgentCommandTemplate {
   base: string[];
   promptFlag: 'positional' | string;
@@ -93,6 +119,7 @@ export interface AgentCommandTemplate {
   verboseFlag?: string;
 }
 
+/** CLI command templates for every supported agent. */
 export const AGENT_COMMANDS: Record<AgentId, AgentCommandTemplate> = {
   claude: {
     base: ['claude'],
@@ -213,6 +240,7 @@ export const AGENT_COMMANDS: Record<AgentId, AgentCommandTemplate> = {
   },
 };
 
+/** Assemble the full CLI argument array for an agent invocation. */
 export function buildExecCommand(options: ExecOptions): string[] {
   const template = AGENT_COMMANDS[options.agent];
   const cmd: string[] = [...template.base];
@@ -243,7 +271,7 @@ export function buildExecCommand(options: ExecOptions): string[] {
   cmd.push(...modeFlags);
 
   // Add print/headless flags only when a prompt is provided. Without a prompt
-  // the caller wants an interactive REPL — passing --print would immediately
+  // the caller wants an interactive REPL -- passing --print would immediately
   // wait on stdin and never render the TUI.
   if (!interactive && options.headless && template.printFlags) {
     cmd.push(...template.printFlags);
@@ -300,11 +328,13 @@ export function buildExecCommand(options: ExecOptions): string[] {
   return cmd;
 }
 
+/** Spawn an agent and return its exit code. Convenience wrapper over spawnAgent. */
 export async function execAgent(options: ExecOptions): Promise<number> {
   const { exitCode } = await spawnAgent(options);
   return exitCode;
 }
 
+/** Exit code and captured stderr from a spawned agent process. */
 interface SpawnResult {
   exitCode: number;
   stderr: string;
@@ -314,7 +344,7 @@ interface SpawnResult {
  * Spawn an agent process and return its exit code plus a tee'd copy of stderr.
  *
  * Stderr is always piped so the caller can inspect it (e.g., for rate-limit
- * detection) while also forwarding every chunk to process.stderr in real time —
+ * detection) while also forwarding every chunk to process.stderr in real time --
  * the user sees the same output they would with stdio: 'inherit'. Stdout keeps
  * the original behavior: 'pipe' when downstream output is piped (so `agents
  * run ... | ...` composes cleanly), otherwise 'inherit' so TTY output is
@@ -383,7 +413,7 @@ async function spawnAgent(options: ExecOptions): Promise<SpawnResult> {
 
 /**
  * Patterns that indicate a rate/usage limit. Matching is intentionally broad
- * because providers phrase these differently — Anthropic uses "5-hour limit"
+ * because providers phrase these differently -- Anthropic uses "5-hour limit"
  * and "rate limit", OpenAI surfaces 429s, Google says "quota exceeded".
  * False positives here just trigger a fallback attempt; false negatives leave
  * the original error unhandled, which is worse.
@@ -399,20 +429,23 @@ export const RATE_LIMIT_PATTERNS: RegExp[] = [
   /\boverloaded\b/i,
 ];
 
+/** Return true if the text contains any known rate-limit or overload indicator. */
 export function detectRateLimit(text: string): boolean {
   return RATE_LIMIT_PATTERNS.some(pattern => pattern.test(text));
 }
 
+/** An agent (with optional pinned version) in a fallback chain. */
 export interface FallbackEntry {
   agent: AgentId;
   /** Optional pinned version (e.g. '0.116.0'). When set, takes precedence over the active default. */
   version?: string;
 }
 
+/** ExecOptions extended with a fallback chain for rate-limit cascading. */
 export interface FallbackOptions extends ExecOptions {
   /** Ordered list of agents to try if the primary (options.agent) hits a rate limit. */
   fallback: FallbackEntry[];
-  /** Fallback requires a prompt — chain handoff doesn't apply to interactive sessions. */
+  /** Fallback requires a prompt -- chain handoff doesn't apply to interactive sessions. */
   prompt: string;
 }
 
@@ -423,7 +456,7 @@ export interface FallbackOptions extends ExecOptions {
  * When the prior agent was Claude we pin its session ID via `--session-id` so
  * `prevSessionId` is always defined; for other primaries we pass undefined and
  * get a simpler retry-with-context prompt. Claude understands `/continue <id>`
- * via its shipped skill — other agents fall through to an explicit instruction
+ * via its shipped skill -- other agents fall through to an explicit instruction
  * that points at the version-agnostic `agents sessions <id>` reader.
  */
 export function buildFallbackPrompt(
@@ -459,7 +492,7 @@ export function buildFallbackPrompt(
  *
  * The primary agent gets the original prompt. Subsequent agents get a
  * `/continue <id>`-style handoff (see buildFallbackPrompt) when we can pin a
- * session ID — which today means Claude as primary (supports `--session-id`).
+ * session ID -- which today means Claude as primary (supports `--session-id`).
  * For other primaries, fallbacks run with the original prompt plus a
  * retry-with-context note, since we can't deterministically resolve their
  * auto-generated session IDs.
