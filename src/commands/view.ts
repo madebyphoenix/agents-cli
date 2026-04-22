@@ -1,3 +1,11 @@
+/**
+ * View command for inspecting installed agents, versions, accounts, and resources.
+ *
+ * Implements `agents view` -- shows installed agent CLIs with version info,
+ * account emails, usage stats, and active status. When given an agent@version
+ * argument, displays a detailed breakdown of commands, skills, MCP servers,
+ * rules, hooks, and promptcuts synced to that version.
+ */
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -37,17 +45,20 @@ import {
   hasNewResources,
   promptNewResourceSelection,
   syncResourcesToVersion,
+  removeVersion,
 } from '../lib/versions.js';
 import {
   getShimsDir,
   isShimsInPath,
   ensureVersionedAliasCurrent,
+  removeShim,
 } from '../lib/shims.js';
 import { getAgentResources } from '../lib/resources.js';
 import { getAgentsDir, getPromptcutsPath } from '../lib/state.js';
 import { isGitRepo, getGitSyncStatus } from '../lib/git.js';
 import { getCentralMemoryFileName } from '../lib/memory.js';
-import { formatPath, isPromptCancelled } from './utils.js';
+import { confirm } from '@inquirer/prompts';
+import { formatPath, isInteractiveTerminal, isPromptCancelled } from './utils.js';
 
 function formatLastActive(date: Date | null): string {
   if (!date) return '';
@@ -662,12 +673,307 @@ async function showAgentResources(agentId: AgentId, requestedVersion: string): P
   }
 }
 
+/** Machine-readable entry for a single installed version. */
+export interface ViewJsonVersion {
+  version: string;
+  isDefault: boolean;
+  signedIn: boolean;
+  email: string | null;
+  plan: string | null;
+  usageStatus: 'available' | 'rate_limited' | 'out_of_credits' | null;
+  windows: Array<{
+    key: 'session' | 'week' | 'sonnet_week';
+    usedPercent: number;
+    resetsAt: string | null;
+  }>;
+  lastActive: string | null;
+  path: string;
+}
+
+/** Machine-readable entry for one agent's installed versions. */
+export interface ViewJsonAgent {
+  agent: AgentId;
+  versions: ViewJsonVersion[];
+}
+
+/**
+ * Collect structured info for one or more agents without rendering to the
+ * terminal. Used by `--json` output and any programmatic consumer (e.g. the
+ * swarmify extension's "resume current session in best available version"
+ * command).
+ */
+async function collectAgentsJson(filterAgentId?: AgentId): Promise<ViewJsonAgent[]> {
+  const agentsToShow = filterAgentId ? [filterAgentId] : ALL_AGENT_IDS;
+
+  const infoFetches: Promise<{ agentId: AgentId; version: string; home: string; info: AccountInfo }>[] = [];
+  for (const agentId of agentsToShow) {
+    for (const ver of listInstalledVersions(agentId)) {
+      const home = getVersionHomePath(agentId, ver);
+      infoFetches.push(
+        getAccountInfo(agentId, home).then((info) => ({ agentId, version: ver, home, info }))
+      );
+    }
+  }
+  const infoResults = await Promise.all(infoFetches);
+
+  const { canonicalByUsageKey, usageByKey } = await getUsageInfoByIdentity(
+    infoResults.map(({ agentId, home, version, info }) => ({
+      agentId,
+      home,
+      cliVersion: version,
+      info,
+    }))
+  );
+
+  const mergeCanonical = (info: AccountInfo): AccountInfo => {
+    const key = getUsageLookupKey(info);
+    if (!key) return info;
+    const canon = canonicalByUsageKey.get(key);
+    if (!canon) return info;
+    return {
+      ...info,
+      plan: canon.plan,
+      usageStatus: canon.usageStatus,
+      overageCredits: canon.overageCredits,
+    };
+  };
+
+  const byAgent = new Map<AgentId, ViewJsonVersion[]>();
+  for (const { agentId, version, info: rawInfo } of infoResults) {
+    const info = mergeCanonical(rawInfo);
+    const globalDefault = getGlobalDefault(agentId);
+    const usageKey = getUsageLookupKey(info);
+    const usageInfo = usageKey ? usageByKey.get(usageKey) : undefined;
+    const snapshot = usageInfo?.snapshot ?? null;
+
+    const entry: ViewJsonVersion = {
+      version,
+      isDefault: version === globalDefault,
+      signedIn: !!info.email,
+      email: info.email,
+      plan: info.plan,
+      usageStatus: info.usageStatus,
+      windows: snapshot
+        ? snapshot.windows.map((w) => ({
+            key: w.key,
+            usedPercent: w.usedPercent,
+            resetsAt: w.resetsAt ? w.resetsAt.toISOString() : null,
+          }))
+        : [],
+      lastActive: info.lastActive ? info.lastActive.toISOString() : null,
+      path: getVersionDir(agentId, version),
+    };
+
+    const existing = byAgent.get(agentId);
+    if (existing) existing.push(entry);
+    else byAgent.set(agentId, [entry]);
+  }
+
+  const out: ViewJsonAgent[] = [];
+  for (const agentId of agentsToShow) {
+    const versions = byAgent.get(agentId) ?? [];
+    versions.sort((a, b) => {
+      if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+      return compareVersions(b.version, a.version);
+    });
+    out.push({ agent: agentId, versions });
+  }
+  return out;
+}
+
+interface PrunePlanEntry {
+  agentId: AgentId;
+  version: string;
+  email: string;
+  keeper: string;
+  isDefault: boolean;
+}
+
+interface AgentPrunePlan {
+  agentId: AgentId;
+  toPrune: PrunePlanEntry[];
+  skippedDefaults: PrunePlanEntry[];
+}
+
+async function buildAgentPrunePlan(agentId: AgentId): Promise<AgentPrunePlan> {
+  const entries = await Promise.all(
+    listInstalledVersions(agentId).map(async (version) => {
+      const home = getVersionHomePath(agentId, version);
+      const info = await getAccountInfo(agentId, home);
+      return { version, info };
+    })
+  );
+
+  const globalDefault = getGlobalDefault(agentId);
+  const byEmail = new Map<string, typeof entries>();
+  for (const e of entries) {
+    if (!e.info.email) continue;
+    const key = e.info.email.toLowerCase();
+    const list = byEmail.get(key) ?? [];
+    list.push(e);
+    byEmail.set(key, list);
+  }
+
+  const toPrune: PrunePlanEntry[] = [];
+  const skippedDefaults: PrunePlanEntry[] = [];
+  for (const [, group] of byEmail) {
+    if (group.length < 2) continue;
+    const sorted = [...group].sort((a, b) => compareVersions(b.version, a.version));
+    const keeper = sorted[0].version;
+    for (const older of sorted.slice(1)) {
+      const plan: PrunePlanEntry = {
+        agentId,
+        version: older.version,
+        email: older.info.email as string,
+        keeper,
+        isDefault: older.version === globalDefault,
+      };
+      if (plan.isDefault) skippedDefaults.push(plan);
+      else toPrune.push(plan);
+    }
+  }
+
+  return { agentId, toPrune, skippedDefaults };
+}
+
+async function executePrunePlan(plan: AgentPrunePlan): Promise<number> {
+  let removed = 0;
+  for (const p of plan.toPrune) {
+    console.log(chalk.gray(`Removing ${agentLabel(p.agentId)}@${p.version}...`));
+    const ok = removeVersion(p.agentId, p.version);
+    if (ok) {
+      console.log(chalk.green(`Removed ${agentLabel(p.agentId)}@${p.version}`));
+      removed++;
+    } else {
+      console.log(chalk.yellow(`Already gone: ${agentLabel(p.agentId)}@${p.version}`));
+    }
+  }
+  if (listInstalledVersions(plan.agentId).length === 0) {
+    removeShim(plan.agentId);
+  }
+  return removed;
+}
+
+function printPrunePlan(plan: AgentPrunePlan, isFirst: boolean): void {
+  if (plan.skippedDefaults.length > 0) {
+    console.log(chalk.yellow(`Skipping default versions for ${agentLabel(plan.agentId)} (switch default first):`));
+    for (const s of plan.skippedDefaults) {
+      console.log(
+        `  ${agentLabel(s.agentId)}@${s.version}  ${chalk.cyan(s.email)}  ` +
+        chalk.gray(`— duplicate of ${s.agentId}@${s.keeper}. Run: agents use ${s.agentId}@${s.keeper}`)
+      );
+    }
+    console.log();
+  }
+  if (plan.toPrune.length === 0) return;
+  const heading = isFirst ? `Will prune ${agentLabel(plan.agentId)}:` : `Also found duplicates for ${agentLabel(plan.agentId)}:`;
+  console.log(chalk.bold(heading));
+  for (const p of plan.toPrune) {
+    console.log(
+      `  ${agentLabel(p.agentId)}@${p.version}  ${chalk.cyan(p.email)}  ` +
+      chalk.gray(`— keeping ${p.agentId}@${p.keeper}`)
+    );
+  }
+  console.log();
+}
+
+/**
+ * Prune older installed versions that share an email with a newer installed
+ * version. Keeps the highest semver per email, skips the global default (with
+ * a warning so the user can switch first).
+ *
+ * When filterAgentId is set, prunes that agent first, then cascades: after
+ * each agent, offers the next agent with duplicates. User answering "no"
+ * stops the chain.
+ */
+async function pruneDuplicates(filterAgentId: AgentId | undefined, yes: boolean): Promise<void> {
+  const ordered: AgentId[] = filterAgentId
+    ? [filterAgentId, ...ALL_AGENT_IDS.filter((a) => a !== filterAgentId)]
+    : [...ALL_AGENT_IDS];
+
+  const spinner = ora({ text: 'Scanning installed versions...', isSilent: !process.stdout.isTTY }).start();
+  const plans = await Promise.all(ordered.map((a) => buildAgentPrunePlan(a)));
+  spinner.stop();
+
+  const actionable = plans.filter((p) => p.toPrune.length > 0 || p.skippedDefaults.length > 0);
+
+  if (actionable.length === 0) {
+    console.log(chalk.gray('Nothing to prune — no older versions share an account with a newer version.'));
+    return;
+  }
+
+  let totalRemoved = 0;
+  let isFirst = true;
+  let processedAny = false;
+
+  for (const plan of actionable) {
+    printPrunePlan(plan, isFirst);
+
+    if (plan.toPrune.length === 0) {
+      // Only skippedDefaults for this agent; move on.
+      isFirst = false;
+      continue;
+    }
+
+    if (!yes) {
+      if (!isInteractiveTerminal()) {
+        console.log(chalk.red('Refusing to prune in a non-interactive shell without --yes.'));
+        console.log(chalk.gray('Re-run with: agents view' + (filterAgentId ? ` ${filterAgentId}` : '') + ' --prune -y'));
+        process.exit(1);
+      }
+      const n = plan.toPrune.length;
+      const message = isFirst
+        ? `Prune ${n} ${agentLabel(plan.agentId)} version${n === 1 ? '' : 's'}?`
+        : `Also prune ${n} ${agentLabel(plan.agentId)} version${n === 1 ? '' : 's'}?`;
+      let proceed = false;
+      try {
+        proceed = await confirm({ message, default: false });
+      } catch (err) {
+        if (isPromptCancelled(err)) {
+          console.log(chalk.gray('Cancelled'));
+          break;
+        }
+        throw err;
+      }
+      if (!proceed) {
+        console.log(chalk.gray('Stopping here.'));
+        break;
+      }
+    }
+
+    totalRemoved += await executePrunePlan(plan);
+    processedAny = true;
+    isFirst = false;
+    console.log();
+  }
+
+  if (processedAny) {
+    console.log(chalk.bold(`Pruned ${totalRemoved} version${totalRemoved === 1 ? '' : 's'}.`));
+  }
+}
+
 /**
  * Main view action handler.
  * Exported for use by deprecated aliases.
  */
-export async function viewAction(agentArg?: string): Promise<void> {
+export async function viewAction(
+  agentArg?: string,
+  options?: { json?: boolean; prune?: boolean; yes?: boolean }
+): Promise<void> {
+  const json = options?.json === true;
+  const prune = options?.prune === true;
+  const yes = options?.yes === true;
+
   if (!agentArg) {
+    if (prune) {
+      await pruneDuplicates(undefined, yes);
+      return;
+    }
+    if (json) {
+      const data = await collectAgentsJson();
+      console.log(JSON.stringify(data, null, 2));
+      return;
+    }
     // No argument: show all installed versions
     await showInstalledVersions();
     return;
@@ -680,8 +986,30 @@ export async function viewAction(agentArg?: string): Promise<void> {
 
   const agentId = resolveAgentName(agentName);
   if (!agentId) {
+    if (json) {
+      console.log(JSON.stringify({ error: formatAgentError(agentName) }));
+      process.exit(1);
+    }
     console.log(chalk.red(formatAgentError(agentName)));
     process.exit(1);
+  }
+
+  if (prune) {
+    if (requestedVersion) {
+      console.log(chalk.red('--prune does not take a @version suffix.'));
+      console.log(chalk.gray(`Run: agents view ${agentId} --prune`));
+      process.exit(1);
+    }
+    await pruneDuplicates(agentId, yes);
+    return;
+  }
+
+  if (json) {
+    // --json ignores the @version suffix (detailed resource view is not yet
+    // exposed as structured data). Emit the version list for the agent.
+    const data = await collectAgentsJson(agentId);
+    console.log(JSON.stringify(data[0] ?? { agent: agentId, versions: [] }, null, 2));
+    return;
   }
 
   if (requestedVersion) {
@@ -693,10 +1021,14 @@ export async function viewAction(agentArg?: string): Promise<void> {
   }
 }
 
+/** Register the `agents view` command. */
 export function registerViewCommand(program: Command): void {
   program
     .command('view [agent]')
     .description('Show what agent CLIs are installed and which versions you have. Inspect resources when you pass agent@version.')
+    .option('--json', 'Emit machine-readable JSON (version list, usage, signed-in status).')
+    .option('--prune', 'Remove older installed versions that share an account with a newer installed version. Skips the global default.')
+    .option('-y, --yes', 'Skip the prune confirmation prompt.')
     .addHelpText('after', `
 Examples:
   # Show all installed agents with versions, accounts, and usage
@@ -709,16 +1041,27 @@ Examples:
   agents view claude@2.1.112
   agents view claude@default
 
+  # Machine-readable output (used by tools that pick a version programmatically)
+  agents view claude --json
+
+  # Prune older versions that duplicate an account already used by a newer version
+  agents view claude --prune
+  agents view claude --prune -y
+
 When to use:
   - Checking which agents are installed and what their default versions are
   - Seeing which account each version is logged into (useful for multi-account setups)
   - Inspecting commands, skills, hooks, and MCP servers synced to a version
   - Verifying a version is installed before running it
+  - Cleaning up stale versions left behind after upgrading (--prune)
 
 Output:
   - Without arguments: table of all agents with versions, emails, usage stats
   - With agent name: versions for that agent, showing which is the default
   - With agent@version: detailed breakdown of resources synced to that version
+  - With --json: structured JSON with version, isDefault, signedIn, email, plan,
+    usageStatus, per-window usedPercent, lastActive, and path
+  - With --prune: plan of which older versions will be removed, then confirm
 `)
-    .action(viewAction);
+    .action((agentArg: string | undefined, options: { json?: boolean; prune?: boolean; yes?: boolean }) => viewAction(agentArg, options));
 }
