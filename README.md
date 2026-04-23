@@ -22,7 +22,7 @@
   &nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://cursor.com" title="Cursor"><img src="assets/harnesses/cursor.svg" height="32" alt="Cursor" /></a>
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://github.com/sst/opencode" title="OpenCode"><picture><source srcset="assets/harnesses/opencode-light.svg" media="(prefers-color-scheme: dark)" /><img src="assets/harnesses/opencode-dark.svg" height="32" alt="OpenCode" /></picture></a>
+  <a href="https://github.com/sst/opencode" title="OpenCode"><img src="assets/harnesses/opencode.png" height="32" alt="OpenCode" /></a>
   &nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://github.com/openclaw/openclaw" title="OpenClaw"><img src="assets/harnesses/openclaw.svg" height="36" alt="OpenClaw" /></a>
 </p>
