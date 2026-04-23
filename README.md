@@ -13,6 +13,20 @@
 
 **One CLI for all your AI coding agents.** Pin versions per project. Share config across Claude Code, Codex, Gemini CLI, and Cursor. Stop setting up the same MCP server three times.
 
+<p align="center">
+  <a href="https://github.com/anthropics/claude-code" title="Claude Code"><img src="assets/harnesses/anthropic.svg" height="32" alt="Claude Code" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://github.com/openai/codex" title="Codex CLI"><img src="assets/harnesses/openai.svg" height="32" alt="Codex CLI" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://github.com/google-gemini/gemini-cli" title="Gemini CLI"><img src="assets/harnesses/google.svg" height="32" alt="Gemini CLI" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://cursor.com" title="Cursor"><img src="assets/harnesses/cursor.svg" height="32" alt="Cursor" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://github.com/sst/opencode" title="OpenCode"><picture><source srcset="assets/harnesses/opencode-light.svg" media="(prefers-color-scheme: dark)" /><img src="assets/harnesses/opencode-dark.svg" height="32" alt="OpenCode" /></picture></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://github.com/openclaw/openclaw" title="OpenClaw"><img src="assets/harnesses/openclaw.svg" height="36" alt="OpenClaw" /></a>
+</p>
+
 https://github.com/user-attachments/assets/cf0b2248-6672-4458-8027-b88525572f3e
 
 ```bash
