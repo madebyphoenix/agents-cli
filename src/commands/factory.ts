@@ -43,14 +43,21 @@
  * wave loop on the user's laptop. The orchestrator pod owns the lifecycle;
  * the laptop is optional after `submit`.
  *
+ * Where server code lives: `agents/prix/factory/service/src/` (Factory Floor,
+ * deployed at agents.427yosemite.com). Existing primitives to reuse:
+ * `/dispatch`, `/tasks`, `/tasks/:id/{events,output,message}`, `/linear/issues`,
+ * plus Rush Cloud `/api/v1/cloud-runs`. Add routes inside this service; do
+ * NOT stand up a new one. See `agents/prix/factory/docs/02-cloud-runs.md`.
+ *
  * v0 (smallest cut that proves the model):
- *   1. POST /api/v1/jobs spawns one cloud-run with the planner prompt.
+ *   1. POST /factory/submit -- spawns one pod with the planner prompt.
  *   2. Planner: opens PR with ARCH.md, then creates Linear tickets per slice.
- *   3. Cron in same service: poll project's open tickets, dispatch a worker
- *      cloud-run per claimable ticket (feature or bug template by label).
- *   4. Same cron: on PR merge -> mark ticket Done; on PR check fail ->
- *      create bug ticket (this is the entire oracle, ~20 lines).
- *   5. CLI shrinks to: `agents factory submit "<brief>" --repo X`.
+ *   3. POST /factory/tick (k8s CronJob or setInterval): poll project's open
+ *      tickets, dispatch a worker pod per claimable ticket (feature or bug
+ *      template by label).
+ *   4. POST /factory/github-webhook: on PR merge -> mark ticket Done;
+ *      on PR check fail -> create bug ticket (this is the entire oracle).
+ *   5. CLI shrinks to: `agents factory submit "<brief>" --repo X --project RUSH`.
  *
  * --- CURRENT STATE (legacy, being migrated away from) ---
  *
