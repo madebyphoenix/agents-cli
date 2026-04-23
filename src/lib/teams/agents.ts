@@ -1236,6 +1236,15 @@ export type CompletionHook = (agent: AgentProcess) => Promise<void>;
       // *default* version rather than the one this teammate is running.
     }
 
+    if (agentType === 'codex') {
+      // Codex's workspace-write sandbox blocks writes outside cwd. Factory
+      // teammates need to run further `agents teams add` / ledger commands,
+      // which write to ~/.agents/. Grant that root so subprocess-issued
+      // `agents teams add` calls hit the real store instead of the tmp
+      // fallback (which the supervisor does not watch).
+      cmd.push('--add-dir', path.join(os.homedir(), '.agents'));
+    }
+
     // Add model flag for each agent type only when the teammate has a pinned
     // model. When null, the agent's CLI picks its own default.
     if (model) {
