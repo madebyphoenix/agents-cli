@@ -1,10 +1,67 @@
 /**
- * Software Factory commands.
+ * Software Factory — TARGET ARCHITECTURE (north star, do not lose this).
  *
- * `agents factory` is an ergonomic wrapper around `agents teams` for the
- * planner → implement → test → review pipeline. Step 8 adds start/status/answer.
- * Today we ship `evict` so pods can flush their state to the Ledger before
- * SIGTERM takes them down.
+ * One-sentence model:
+ *   The factory is a worker pool subscribed to a Linear project; tickets are
+ *   the queue, labels are the workflow, PRs are the output, and the planner
+ *   is just one optional producer of tickets.
+ *
+ *   PROJECT: rush-cli                        LINEAR PROJECT: RUSH-CLI
+ *   +---------------+   POST /jobs/<proj>    +-------------------------+
+ *   | factory submit|----+                   | open tickets (queue):   |
+ *   | "<brief>"     |    |                   |   T1 [feature]          |
+ *   +---------------+    v                   |   T2 [bug] urgent       |
+ *                  +-------------+   seeds   |   T3 [feature] blocked  |
+ *                  | Planner pod |---------> +------------+------------+
+ *                  | (one-shot)  |                        |
+ *                  +-------------+                        | poll
+ *                                                         v
+ *                                          +--------------+--------------+
+ *                                          | Worker pool (always-on,    |
+ *                                          | scale-to-zero on idle):    |
+ *                                          |  W1 -> claims T2 (bug)     |
+ *                                          |  W2 -> claims T1 (feature) |
+ *                                          +--------------+--------------+
+ *                                                         |
+ *                                                         v
+ *                                                  opens PRs on GitHub
+ *                                                  marks tickets Done
+ *
+ * Two workflows (selected by ticket label):
+ *   feature: read ARCH.md -> code -> tests -> PR -> close on merge
+ *   bug:     reproduce -> root-cause -> regression test -> fix -> PR -> close
+ *
+ * What we DON'T build (offloaded):
+ *   - UI / status / notifications   -> Linear
+ *   - Persistent task store         -> Linear tickets + descriptions
+ *   - Code review / merge gating    -> GitHub PRs + CI
+ *   - Architecture doc              -> ARCH.md in the repo (planner commits it)
+ *   - Auth / multi-user / billing   -> Linear + GitHub identities
+ *   - Sessions / project context    -> separate concern, owned elsewhere
+ *
+ * No ledger. No SQLite. No R2. No `~/.agents/teams/` registry. No supervisor
+ * wave loop on the user's laptop. The orchestrator pod owns the lifecycle;
+ * the laptop is optional after `submit`.
+ *
+ * v0 (smallest cut that proves the model):
+ *   1. POST /api/v1/jobs spawns one cloud-run with the planner prompt.
+ *   2. Planner: opens PR with ARCH.md, then creates Linear tickets per slice.
+ *   3. Cron in same service: poll project's open tickets, dispatch a worker
+ *      cloud-run per claimable ticket (feature or bug template by label).
+ *   4. Same cron: on PR merge -> mark ticket Done; on PR check fail ->
+ *      create bug ticket (this is the entire oracle, ~20 lines).
+ *   5. CLI shrinks to: `agents factory submit "<brief>" --repo X`.
+ *
+ * --- CURRENT STATE (legacy, being migrated away from) ---
+ *
+ * Today this file ships an ergonomic wrapper around `agents teams` for the
+ * planner -> implement -> test -> review pipeline, with a laptop-resident
+ * supervisor (lib/teams/supervisor.ts), a SQLite ledger, an oracle that
+ * auto-files bugfixes, and a filesystem-backed registry under ~/.agents/.
+ * It works for local-mode but the supervisor-on-laptop choice doesn't
+ * survive cloud dispatch (see "design wart" notes in conversation history).
+ * Keep `factory submit-local` (or equivalent) as the offline escape hatch
+ * during/after migration.
  */
 import type { Command } from 'commander';
 import chalk from 'chalk';
