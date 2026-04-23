@@ -2,30 +2,42 @@
  * Software Factory — TARGET ARCHITECTURE (north star, do not lose this).
  *
  * One-sentence model:
- *   The factory is a worker pool subscribed to a Linear project; tickets are
- *   the queue, labels are the workflow, PRs are the output, and the planner
- *   is just one optional producer of tickets.
+ *   submit a brief -> planner opens a PR with ARCH.md and files Linear
+ *   tickets -> workers poll the queue and ship PRs -> merged PR closes the
+ *   ticket, failed CI opens a bug ticket. Linear is the issue tracker
+ *   (where humans live), GitHub is the review layer, our DB is the
+ *   orchestration index, the laptop is optional after submit.
  *
- *   PROJECT: rush-cli                        LINEAR PROJECT: RUSH-CLI
- *   +---------------+   POST /jobs/<proj>    +-------------------------+
- *   | factory submit|----+                   | open tickets (queue):   |
- *   | "<brief>"     |    |                   |   T1 [feature]          |
- *   +---------------+    v                   |   T2 [bug] urgent       |
- *                  +-------------+   seeds   |   T3 [feature] blocked  |
- *                  | Planner pod |---------> +------------+------------+
- *                  | (one-shot)  |                        |
- *                  +-------------+                        | poll
- *                                                         v
- *                                          +--------------+--------------+
- *                                          | Worker pool (always-on,    |
- *                                          | scale-to-zero on idle):    |
- *                                          |  W1 -> claims T2 (bug)     |
- *                                          |  W2 -> claims T1 (feature) |
- *                                          +--------------+--------------+
- *                                                         |
- *                                                         v
- *                                                  opens PRs on GitHub
- *                                                  marks tickets Done
+ * Why Linear (not our own UI): we don't want to build a project manager.
+ * Humans already use Linear; the factory drops work where humans look.
+ *
+ * Why a DB (not Linear-as-queue): workers shouldn't poll Linear directly --
+ * rate limits, latency, Linear isn't a job queue. Our DB mirrors the Linear
+ * tickets we care about plus orchestration state (claimed_by, heartbeat,
+ * worker_pod_id). Orchestrator syncs Linear<->DB; workers read/write the DB.
+ *
+ *   factory submit "<brief>" --> Planner pod (one-shot)
+ *                                       |
+ *                                       +--> commits ARCH.md PR (GitHub)
+ *                                       +--> files tickets (Linear)
+ *                                                |
+ *                                                v
+ *                                       Linear project (humans live here)
+ *                                                |
+ *                                                | Linear<->DB sync (orchestrator)
+ *                                                v
+ *                                       Our DB (orchestration index +
+ *                                       claim state, heartbeat, dispatch)
+ *                                                |
+ *                                                | dispatch by label
+ *                                                v
+ *                                       Worker pods --> open PRs (GitHub)
+ *                                                |
+ *                                       +--------+--------+
+ *                                       v                 v
+ *                                  PR merged          CI failed
+ *                                  close ticket       file bug ticket
+ *                                  (DB + Linear)      (DB + Linear)
  *
  * Two workflows (selected by ticket label):
  *   feature: read ARCH.md -> code -> tests -> PR -> close on merge
@@ -39,9 +51,12 @@
  *   - Auth / multi-user / billing   -> Linear + GitHub identities
  *   - Sessions / project context    -> separate concern, owned elsewhere
  *
- * No ledger. No SQLite. No R2. No `~/.agents/teams/` registry. No supervisor
- * wave loop on the user's laptop. The orchestrator pod owns the lifecycle;
- * the laptop is optional after `submit`.
+ * No ledger. No oracle as a separate module. No SQLite. No `~/.agents/teams/`
+ * registry. No supervisor wave loop on the user's laptop. The orchestrator
+ * service owns the lifecycle; the laptop is optional after `submit`.
+ * "Failed CI -> bug ticket" is a webhook handler (~20 lines), not a
+ * subsystem. "Append-only project memory" is what ARCH.md + ticket history
+ * + PR descriptions already are -- git history IS the memory.
  *
  * Where server code lives: `agents/prix/factory/service/src/` (Factory Floor,
  * deployed at agents.427yosemite.com). Existing primitives to reuse:
