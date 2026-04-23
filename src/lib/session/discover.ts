@@ -12,7 +12,10 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import * as readline from 'readline';
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 import type { SessionAgentId, SessionMeta } from './types.js';
 import type { AgentId } from '../types.js';
 import { AGENTS, getCliVersion } from '../agents.js';
@@ -831,15 +834,16 @@ const OPENCODE_DB = path.join(HOME, '.local', 'share', 'opencode', 'opencode.db'
 let cachedOpenCodeAccount: string | undefined;
 
 /** Query the active OpenCode account email from its SQLite database. */
-function getOpenCodeAccount(): string | undefined {
+async function getOpenCodeAccount(): Promise<string | undefined> {
   if (cachedOpenCodeAccount !== undefined) return cachedOpenCodeAccount || undefined;
 
   try {
     if (fs.existsSync(OPENCODE_DB)) {
-      const out = execSync(
-        `sqlite3 "${OPENCODE_DB}" "SELECT email FROM control_account WHERE active=1 LIMIT 1;"`,
-        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
-      ).trim();
+      const { stdout } = await execFileAsync('sqlite3', [
+        OPENCODE_DB,
+        'SELECT email FROM control_account WHERE active=1 LIMIT 1;',
+      ], { encoding: 'utf-8' });
+      const out = stdout.trim();
       if (out) {
         cachedOpenCodeAccount = out;
         return out;
@@ -869,7 +873,7 @@ async function scanOpenCodeIncremental(): Promise<void> {
     return;
   }
 
-  const account = getOpenCodeAccount();
+  const account = await getOpenCodeAccount();
   const currentVersion = await getCurrentAgentVersion('opencode');
 
   try {
@@ -904,10 +908,11 @@ async function scanOpenCodeIncremental(): Promise<void> {
       LIMIT 1000;
     `.replace(/\n/g, ' ');
 
-    const out = execSync(
-      `sqlite3 -separator '|||' "${OPENCODE_DB}"`,
-      { encoding: 'utf-8', input: query, stdio: ['pipe', 'pipe', 'ignore'], timeout: 5000 },
-    );
+    const { stdout: out } = await execFileAsync('sqlite3', ['-separator', '|||', OPENCODE_DB, query], {
+      encoding: 'utf-8',
+      timeout: 5000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
 
     const entries: ScanEntry[] = [];
     for (const line of out.split('\n')) {
@@ -958,7 +963,7 @@ async function scanOpenCodeIncremental(): Promise<void> {
 async function scanOpenClawIncremental(): Promise<void> {
   // Check if openclaw is installed — silently skip if not.
   try {
-    execSync('which openclaw', { stdio: 'ignore' });
+    await execFileAsync('which', ['openclaw']);
   } catch {
     return;
   }
@@ -978,9 +983,8 @@ async function scanOpenClawIncremental(): Promise<void> {
   const entries: ScanEntry[] = [];
 
   try {
-    const output = execSync('openclaw channels status', {
+    const { stdout: output } = await execFileAsync('openclaw', ['channels', 'status'], {
       encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
     });
 
     for (const line of output.split('\n')) {
@@ -1009,9 +1013,8 @@ async function scanOpenClawIncremental(): Promise<void> {
   }
 
   try {
-    const output = execSync('openclaw cron list', {
+    const { stdout: output } = await execFileAsync('openclaw', ['cron', 'list'], {
       encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
     });
 
     const lines = output.split('\n');

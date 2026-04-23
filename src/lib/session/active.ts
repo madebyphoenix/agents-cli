@@ -19,9 +19,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { listActiveTasks } from '../cloud/store.js';
 import { AgentManager } from '../teams/agents.js';
+
+const execFileAsync = promisify(execFile);
 
 export type ActiveContext = 'terminal' | 'teams' | 'cloud' | 'headless';
 
@@ -188,14 +191,14 @@ export async function listTeamsActive(): Promise<ActiveSession[]> {
 }
 
 /** Live editor-terminal agents across every IDE window. */
-export function listTerminalsActive(): ActiveSession[] {
+export async function listTerminalsActive(): Promise<ActiveSession[]> {
   const entries = readLiveTerminals();
   if (entries.length === 0) return [];
 
   // Walk the shell PIDs through the process table once so we can name the host
   // (code / cursor / codium) per entry rather than a generic 'terminal'.
   const procByPid = new Map<number, ProcRow>();
-  for (const r of readProcessTable()) procByPid.set(r.pid, r);
+  for (const r of await readProcessTable()) procByPid.set(r.pid, r);
 
   return entries.map((t): ActiveSession => {
     const sessionFile =
@@ -274,10 +277,10 @@ const HOST_MATCHERS: Array<{ host: string; tokens: string[] }> = [
  * `comm` may be an absolute path for shim-launched agents, so basename before
  * matching against AGENT_CLI_NAMES.
  */
-function readProcessTable(): ProcRow[] {
+async function readProcessTable(): Promise<ProcRow[]> {
   let out: string;
   try {
-    out = execSync('ps -A -o pid=,ppid=,comm=', { encoding: 'utf8' });
+    ({ stdout: out } = await execFileAsync('ps', ['-A', '-o', 'pid=,ppid=,comm='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
   } catch {
     return [];
   }
@@ -316,10 +319,13 @@ function hasAttributedAncestor(pid: number, ppidMap: Map<number, number>, attrib
  * ANDs the filters; without it macOS treats `-p` and `-d` as a union and
  * returns the cwd of every process on the system.
  */
-function getCwdForPid(pid: number): string | undefined {
+async function getCwdForPid(pid: number): Promise<string | undefined> {
   let out: string;
   try {
-    out = execSync(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null`, { encoding: 'utf8' });
+    const res = await execFileAsync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+      encoding: 'utf8',
+    });
+    out = res.stdout;
   } catch {
     return undefined;
   }
@@ -366,8 +372,8 @@ const UI_HOSTS = new Set<string>([
  * helper, terminal-app, or multiplexer) means `terminal`; nothing of the
  * sort means `headless` (daemon, launchd-spawned, orphan).
  */
-export function listUnattributedActive(attributed: Set<number>): ActiveSession[] {
-  const table = readProcessTable();
+export async function listUnattributedActive(attributed: Set<number>): Promise<ActiveSession[]> {
+  const table = await readProcessTable();
   const procByPid = new Map<number, ProcRow>();
   const ppidMap = new Map<number, number>();
   for (const r of table) {
@@ -375,13 +381,22 @@ export function listUnattributedActive(attributed: Set<number>): ActiveSession[]
     ppidMap.set(r.pid, r.ppid);
   }
 
-  const out: ActiveSession[] = [];
+  // Candidate PIDs first — we only shell out to lsof for these, not the whole table.
+  const candidates: { pid: number; kind: string }[] = [];
   for (const { pid, kind } of table) {
     if (!kind) continue;
     if (attributed.has(pid)) continue;
     if (hasAttributedAncestor(pid, ppidMap, attributed)) continue;
+    candidates.push({ pid, kind });
+  }
 
-    const cwd = getCwdForPid(pid);
+  // Run lsof probes in parallel so N spawns take one round-trip, not N.
+  const cwds = await Promise.all(candidates.map(c => getCwdForPid(c.pid)));
+
+  const out: ActiveSession[] = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const { pid, kind } = candidates[i];
+    const cwd = cwds[i];
     const sessionFile = kind === 'claude' && cwd ? findClaudeSessionFile(cwd) : undefined;
     const host = detectHost(pid, procByPid);
     const context: ActiveContext = host && UI_HOSTS.has(host) ? 'terminal' : 'headless';
@@ -406,7 +421,7 @@ export function listUnattributedActive(attributed: Set<number>): ActiveSession[]
 export async function getActiveSessions(opts: ActiveQueryOptions = {}): Promise<ActiveSession[]> {
   const [teams, terminals, cloud] = await Promise.all([
     listTeamsActive().catch(() => [] as ActiveSession[]),
-    Promise.resolve(listTerminalsActive()),
+    listTerminalsActive().catch(() => [] as ActiveSession[]),
     Promise.resolve(listCloudActive()),
   ]);
 
@@ -414,7 +429,7 @@ export async function getActiveSessions(opts: ActiveQueryOptions = {}): Promise<
   for (const s of teams) if (s.pid) knownPids.add(s.pid);
   for (const s of terminals) if (s.pid) knownPids.add(s.pid);
 
-  const unattributed = opts.skipHeadless ? [] : listUnattributedActive(knownPids);
+  const unattributed = opts.skipHeadless ? [] : await listUnattributedActive(knownPids);
 
   return [...teams, ...terminals, ...cloud, ...unattributed];
 }

@@ -133,8 +133,12 @@ async function showInstalledVersions(filterAgentId?: AgentId): Promise<void> {
   // home, so `agents view` would never reflect the right account. Regenerate on
   // sight — it's safe, idempotent, and fixes the symptom exactly where the user
   // notices it.
+  // Yield between agents so the heal loop doesn't block the event loop as one
+  // long sync burst — per-version readFileSync+writeFileSync across 5 agents
+  // can otherwise stall spinners and stdout flushes.
   const healedAliases: string[] = [];
   for (const agentId of agentsToShow) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
     for (const version of listInstalledVersions(agentId)) {
       const status = ensureVersionedAliasCurrent(agentId, version);
       if (status === 'updated' || status === 'created') {
