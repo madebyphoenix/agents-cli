@@ -1,0 +1,155 @@
+/**
+ * Rush Cloud session source.
+ *
+ * Fetches cloud-captured sessions from halo/proxy (api.prix.dev) and caches
+ * them locally so the existing filesystem-based parse pipeline works unchanged.
+ *
+ * Endpoints consumed (implemented in halo/proxy/src/cloud-runs.ts):
+ *   GET /api/v1/cloud-runs                  → list executions
+ *   GET /api/v1/cloud-runs/:id              → get one (used for meta)
+ *   GET /api/v1/cloud-runs/:id/session.jsonl → raw captured jsonl
+ */
+
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import * as yaml from 'yaml';
+import type { SessionAgentId, SessionMeta } from './types.js';
+
+const PROXY_BASE = process.env.RUSH_PROXY_BASE ?? 'https://api.prix.dev';
+const USER_YAML = path.join(os.homedir(), '.rush', 'user.yaml');
+const CLOUD_CACHE_DIR = path.join(os.homedir(), '.agents', 'cache', 'cloud-runs');
+
+interface UserYaml {
+  session?: {
+    email?: string;
+    access_token?: string;
+  };
+}
+
+interface CloudRunRow {
+  execution_id: string;
+  agent: string;
+  status: string;
+  prompt?: string;
+  repo_owner?: string;
+  repo_name?: string;
+  branch?: string;
+  pr_url?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+function readToken(): string {
+  if (!fs.existsSync(USER_YAML)) {
+    throw new Error('Not logged in to Rush. Run `rush login` first.');
+  }
+  const raw = fs.readFileSync(USER_YAML, 'utf-8');
+  const data = yaml.parse(raw) as UserYaml;
+  const token = data?.session?.access_token;
+  if (!token) {
+    throw new Error('No session token in ~/.rush/user.yaml. Run `rush login` first.');
+  }
+  return token;
+}
+
+async function api(method: string, endpoint: string, token: string): Promise<Response> {
+  return fetch(`${PROXY_BASE}${endpoint}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/** Coerce the `agent` field on a cloud-run row to a SessionAgentId. */
+function agentToFormat(agent: string): SessionAgentId | null {
+  if (agent === 'claude') return 'claude';
+  if (agent === 'codex') return 'codex';
+  if (agent === 'rush') return 'rush';
+  return null;
+}
+
+/**
+ * List cloud executions the user has captured sessions for. Includes
+ * completed + needs_review + failed; an empty session_path means capture
+ * never ran, so those are silently dropped.
+ */
+export async function discoverCloudSessions(options?: {
+  limit?: number;
+}): Promise<SessionMeta[]> {
+  const token = readToken();
+  const limit = options?.limit ?? 50;
+  const res = await api('GET', `/api/v1/cloud-runs?limit=${limit}`, token);
+  if (!res.ok) {
+    throw new Error(`cloud-runs list failed (${res.status})`);
+  }
+  const data = (await res.json()) as { executions: CloudRunRow[] };
+  const rows = data.executions ?? [];
+
+  const out: SessionMeta[] = [];
+  for (const row of rows) {
+    const agent = agentToFormat(row.agent);
+    if (!agent) continue;
+    const id = row.execution_id;
+    const timestamp = row.updated_at || row.created_at || new Date().toISOString();
+    const project = row.repo_owner && row.repo_name ? `${row.repo_owner}/${row.repo_name}` : undefined;
+
+    // filePath doubles as the sink path for the cached jsonl. parseSession
+    // dispatches on detectAgent which recognizes the `session.<format>.jsonl`
+    // suffix — so the local cache file name must preserve it.
+    const filePath = path.join(CLOUD_CACHE_DIR, id, `session.${agent}.jsonl`);
+
+    out.push({
+      id,
+      shortId: id.slice(0, 8),
+      agent,
+      timestamp,
+      project,
+      filePath,
+      topic: row.prompt?.split('\n')[0]?.slice(0, 120),
+      label: `[cloud/${row.status}]${row.branch ? ` ${row.branch}` : ''}`,
+    });
+  }
+
+  out.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  return out;
+}
+
+/**
+ * Fetch the jsonl for one cloud execution and stash it in the local cache.
+ * Returns the local file path. Re-fetches on every call (cheap — executions
+ * are immutable once complete). Callers may pass an already-known filePath.
+ */
+export async function ensureCloudSessionCached(
+  executionId: string,
+  destPath?: string,
+): Promise<string> {
+  const token = readToken();
+  const res = await api('GET', `/api/v1/cloud-runs/${encodeURIComponent(executionId)}/session.jsonl`, token);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`session.jsonl fetch ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const format = (res.headers.get('X-Session-Format') || '').toLowerCase();
+  if (!['claude', 'codex', 'rush'].includes(format)) {
+    throw new Error(`Unknown X-Session-Format on cloud response: "${format}"`);
+  }
+
+  const finalPath = destPath ?? path.join(CLOUD_CACHE_DIR, executionId, `session.${format}.jsonl`);
+  fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+  const body = Buffer.from(await res.arrayBuffer());
+  fs.writeFileSync(finalPath, body);
+  return finalPath;
+}
+
+/** True if filePath points into the cloud session cache dir. */
+export function isCloudSessionPath(filePath: string): boolean {
+  return filePath.startsWith(CLOUD_CACHE_DIR);
+}
+
+/** Extract execution_id from a cloud cache path. */
+export function executionIdFromCloudPath(filePath: string): string | null {
+  if (!isCloudSessionPath(filePath)) return null;
+  const rel = path.relative(CLOUD_CACHE_DIR, filePath);
+  const parts = rel.split(path.sep);
+  return parts[0] || null;
+}

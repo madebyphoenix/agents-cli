@@ -25,6 +25,7 @@ export function parseSession(filePath: string, agent?: SessionAgentId): SessionE
     case 'codex': return parseCodex(filePath);
     case 'gemini': return parseGemini(filePath);
     case 'opencode': return parseOpenCode(filePath);
+    case 'rush': return parseRush(filePath);
     case 'openclaw': return []; // OpenClaw sessions don't have parseable files yet
   }
 }
@@ -34,6 +35,10 @@ export function detectAgent(filePath: string): SessionAgentId | null {
   if (filePath.includes('/.claude/') || filePath.includes('\\.claude\\')) return 'claude';
   if (filePath.includes('/.codex/') || filePath.includes('\\.codex\\')) return 'codex';
   if (filePath.includes('/.gemini/') || filePath.includes('\\.gemini\\')) return 'gemini';
+  if (filePath.includes('/.rush/') || filePath.includes('\\.rush\\')) return 'rush';
+  // Cloud convention: cloud-sessions/<id>/session.<format>.jsonl
+  const cloudMatch = filePath.match(/session\.(claude|codex|rush)\.jsonl(?:$|[?#])/);
+  if (cloudMatch) return cloudMatch[1] as SessionAgentId;
   if (filePath.includes('opencode.db')) return 'opencode';
 
   // Try file extension + content heuristic
@@ -684,6 +689,109 @@ export function parseOpenCode(filePath: string): SessionEvent[] {
     }
   } catch {
     /* DB not accessible or query failed */
+  }
+
+  return events;
+}
+
+// ---------------------------------------------------------------------------
+// Rush parser
+//
+// Rush messages.jsonl format is flat: one JSON object per line with
+//   { id, session_id, role, type, content, created_at, tool_call_id?, name? }
+// type ∈ {message, tool_call, tool_result}
+// content varies by type:
+//   message     -> { text: string }
+//   tool_call   -> { input: {...} }
+//   tool_result -> { input, output } (output.success === false marks an error)
+// ---------------------------------------------------------------------------
+
+/** Parse a Rush JSONL session file into normalized events. */
+export function parseRush(filePath: string): SessionEvent[] {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lines = content.split('\n').filter(l => l.trim());
+  const events: SessionEvent[] = [];
+
+  // Map tool_call id -> {tool, args} for correlating with tool_result.
+  const toolCallMap = new Map<string, { tool: string; args: Record<string, any> }>();
+
+  for (const line of lines) {
+    let raw: any;
+    try {
+      raw = JSON.parse(line);
+    } catch {
+      /* malformed JSONL line, skip */
+      continue;
+    }
+
+    const type = raw.type;
+    const timestamp = raw.created_at || new Date().toISOString();
+    const content = raw.content || {};
+
+    if (type === 'message') {
+      const text = typeof content.text === 'string' ? content.text.trim() : '';
+      if (!text) continue;
+
+      const role: 'user' | 'assistant' = raw.role === 'user' ? 'user' : 'assistant';
+      // Rush wraps the first user turn in <user_input>...</user_input> — strip.
+      const cleaned = text
+        .replace(/^<user_input>/, '')
+        .replace(/<\/user_input>$/, '')
+        .trim();
+
+      // Skip sentinel execution-start marker that isn't human-readable.
+      if (raw.role === 'system' && cleaned === 'execution_start') continue;
+
+      events.push({
+        type: 'message',
+        agent: 'rush',
+        timestamp,
+        role,
+        content: cleaned,
+      });
+    } else if (type === 'tool_call') {
+      const toolName = raw.name || 'unknown';
+      const args = content.input || {};
+      const callId = raw.tool_call_id;
+      if (callId) toolCallMap.set(callId, { tool: toolName, args });
+
+      events.push({
+        type: 'tool_use',
+        agent: 'rush',
+        timestamp,
+        tool: toolName,
+        args,
+        path: args.file_path || args.path || undefined,
+        command: (toolName === 'Bash' || toolName === 'shell') ? args.command : undefined,
+      });
+    } else if (type === 'tool_result') {
+      const callId = raw.tool_call_id;
+      const info = callId ? toolCallMap.get(callId) : undefined;
+      const output = content.output;
+
+      let outputStr = '';
+      if (typeof output === 'string') {
+        outputStr = output;
+      } else if (output !== undefined) {
+        try {
+          outputStr = JSON.stringify(output);
+        } catch {
+          outputStr = String(output);
+        }
+      }
+
+      const success = output?.success !== false;
+      events.push({
+        type: success ? 'tool_result' : 'error',
+        agent: 'rush',
+        timestamp,
+        tool: info?.tool ?? raw.name,
+        success,
+        output: outputStr.length > 500 ? outputStr.slice(0, 497) + '...' : outputStr,
+      });
+
+      if (callId) toolCallMap.delete(callId);
+    }
   }
 
   return events;

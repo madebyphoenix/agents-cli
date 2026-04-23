@@ -52,6 +52,7 @@ interface SessionsOptions extends SessionFilterOptions {
   artifacts?: boolean;
   artifact?: string;
   active?: boolean;
+  cloud?: boolean;
 }
 
 interface ClaudeHistoryEntry {
@@ -284,6 +285,11 @@ async function renderActiveSessions(asJson: boolean): Promise<void> {
 async function sessionsAction(query: string | undefined, options: SessionsOptions): Promise<void> {
   if (options.active) {
     await renderActiveSessions(options.json === true);
+    return;
+  }
+
+  if (options.cloud) {
+    await runCloudSessions(query, options);
     return;
   }
 
@@ -739,8 +745,88 @@ export function buildResumeCommand(session: SessionMeta, activeVersion?: string)
       return ['opencode', '--session', session.id];
     case 'gemini':
     case 'openclaw':
+    case 'rush':
+      // Rush cloud sessions are captured artifacts, not resumable locally.
       return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cloud session source (--cloud)
+// ---------------------------------------------------------------------------
+
+/**
+ * Handle `agents sessions --cloud [id] [filters]`.
+ * - Without id: list captured cloud-runs, optionally as JSON.
+ * - With id: fetch the jsonl, parse with the recorded format, render via
+ *   the same pipeline as local sessions (summary / markdown / json).
+ */
+async function runCloudSessions(query: string | undefined, options: SessionsOptions): Promise<void> {
+  const { discoverCloudSessions, ensureCloudSessionCached } = await import('../lib/session/cloud.js');
+
+  let filterOpts: FilterOptions;
+  try {
+    filterOpts = buildFilterOptions(options);
+  } catch (err: any) {
+    console.error(chalk.red(err.message));
+    process.exit(1);
+  }
+
+  const mode = resolveViewMode(options, filterOpts);
+  const spinner = options.json ? null : ora('Loading cloud sessions...').start();
+
+  let sessions: SessionMeta[];
+  try {
+    sessions = await discoverCloudSessions({ limit: parseInt(options.limit || '50', 10) });
+  } catch (err: any) {
+    spinner?.stop();
+    console.error(chalk.red(`Failed to list cloud sessions: ${err?.message || err}`));
+    process.exit(1);
+  }
+  spinner?.stop();
+
+  if (!query) {
+    if (options.json) {
+      process.stdout.write(JSON.stringify(sessions, null, 2) + '\n');
+      return;
+    }
+    if (sessions.length === 0) {
+      console.log(chalk.gray('No cloud sessions captured yet.'));
+      return;
+    }
+    printSessionTable(sessions);
+    return;
+  }
+
+  const matches = sessions.filter(
+    (s) => s.id === query || s.shortId === query || s.id.startsWith(query),
+  );
+  if (matches.length === 0) {
+    console.error(chalk.red(`No cloud session matching: ${query}`));
+    process.exit(1);
+  }
+  if (matches.length > 1) {
+    console.error(chalk.red(`Multiple cloud sessions match "${query}":`));
+    for (const m of matches.slice(0, 10)) {
+      console.error(chalk.cyan(`  ${m.shortId}  ${m.id}`));
+    }
+    process.exit(1);
+  }
+
+  const meta = matches[0];
+  const cachedSpinner = options.json ? null : ora('Fetching session...').start();
+  let cachedPath: string;
+  try {
+    cachedPath = await ensureCloudSessionCached(meta.id, meta.filePath);
+  } catch (err: any) {
+    cachedSpinner?.stop();
+    console.error(chalk.red(`Failed to fetch session: ${err?.message || err}`));
+    process.exit(1);
+  }
+  cachedSpinner?.stop();
+
+  // Ensure the SessionMeta points at the local cache path for renderSession.
+  await renderSession({ ...meta, filePath: cachedPath }, mode, filterOpts);
 }
 
 
@@ -1042,6 +1128,7 @@ export function registerSessionsCommands(program: Command): void {
     .option('--artifacts', 'List all files written or edited during a session')
     .option('--artifact <name>', 'Read a specific artifact by filename or path (outputs to stdout)')
     .option('--active', 'Show only sessions running right now across terminals, teams, cloud, and headless agents')
+    .option('--cloud', 'Source sessions from Rush Cloud (captured runs) instead of local disk')
     .addHelpText('after', `
 Examples:
   # Interactive picker: browse and search recent sessions (TTY only)
@@ -1092,6 +1179,12 @@ Examples:
   # Show only live sessions across terminals, teams, cloud, and headless agents
   agents sessions --active
   agents sessions --active --json
+
+  # List captured cloud-run sessions (claude/codex/rush) via Rush Cloud
+  agents sessions --cloud
+  agents sessions --cloud <execution_id>
+  agents sessions --cloud <execution_id> --markdown
+  agents sessions --cloud <execution_id> --include user,assistant --last 3
 
 Notes:
   - --include and --exclude are mutually exclusive.
