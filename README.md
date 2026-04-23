@@ -5,23 +5,23 @@
 <h1 align="center">agents</h1>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@phnx-labs/agents-cli"><img src="https://img.shields.io/npm/v/@phnx-labs/agents-cli.svg?style=flat-square" alt="npm version" /></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/npm/l/@phnx-labs/agents-cli.svg?style=flat-square" alt="license" /></a>
-  <a href="https://www.npmjs.com/package/@phnx-labs/agents-cli"><img src="https://img.shields.io/npm/dm/@phnx-labs/agents-cli.svg?style=flat-square" alt="downloads" /></a>
-  <a href="https://agents-cli.sh"><img src="https://img.shields.io/badge/homepage-agents--cli.sh-blue?style=flat-square" alt="homepage" /></a>
+  <a href="https://www.npmjs.com/package/@swarmify/agents-cli"><img src="https://img.shields.io/npm/v/@swarmify/agents-cli.svg?style=flat-square" alt="npm version" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/npm/l/@swarmify/agents-cli.svg?style=flat-square" alt="license" /></a>
+  <a href="https://www.npmjs.com/package/@swarmify/agents-cli"><img src="https://img.shields.io/npm/dm/@swarmify/agents-cli.svg?style=flat-square" alt="downloads" /></a>
+  <a href="https://github.com/swarmify/agents-cli"><img src="https://img.shields.io/badge/github-swarmify%2Fagents--cli-blue?style=flat-square" alt="github" /></a>
 </p>
 
 **One CLI for all your AI coding agents.** Pin versions per project. Share config across Claude Code, Codex, Gemini CLI, and Cursor. Stop setting up the same MCP server three times.
 
-<p align="center">
-  <video src="https://github.com/phnx-labs/agents-cli/raw/main/assets/demo.mp4" autoplay loop muted playsinline width="800"></video>
-</p>
+https://github.com/user-attachments/assets/cf0b2248-6672-4458-8027-b88525572f3e
 
 ```bash
-curl -fsSL agents-cli.sh | sh
+npm install -g @swarmify/agents-cli
 # or
-npm install -g @phnx-labs/agents-cli
+bun install -g @swarmify/agents-cli
 ```
+
+Source: [github.com/swarmify/agents-cli](https://github.com/swarmify/agents-cli)
 
 Also available as `ag` -- all commands work with both `agents` and `ag`.
 
@@ -312,7 +312,7 @@ Agents are defined in [src/lib/agents.ts](src/lib/agents.ts) -- each is a config
 ## Contributing
 
 ```bash
-git clone https://github.com/phnx-labs/agents-cli
+git clone https://github.com/swarmify/agents-cli
 cd agents-cli
 bun install && bun run build && bun test
 ```
