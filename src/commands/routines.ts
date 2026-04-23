@@ -383,11 +383,13 @@ Examples:
 
       const targetPath = jobPath || path.join(getRoutinesDir(), `${name}.yml`);
       const editor = process.env.EDITOR || process.env.VISUAL || 'vi';
+      const editorParts = editor.split(/\s+/).filter(Boolean);
+      const editorBin = editorParts[0];
+      const editorArgs = [...editorParts.slice(1), targetPath];
 
       const { spawn: spawnSync } = await import('child_process');
-      const child = spawnSync(editor, [targetPath], {
+      const child = spawnSync(editorBin, editorArgs, {
         stdio: 'inherit',
-        shell: true,
       });
 
       child.on('close', (code) => {

@@ -48,11 +48,13 @@ export function discoverArtifacts(meta: SessionMeta): SessionArtifact[] {
     let exists = false;
     let sizeBytes: number | undefined;
     try {
-      const stat = fs.statSync(p);
-      exists = true;
-      sizeBytes = stat.size;
+      const stat = fs.lstatSync(p);
+      if (stat.isFile()) {
+        exists = true;
+        sizeBytes = stat.size;
+      }
     } catch {
-      // file gone or inaccessible
+      // file gone, inaccessible, or symlink/special file
     }
 
     artifacts.push({
@@ -68,8 +70,12 @@ export function discoverArtifacts(meta: SessionMeta): SessionArtifact[] {
   return artifacts;
 }
 
-/** Read the current contents of an artifact file from disk. */
+/** Read the current contents of an artifact file from disk. Rejects symlinks. */
 export function readArtifact(artifact: SessionArtifact): string {
+  const stat = fs.lstatSync(artifact.path);
+  if (!stat.isFile()) {
+    throw new Error(`Refusing to read non-regular file: ${artifact.path}`);
+  }
   return fs.readFileSync(artifact.path, 'utf-8');
 }
 

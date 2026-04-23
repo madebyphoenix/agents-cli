@@ -106,7 +106,7 @@ export function setKeychainToken(item: string, value: string): void {
     { stdio: ['ignore', 'pipe', 'pipe'] }
   );
   if (result.status !== 0) {
-    throw new Error(`Failed to write keychain item '${item}': ${result.stderr.toString()}`);
+    throw new Error(`Failed to write keychain item '${item}' (exit ${result.status}).`);
   }
 }
 

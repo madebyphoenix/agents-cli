@@ -47,6 +47,27 @@ interface Session {
 
 // --- Path helpers ---
 
+/** Env vars forwarded into PTY sessions. Excludes API tokens, cloud creds, etc. */
+const PTY_ENV_ALLOWLIST = [
+  'HOME', 'PATH', 'SHELL', 'USER', 'LOGNAME',
+  'TERM', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'COLORTERM',
+  'LANG', 'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES', 'TZ',
+  'TMPDIR',
+  'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+  'NODE_PATH', 'NVM_DIR', 'BUN_INSTALL',
+  'EDITOR', 'VISUAL', 'PAGER', 'LESS',
+  'NO_COLOR', 'FORCE_COLOR',
+];
+
+function buildPtyEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of PTY_ENV_ALLOWLIST) {
+    const v = process.env[key];
+    if (v !== undefined) env[key] = v;
+  }
+  return env;
+}
+
 /** Get the unix socket path for the PTY server. */
 export function getSocketPath(): string {
   return path.join(getAgentsDir(), SOCKET_NAME);
@@ -209,7 +230,7 @@ export async function runPtyServer(): Promise<void> {
             cols,
             rows,
             cwd,
-            env: { ...process.env } as Record<string, string>,
+            env: buildPtyEnv(),
           });
         } catch (err: any) {
           return { ok: false, error: `Failed to spawn PTY: ${err.message}` };
@@ -455,6 +476,8 @@ export async function runPtyServer(): Promise<void> {
   await new Promise<void>((resolve) => {
     server.listen(socketPath, () => resolve());
   });
+
+  try { fs.chmodSync(socketPath, 0o600); } catch {}
 
   // Write PID
   fs.writeFileSync(getPtyPidPath(), String(process.pid), 'utf-8');

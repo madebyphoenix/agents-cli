@@ -186,45 +186,47 @@ export function getMcpConfigPath(): string {
 
 /** Create the ~/.agents/ directory tree if any subdirectories are missing. */
 export function ensureAgentsDir(): void {
+  const opts = { recursive: true, mode: 0o700 } as const;
   if (!fs.existsSync(AGENTS_DIR)) {
-    fs.mkdirSync(AGENTS_DIR, { recursive: true });
+    fs.mkdirSync(AGENTS_DIR, opts);
   }
   if (!fs.existsSync(PACKAGES_DIR)) {
-    fs.mkdirSync(PACKAGES_DIR, { recursive: true });
+    fs.mkdirSync(PACKAGES_DIR, opts);
   }
   if (!fs.existsSync(ROUTINES_DIR)) {
-    fs.mkdirSync(ROUTINES_DIR, { recursive: true });
+    fs.mkdirSync(ROUTINES_DIR, opts);
   }
   if (!fs.existsSync(RUNS_DIR)) {
-    fs.mkdirSync(RUNS_DIR, { recursive: true });
+    fs.mkdirSync(RUNS_DIR, opts);
   }
   if (!fs.existsSync(VERSIONS_DIR)) {
-    fs.mkdirSync(VERSIONS_DIR, { recursive: true });
+    fs.mkdirSync(VERSIONS_DIR, opts);
   }
   if (!fs.existsSync(SHIMS_DIR)) {
-    fs.mkdirSync(SHIMS_DIR, { recursive: true });
+    fs.mkdirSync(SHIMS_DIR, opts);
   }
   if (!fs.existsSync(COMMANDS_DIR)) {
-    fs.mkdirSync(COMMANDS_DIR, { recursive: true });
+    fs.mkdirSync(COMMANDS_DIR, opts);
   }
   if (!fs.existsSync(HOOKS_DIR)) {
-    fs.mkdirSync(HOOKS_DIR, { recursive: true });
+    fs.mkdirSync(HOOKS_DIR, opts);
   }
   if (!fs.existsSync(SKILLS_DIR)) {
-    fs.mkdirSync(SKILLS_DIR, { recursive: true });
+    fs.mkdirSync(SKILLS_DIR, opts);
   }
   if (!fs.existsSync(MEMORY_DIR)) {
-    fs.mkdirSync(MEMORY_DIR, { recursive: true });
+    fs.mkdirSync(MEMORY_DIR, opts);
   }
   if (!fs.existsSync(PERMISSIONS_DIR)) {
-    fs.mkdirSync(PERMISSIONS_DIR, { recursive: true });
+    fs.mkdirSync(PERMISSIONS_DIR, opts);
   }
   if (!fs.existsSync(SUBAGENTS_DIR)) {
-    fs.mkdirSync(SUBAGENTS_DIR, { recursive: true });
+    fs.mkdirSync(SUBAGENTS_DIR, opts);
   }
   if (!fs.existsSync(DRIVE_DIR)) {
-    fs.mkdirSync(DRIVE_DIR, { recursive: true });
+    fs.mkdirSync(DRIVE_DIR, opts);
   }
+  try { fs.chmodSync(AGENTS_DIR, 0o700); } catch {}
 }
 
 
