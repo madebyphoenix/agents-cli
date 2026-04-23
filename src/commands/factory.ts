@@ -16,6 +16,21 @@
  * tickets we care about plus orchestration state (claimed_by, heartbeat,
  * worker_pod_id). Orchestrator syncs Linear<->DB; workers read/write the DB.
  *
+ * Three storage layers (each for a different concern):
+ *   - Linear -- ticket details, comments, labels, status, history, human UI
+ *   - DB     -- orchestration index + chain relations
+ *               (factory_tickets row holds claimed_by, heartbeat,
+ *                session_r2_key, pr_url, parent_ticket_id, child_ticket_ids)
+ *   - R2     -- bulk artifacts (full worker session jsonl, final diffs,
+ *               planner ARCH.md drafts, worker notes). DB rows point to R2
+ *               keys; the DB never holds large blobs.
+ *
+ * The chain (planner -> tickets -> worker sessions -> PRs -> child bug
+ * tickets) is graph-shaped and lives in the DB as relations. R2 holds the
+ * heavy artifacts each row points to. Sessions infra is owned by another
+ * dev; the factory writes to wherever that infra puts session logs and
+ * stores the pointer.
+ *
  *   factory submit "<brief>" --> Planner pod (one-shot)
  *                                       |
  *                                       +--> commits ARCH.md PR (GitHub)
