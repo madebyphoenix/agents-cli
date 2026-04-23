@@ -44,6 +44,85 @@ function supervisorPidPath(team: string): string {
   return path.join(homedir(), '.agents', 'factory', `${safe}.supervisor.pid`);
 }
 
+interface FactoryTeamEntry {
+  team: string;
+  lastActivity: Date;
+  pid?: number;
+  alive: boolean;
+}
+
+/**
+ * Discover factory teams by scanning ~/.agents/factory/ for supervisor logs.
+ * Pid presence + `kill -0` tells us if the supervisor is still running. Sorted
+ * most-recent first so the picker / list show the team you most likely want.
+ */
+function listFactoryTeams(): FactoryTeamEntry[] {
+  const dir = path.join(homedir(), '.agents', 'factory');
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const teams: FactoryTeamEntry[] = [];
+  for (const name of entries) {
+    if (!name.endsWith('.supervisor.log')) continue;
+    const team = name.slice(0, -'.supervisor.log'.length);
+    const logPath = path.join(dir, name);
+    let lastActivity: Date;
+    try {
+      lastActivity = fs.statSync(logPath).mtime;
+    } catch {
+      continue;
+    }
+    let pid: number | undefined;
+    let alive = false;
+    try {
+      const raw = fs.readFileSync(supervisorPidPath(team), 'utf-8').trim();
+      const n = Number(raw);
+      if (Number.isFinite(n) && n > 0) {
+        pid = n;
+        try { process.kill(n, 0); alive = true; } catch { alive = false; }
+      }
+    } catch {}
+    teams.push({ team, lastActivity, pid, alive });
+  }
+  teams.sort((a, b) => b.lastActivity.getTime() - a.lastActivity.getTime());
+  return teams;
+}
+
+function formatRelative(d: Date): string {
+  const diffSec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
+/**
+ * Resolve a team argument: if the caller passed a name, use it; otherwise
+ * present an interactive picker (TTY) or fail with a hint (non-TTY).
+ */
+async function pickTeamOrDie(verb: string, team: string | undefined): Promise<string> {
+  if (team) return team;
+  const teams = listFactoryTeams();
+  if (teams.length === 0) {
+    die(`No factory teams found. Start one with: agents factory start "<brief>"`);
+  }
+  if (!process.stdout.isTTY) {
+    die(`Missing <team>. Run \`agents factory list\` to see options, then \`agents factory ${verb} <team>\`.`);
+  }
+  const { select } = await import('@inquirer/prompts');
+  const choice = await select({
+    message: `Pick a factory team to ${verb}`,
+    choices: teams.map((t) => ({
+      name: `${t.team.padEnd(36)} ${chalk.gray(formatRelative(t.lastActivity).padEnd(10))} ${t.alive ? chalk.green('supervisor live') : chalk.gray('supervisor stopped')}`,
+      value: t.team,
+    })),
+  });
+  return choice;
+}
+
 /**
  * Fork a detached `agents factory run <team>` child that survives this
  * parent process. Writes pid + log path to disk so `factory watch` and
@@ -238,10 +317,11 @@ After you have run the teams-add commands and printed your strategy, STOP. The s
 
   // `agents factory status <team>` — rolled-up view of teammates + DAG state.
   factory
-    .command('status <team>')
-    .description('Show roll-up status for a Factory team: DAG state, blocked teammates, recent tasks.')
+    .command('status [team]')
+    .description('Show roll-up status for a Factory team: DAG state, blocked teammates, recent tasks. Omit team for an interactive picker.')
     .option('--json', 'Output machine-readable JSON')
-    .action(async (team: string, opts: { json?: boolean }) => {
+    .action(async (teamArg: string | undefined, opts: { json?: boolean }) => {
+      const team = await pickTeamOrDie('inspect', teamArg);
       const mgr = new AgentManager();
       const result = await handleStatus(mgr, team, 'all');
       const byType: Record<string, number> = {};
@@ -344,9 +424,10 @@ After you have run the teams-add commands and printed your strategy, STOP. The s
   // `agents factory watch <team>` — tail the supervisor's log file written
   // by a background `factory start`. Non-blocking view of a running factory.
   factory
-    .command('watch <team>')
-    .description('Tail the supervisor log for a team started in the background. Press Ctrl-C to stop watching; the factory keeps running.')
-    .action(async (team: string) => {
+    .command('watch [team]')
+    .description('Tail the supervisor log for a team started in the background. Omit team for an interactive picker. Press Ctrl-C to stop watching; the factory keeps running.')
+    .action(async (teamArg: string | undefined) => {
+      const team = await pickTeamOrDie('watch', teamArg);
       const logPath = supervisorLogPath(team);
       if (!fs.existsSync(logPath)) {
         die(`No supervisor log at ${logPath}. Start one with: agents factory start "<brief>" --team ${team} --detach`);
@@ -402,12 +483,43 @@ After you have run the teams-add commands and printed your strategy, STOP. The s
       console.log(`  ${chalk.gray('supervisor_interval_s  ')}  ${final.supervisor_interval_seconds}`);
     });
 
+  // `agents factory list` — show known factory teams (sourced from supervisor
+  // log files on disk). Useful for scripts and as a non-interactive companion
+  // to the picker baked into status / watch / stop.
+  factory
+    .command('list')
+    .alias('ls')
+    .description('List factory teams discovered on disk, with last-activity time and supervisor liveness.')
+    .option('--json', 'Output machine-readable JSON')
+    .action((opts: { json?: boolean }) => {
+      const teams = listFactoryTeams();
+      if (opts.json) {
+        console.log(JSON.stringify(teams.map((t) => ({
+          team: t.team,
+          last_activity: t.lastActivity.toISOString(),
+          pid: t.pid ?? null,
+          supervisor_alive: t.alive,
+        })), null, 2));
+        return;
+      }
+      if (teams.length === 0) {
+        console.log(chalk.gray('No factory teams found. Start one with: agents factory start "<brief>"'));
+        return;
+      }
+      console.log(chalk.bold('Factory teams'));
+      for (const t of teams) {
+        const state = t.alive ? chalk.green('live') : chalk.gray('stopped');
+        console.log(`  ${chalk.cyan(t.team.padEnd(36))}  ${formatRelative(t.lastActivity).padEnd(10)}  ${state}`);
+      }
+    });
+
   // `agents factory stop <team>` — kill the detached supervisor for this team.
   // Teammate processes keep running; this only stops the wave dispatcher.
   factory
-    .command('stop <team>')
-    .description("Stop a team's background supervisor loop. Running teammates keep running; new waves stop firing.")
-    .action((team: string) => {
+    .command('stop [team]')
+    .description("Stop a team's background supervisor loop. Omit team for an interactive picker. Running teammates keep running; new waves stop firing.")
+    .action(async (teamArg: string | undefined) => {
+      const team = await pickTeamOrDie('stop', teamArg);
       const pidFile = supervisorPidPath(team);
       if (!fs.existsSync(pidFile)) die(`No supervisor pid file for team '${team}'.`);
       const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10);
