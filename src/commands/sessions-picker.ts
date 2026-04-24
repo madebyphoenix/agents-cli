@@ -166,6 +166,14 @@ function stripTags(text: string): string {
 }
 
 const LAST_RESPONSE_MAX_LINES = 15;
+const LAST_RESPONSE_MAX_LINES_WITH_TODOS = 8;
+const TODOS_MAX_ITEMS = 5;
+
+interface TodoItem {
+  content?: string;
+  text?: string;
+  status?: string;
+}
 
 function formatCompactPreview(events: ReturnType<typeof parseSession>, session: SessionMeta): string {
   let firstUser = '';
@@ -174,6 +182,7 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>, session: 
   const filesRead = new Set<string>();
   let toolCalls = 0;
   let planFile = '';
+  let latestTodos: TodoItem[] | null = null;
 
   for (const event of events) {
     if (event.type === 'message') {
@@ -195,6 +204,9 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>, session: 
       }
       if (!planFile && p && /\/plans\/[^/]+\.md$/.test(p)) {
         planFile = p;
+      }
+      if (tool === 'TodoWrite' && Array.isArray(event.args?.todos)) {
+        latestTodos = event.args.todos as TodoItem[];
       }
       toolCalls++;
     }
@@ -223,8 +235,15 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>, session: 
     lines.push(chalk.cyan('Plan: ') + chalk.white(linkPath(planFile, basename)));
   }
 
+  const todosRendered = latestTodos ? renderTodos(latestTodos, termWidth) : [];
+  if (todosRendered.length > 0) {
+    lines.push(chalk.cyan('Todos:'));
+    for (const l of todosRendered) lines.push('  ' + l);
+  }
+
   if (lastAssistant) {
-    const rendered = renderLastResponse(lastAssistant);
+    const maxLines = todosRendered.length > 0 ? LAST_RESPONSE_MAX_LINES_WITH_TODOS : LAST_RESPONSE_MAX_LINES;
+    const rendered = renderLastResponse(lastAssistant, maxLines);
     if (rendered.length > 0) {
       lines.push('');
       lines.push(chalk.cyan('Last response:'));
@@ -239,7 +258,7 @@ function formatCompactPreview(events: ReturnType<typeof parseSession>, session: 
   return lines.map(l => '  ' + l).join('\n');
 }
 
-function renderLastResponse(content: string): string[] {
+function renderLastResponse(content: string, maxLines: number = LAST_RESPONSE_MAX_LINES): string[] {
   const cleaned = stripTags(content).trim();
   if (!cleaned) return [];
 
@@ -255,11 +274,42 @@ function renderLastResponse(content: string): string[] {
   while (all.length && !all[0].trim()) all.shift();
   while (all.length && !all[all.length - 1].trim()) all.pop();
 
-  if (all.length <= LAST_RESPONSE_MAX_LINES) return all;
-  const shown = all.slice(0, LAST_RESPONSE_MAX_LINES);
-  const more = all.length - LAST_RESPONSE_MAX_LINES;
+  if (all.length <= maxLines) return all;
+  const shown = all.slice(0, maxLines);
+  const more = all.length - maxLines;
   shown.push(chalk.gray(`… (${more} more line${more === 1 ? '' : 's'})`));
   return shown;
+}
+
+function renderTodos(todos: TodoItem[], termWidth: number): string[] {
+  const out: string[] = [];
+  const shown = todos.slice(0, TODOS_MAX_ITEMS);
+  // Outer body indent (2) + inner '  ' (2) + marker (3) + space (1) = 8
+  const maxText = Math.max(20, termWidth - 8);
+  for (const item of shown) {
+    const rawText = (item.content || item.text || '').trim();
+    if (!rawText) continue;
+    const text = truncate(rawText, maxText);
+    const status = item.status || 'pending';
+    let marker: string;
+    let textOut: string;
+    if (status === 'completed') {
+      marker = chalk.green('[x]');
+      textOut = chalk.gray(text);
+    } else if (status === 'in_progress') {
+      marker = chalk.yellow('[>]');
+      textOut = chalk.white(text);
+    } else {
+      marker = chalk.gray('[ ]');
+      textOut = chalk.white(text);
+    }
+    out.push(marker + ' ' + textOut);
+  }
+  if (todos.length > TODOS_MAX_ITEMS) {
+    const more = todos.length - TODOS_MAX_ITEMS;
+    out.push(chalk.gray(`… (${more} more)`));
+  }
+  return out;
 }
 
 function truncate(s: string, max: number): string {
