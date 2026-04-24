@@ -24,7 +24,7 @@ import chalk from 'chalk';
 import * as TOML from 'smol-toml';
 import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
-import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir, getProjectAgentsDir, getPromptcutsPath } from './state.js';
+import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir, getProjectAgentsDir, getPromptcutsPath, getEnabledExtraRepos } from './state.js';
 import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig, resolveAgentName, formatAgentError, CODEX_HOOKS_MIN_VERSION } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME, getActivePermissionSetName, readPermissionSetRecipe, PERMISSION_SET_ENV_VAR } from './permissions.js';
 import { installMcpServers } from './mcp.js';
@@ -100,6 +100,11 @@ export function getAvailableResources(cwd: string = process.cwd()): AvailableRes
     resourceBases.push({ scope: 'project', base: projectAgentsDir });
   }
   resourceBases.push({ scope: 'user', base: userBase });
+  // Extra DotAgent repos registered via `agents repo add`. Ordered after the
+  // primary so primary names win in the dedup Set below.
+  for (const extra of getEnabledExtraRepos()) {
+    resourceBases.push({ scope: 'user', base: extra.dir });
+  }
 
   // Commands (*.md files)
   const commandNames = new Set<string>();
@@ -269,21 +274,25 @@ export function getActuallySyncedResources(agent: AgentId, version: string, opti
   const skillsDir = path.join(configDir, 'skills');
   const centralSkillsDir = getSkillsDir();
   const projectSkillsDir = projectAgentsDir ? path.join(projectAgentsDir, 'skills') : null;
+  const extraRepos = getEnabledExtraRepos();
   if (fs.existsSync(skillsDir)) {
     const installedSkills = fs.readdirSync(skillsDir, { withFileTypes: true })
       .filter(d => d.isDirectory() && !d.name.startsWith('.'))
       .map(d => d.name);
     for (const skill of installedSkills) {
       const versionSkillDir = path.join(skillsDir, skill);
-      const projectSourceDir = projectSkillsDir ? path.join(projectSkillsDir, skill) : null;
-      const centralSkillDir = path.join(centralSkillsDir, skill);
-      const hasProjectSource = projectSourceDir ? fs.existsSync(projectSourceDir) : false;
-      const hasUserSource = fs.existsSync(centralSkillDir);
-      if (!hasProjectSource && !hasUserSource) {
+      const sourceCandidates: Array<string | null> = [
+        projectSkillsDir ? path.join(projectSkillsDir, skill) : null,
+        path.join(centralSkillsDir, skill),
+        ...extraRepos.map((e) => path.join(e.dir, 'skills', skill)),
+      ];
+      const sourceDir = sourceCandidates.find((p) => p && fs.existsSync(p)) || null;
+      if (!sourceDir) {
+        // True orphan — no source in project, primary, or any extra. Still
+        // count as synced so version-home cleanup knows it's accounted for.
         result.skills.push(skill);
         continue;
       }
-      const sourceDir = hasProjectSource ? projectSourceDir! : centralSkillDir;
       const allMatch = skillDirsMatch(sourceDir, versionSkillDir);
       if (allMatch) {
         result.skills.push(skill);
@@ -1370,6 +1379,9 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
   const result: SyncResult = { commands: false, skills: false, hooks: false, memory: [], permissions: false, mcp: [], subagents: [], plugins: [] };
   const cwd = options.cwd || process.cwd();
   const projectAgentsDir = options.projectDir || getProjectAgentsDir(cwd);
+  // Extra DotAgent repos registered via `agents repo add`. Looked up after the
+  // primary repo so primary wins on name collisions.
+  const extraRepos = getEnabledExtraRepos();
   const available = getAvailableResources(cwd);
 
   // Helper: remove a path (symlink or real) if it exists
@@ -1419,10 +1431,13 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
 
     const syncedCommands: string[] = [];
     for (const cmd of commandsToSync) {
-      const projectSource = projectCommandsDir ? path.join(projectCommandsDir, `${cmd}.md`) : null;
-      const userSource = path.join(centralCommands, `${cmd}.md`);
-      const srcFile = projectSource && fs.existsSync(projectSource) ? projectSource : userSource;
-      if (!fs.existsSync(srcFile)) continue;
+      const candidates: Array<string | null> = [
+        projectCommandsDir ? path.join(projectCommandsDir, `${cmd}.md`) : null,
+        path.join(centralCommands, `${cmd}.md`),
+        ...extraRepos.map((e) => path.join(e.dir, 'commands', `${cmd}.md`)),
+      ];
+      const srcFile = candidates.find((p) => p && fs.existsSync(p)) || null;
+      if (!srcFile) continue;
 
       if (agentConfig.format === 'toml') {
         const content = fs.readFileSync(srcFile, 'utf-8');
@@ -1457,9 +1472,13 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
 
       const syncedSkills: string[] = [];
       for (const skill of skillsToSync) {
-        const projectSource = projectSkills ? path.join(projectSkills, skill) : null;
-        const srcDir = projectSource && fs.existsSync(projectSource) ? projectSource : path.join(centralSkills, skill);
-        if (!fs.existsSync(srcDir)) continue;
+        const candidates: Array<string | null> = [
+          projectSkills ? path.join(projectSkills, skill) : null,
+          path.join(centralSkills, skill),
+          ...extraRepos.map((e) => path.join(e.dir, 'skills', skill)),
+        ];
+        const srcDir = candidates.find((p) => p && fs.existsSync(p)) || null;
+        if (!srcDir) continue;
 
         const destDir = path.join(skillsTarget, skill);
         removePath(destDir);
@@ -1491,9 +1510,13 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
 
         const syncedHooks: string[] = [];
         for (const hook of hooksToSync) {
-          const projectSource = projectHooksDir ? path.join(projectHooksDir, hook) : null;
-          const srcFile = projectSource && fs.existsSync(projectSource) ? projectSource : path.join(centralHooks, hook);
-          if (!fs.existsSync(srcFile)) continue;
+          const candidates: Array<string | null> = [
+            projectHooksDir ? path.join(projectHooksDir, hook) : null,
+            path.join(centralHooks, hook),
+            ...extraRepos.map((e) => path.join(e.dir, 'hooks', hook)),
+          ];
+          const srcFile = candidates.find((p) => p && fs.existsSync(p)) || null;
+          if (!srcFile) continue;
 
           const destFile = path.join(hooksTarget, hook);
           fs.copyFileSync(srcFile, destFile);
@@ -1538,11 +1561,13 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     const agentSupportsImports = !!agentConfig.capabilities.memoryImports;
 
     for (const mem of memoryToSync) {
-      const projectSource = projectMemoryDir ? path.join(projectMemoryDir, `${mem}.md`) : null;
-      const srcFile = projectSource && fs.existsSync(projectSource)
-        ? projectSource
-        : path.join(centralMemory, `${mem}.md`);
-      if (!fs.existsSync(srcFile)) continue;
+      const candidates: Array<string | null> = [
+        projectMemoryDir ? path.join(projectMemoryDir, `${mem}.md`) : null,
+        path.join(centralMemory, `${mem}.md`),
+        ...extraRepos.map((e) => path.join(e.dir, 'memory', `${mem}.md`)),
+      ];
+      const srcFile = candidates.find((p) => p && fs.existsSync(p)) || null;
+      if (!srcFile) continue;
 
       const targetName = mem === 'AGENTS' ? agentConfig.instructionsFile : `${mem}.md`;
       const destFile = path.join(agentDir, targetName);

@@ -13,6 +13,10 @@ How agents-cli syncs resources (commands, skills, hooks, memory, MCP, permission
 | MCP | `~/.agents/mcp/*.yaml` | `.{agent}/settings.json` | Merge into JSON |
 | Permissions | `~/.agents/permissions/groups/*.yaml` | `.{agent}/settings.json` | Merge into JSON |
 
+### Extra repos
+
+Users can register additional DotAgent repos via `agents repo add <source>`. Extras clone into `~/.agents/.repos/<alias>/` and ship the same layout (`skills/`, `commands/`, `hooks/`, `memory/`). During sync, each resource lookup searches project → primary (`~/.agents/`) → extras in insertion order, and the first hit wins — so primary always overrides extras on name collisions. Registrations live in `meta.extraRepos` in `~/.agents/agents.yaml`; `~/.agents/.gitignore` auto-excludes `.repos/` so extras never leak into a primary `agents push`.
+
 ## Memory File Mapping
 
 Central `AGENTS.md` maps to agent-specific filenames:

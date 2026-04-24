@@ -24,6 +24,7 @@ vi.mock('../src/lib/state.js', () => {
     get getPluginsDir() { return () => path.join(AGENTS_DIR, 'plugins'); },
     get getPromptcutsPath() { return () => path.join(AGENTS_DIR, 'promptcuts.yaml'); },
     get getProjectAgentsDir() { return () => PROJECT_AGENTS_DIR; },
+    get getEnabledExtraRepos() { return () => []; },
     get ensureAgentsDir() { return () => fs.mkdirSync(AGENTS_DIR, { recursive: true }); },
     get readMeta() { return () => META; },
     get writeMeta() { return (next: { agents?: Record<string, string> }) => { META = next; }; },

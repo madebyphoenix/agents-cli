@@ -35,6 +35,7 @@ const SUBAGENTS_DIR = path.join(AGENTS_DIR, 'subagents');
 const PLUGINS_DIR = path.join(AGENTS_DIR, 'plugins');
 const DRIVE_DIR = path.join(AGENTS_DIR, 'drive');
 const SECRETS_DIR = path.join(AGENTS_DIR, 'secrets');
+const EXTRA_REPOS_DIR = path.join(AGENTS_DIR, '.repos');
 
 const META_HEADER = `# agents-cli metadata
 # Auto-generated - do not edit manually
@@ -146,6 +147,33 @@ export function getSecretsDir(): string {
   return SECRETS_DIR;
 }
 
+/** Path to cloned extra DotAgent repos (~/.agents/.repos/). */
+export function getExtraReposDir(): string {
+  return EXTRA_REPOS_DIR;
+}
+
+/** Path to a single extra DotAgent repo clone (~/.agents/.repos/<alias>/). */
+export function getExtraRepoDir(alias: string): string {
+  return path.join(EXTRA_REPOS_DIR, alias);
+}
+
+/**
+ * Return enabled extra repos that exist on disk, in insertion order.
+ * Primary (~/.agents/) is intentionally excluded — callers decide order.
+ */
+export function getEnabledExtraRepos(): Array<{ alias: string; dir: string; url: string }> {
+  const meta = readMeta();
+  const extras = meta.extraRepos || {};
+  const out: Array<{ alias: string; dir: string; url: string }> = [];
+  for (const [alias, config] of Object.entries(extras)) {
+    if (!config.enabled) continue;
+    const dir = path.join(EXTRA_REPOS_DIR, alias);
+    if (!fs.existsSync(dir)) continue;
+    out.push({ alias, dir, url: config.url });
+  }
+  return out;
+}
+
 /** Path to slash command markdown files (~/.agents/commands/). */
 export function getCommandsDir(): string {
   return COMMANDS_DIR;
@@ -226,6 +254,9 @@ export function ensureAgentsDir(): void {
   }
   if (!fs.existsSync(DRIVE_DIR)) {
     fs.mkdirSync(DRIVE_DIR, opts);
+  }
+  if (!fs.existsSync(EXTRA_REPOS_DIR)) {
+    fs.mkdirSync(EXTRA_REPOS_DIR, opts);
   }
   try { fs.chmodSync(AGENTS_DIR, 0o700); } catch {}
 }

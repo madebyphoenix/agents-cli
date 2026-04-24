@@ -13,7 +13,7 @@ import * as os from 'os';
 import * as yaml from 'yaml';
 import type { AgentId, SkillMetadata, InstalledSkill } from './types.js';
 import { AGENTS, SKILLS_CAPABLE_AGENTS, ensureSkillsDir } from './agents.js';
-import { getAgentsDir, getProjectAgentsDir } from './state.js';
+import { getAgentsDir, getProjectAgentsDir, getEnabledExtraRepos } from './state.js';
 import { getEffectiveHome, getVersionHomePath, listInstalledVersions } from './versions.js';
 
 const HOME = os.homedir();
@@ -195,6 +195,12 @@ export interface DiscoveredSkill {
   ruleCount: number;
   validation: ValidationResult;
   parseError?: string;
+  /**
+   * Which repo the skill was discovered in. `undefined` means the primary
+   * ~/.agents/ repo; otherwise the alias of an extra repo registered via
+   * `agents repo add`. Primary wins on name collisions.
+   */
+  source?: string;
 }
 
 export function discoverSkillsFromRepo(repoPath: string): DiscoveredSkill[] {
@@ -666,35 +672,39 @@ export function uninstallSkill(skillName: string): { success: boolean; error?: s
 
 export function listInstalledSkills(): Map<string, DiscoveredSkill> {
   const skills = new Map<string, DiscoveredSkill>();
-  const centralDir = getSkillsDir();
+  const scan = (dir: string, source?: string) => {
+    if (!fs.existsSync(dir)) return;
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        // Skip hidden directories (e.g., .system)
+        if (entry.name.startsWith('.')) continue;
+        // Primary wins on name collisions.
+        if (skills.has(entry.name)) continue;
 
-  if (!fs.existsSync(centralDir)) {
-    return skills;
-  }
-
-  try {
-    const entries = fs.readdirSync(centralDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      // Skip hidden directories (e.g., .system)
-      if (entry.name.startsWith('.')) continue;
-
-      const skillDir = path.join(centralDir, entry.name);
-      const metadata = parseSkillMetadata(skillDir);
-
-      const validation = validateSkillMetadata(metadata, entry.name);
-      if (metadata) {
-        skills.set(entry.name, {
-          name: entry.name,
-          path: skillDir,
-          metadata,
-          ruleCount: countSkillRules(skillDir),
-          validation,
-        });
+        const skillDir = path.join(dir, entry.name);
+        const metadata = parseSkillMetadata(skillDir);
+        const validation = validateSkillMetadata(metadata, entry.name);
+        if (metadata) {
+          skills.set(entry.name, {
+            name: entry.name,
+            path: skillDir,
+            metadata,
+            ruleCount: countSkillRules(skillDir),
+            validation,
+            source,
+          });
+        }
       }
+    } catch {
+      // Ignore errors
     }
-  } catch {
-    // Ignore errors
+  };
+
+  scan(getSkillsDir());
+  for (const extra of getEnabledExtraRepos()) {
+    scan(path.join(extra.dir, 'skills'), extra.alias);
   }
 
   return skills;

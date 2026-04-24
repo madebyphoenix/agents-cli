@@ -11,7 +11,7 @@
   <a href="https://github.com/swarmify/agents-cli"><img src="https://img.shields.io/badge/github-swarmify%2Fagents--cli-blue?style=flat-square" alt="github" /></a>
 </p>
 
-**One CLI for all your AI coding agents.** Pin versions per project. Share config across Claude Code, Codex, Gemini CLI, and Cursor. Stop setting up the same MCP server three times.
+**The missing toolchain for CLI coding agents.** Pin versions per project. Share config across Claude Code, Codex, Gemini CLI, and Cursor. Stop setting up the same MCP server three times.
 
 <p align="center">
   <a href="https://github.com/anthropics/claude-code" title="Claude Code"><img src="assets/harnesses/anthropic.svg" height="32" alt="Claude Code" /></a>
@@ -53,6 +53,7 @@ Also available as `ag` -- all commands work with both `agents` and `ag`.
 - [Routines](#routines)
 - [PTY](#pty)
 - [Portable setup](#portable-setup)
+- [Private skills](#private-skills)
 - [Compatibility](#compatibility)
 - [FAQ](#faq)
 
@@ -294,6 +295,27 @@ agents pull
 
 agents push     # Snapshot your config to git
 ```
+
+---
+
+## Private skills
+
+Keep work or personal skills in a separate repo — public ones in `~/.agents/`, private ones in an extra repo that merges in at sync time.
+
+```bash
+# Add a private repo for work-only skills
+agents repo add gh:yourname/.agents-work
+
+# Add with a custom alias
+agents repo add git@github.com:acme/team-skills.git --as acme
+
+agents repo list          # Primary + every registered extra
+agents repo pull          # Pull updates for all enabled extras
+agents repo disable acme  # Stop merging without deleting
+agents repo remove acme   # Unregister and delete the clone
+```
+
+Extras clone into `~/.agents/.repos/<alias>/` and ship the same layout as the primary (`skills/`, `commands/`, `hooks/`, `memory/`). Their contents merge into agent version homes after the primary's — so `~/.agents/` always wins on name collisions. `agents skills list` shows which repo each skill came from.
 
 ---
 

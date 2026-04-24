@@ -28,6 +28,7 @@ import {
 import {
   getAgentsDir,
   ensureAgentsDir,
+  getEnabledExtraRepos,
   readMeta,
   updateMeta,
 } from '../lib/state.js';
@@ -278,6 +279,22 @@ Skip CLI installs with --skip-clis when you only want config updates, not versio
           updateMeta({
             source: parsed.url,
           });
+        }
+
+        // Pull extra DotAgent repos before resource sync so any new skills /
+        // commands they ship land in the version homes on this same run.
+        const extraRepos = getEnabledExtraRepos();
+        if (extraRepos.length > 0) {
+          console.log(chalk.bold(`\nExtra repos (${extraRepos.length}):\n`));
+          for (const { alias, dir } of extraRepos) {
+            const extraSpinner = ora(`Pulling ${alias}...`).start();
+            const result = await pullRepo(dir);
+            if (result.success) {
+              extraSpinner.succeed(`${alias} -> ${result.commit}`);
+            } else {
+              extraSpinner.warn(`${alias}: ${result.error}`);
+            }
+          }
         }
 
         // One-time migration: promptcuts.yaml moved from agent-scoped

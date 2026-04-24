@@ -342,6 +342,16 @@ export interface InstalledSubagent {
   frontmatter: SubagentFrontmatter;
 }
 
+/**
+ * Extra DotAgent repo registered alongside the primary ~/.agents/ repo.
+ * Cloned into ~/.agents/.repos/<alias>/. Primary (~/.agents/) always wins
+ * on name collisions; extras are searched in insertion order after primary.
+ */
+export interface ExtraRepoConfig {
+  url: string;
+  enabled: boolean;
+}
+
 /** Top-level structure of ~/.agents/agents.yaml -- the CLI's persistent state. */
 export interface Meta {
   agents?: Partial<Record<AgentId, string>>;
@@ -350,6 +360,11 @@ export interface Meta {
   versions?: Partial<Record<AgentId, Record<string, VersionResources>>>;
   // Git remote source URL (when ~/.agents/ is a git repo)
   source?: string;
+  /**
+   * Extra DotAgent repos cloned into ~/.agents/.repos/<alias>/. Their skills,
+   * commands, hooks, etc. merge into the sync path after the primary repo's.
+   */
+  extraRepos?: Record<string, ExtraRepoConfig>;
   /**
    * Keys like `skill.hermes` — registries seeded from SEEDED_REGISTRIES exactly
    * once. Tracked so a user `registry remove` won't silently re-seed.

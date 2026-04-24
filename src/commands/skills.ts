@@ -765,9 +765,14 @@ async function buildSkillRows(opts: {
     }
 
     const fileCount = countSkillFiles(skill.path);
+    // Append repo source when a skill comes from a registered extra so users
+    // can see which DotAgent repo owns it at a glance.
+    const description = skill.source
+      ? `${skill.metadata.description || ''}${skill.metadata.description ? ' ' : ''}${chalk.gray(`[${skill.source}]`)}`
+      : skill.metadata.description;
     rows.push({
       name,
-      description: skill.metadata.description,
+      description,
       extra: fileCount > 0 ? `${fileCount}` : '-',
       targets,
       buildDetail: () => formatSkillDetail(name, skill, targets, fileCount),

@@ -33,6 +33,7 @@ const VERSION = packageJson.version;
 import { registerPullCommand } from './commands/pull.js';
 import { registerPushCommand } from './commands/push.js';
 import { registerForkCommand } from './commands/fork.js';
+import { registerRepoCommands } from './commands/repo.js';
 import { registerInitCommand, runInit } from './commands/init.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerViewCommand } from './commands/view.js';
@@ -450,6 +451,7 @@ program
 registerPullCommand(program);
 registerPushCommand(program);
 registerForkCommand(program);
+registerRepoCommands(program);
 registerInitCommand(program);
 
 applyGlobalHelpConventions(program);
