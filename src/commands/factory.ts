@@ -281,10 +281,77 @@ async function runForegroundSupervisor(team: string): Promise<void> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// `agents factory submit <linear-ref>` — Software Factory v0 entry point.
+// Thin HTTP client: POSTs to the Factory Floor's /factory/submit. The factory
+// resolves the Linear ref, picks the workflow by label, and dispatches a pod.
+// ---------------------------------------------------------------------------
+
+const FACTORY_URL = process.env.FACTORY_FLOOR_URL ?? 'https://agents.427yosemite.com';
+
+function readRushToken(): string {
+  const userYaml = path.join(homedir(), '.rush', 'user.yaml');
+  if (!fs.existsSync(userYaml)) {
+    die('Not logged in to Rush. Run `rush login` first.');
+  }
+  const raw = fs.readFileSync(userYaml, 'utf-8');
+  // Minimal YAML parse — we only need session.access_token.
+  const match = raw.match(/access_token:\s*([^\s#]+)/);
+  if (!match) {
+    die('No session token in ~/.rush/user.yaml. Run `rush login` first.');
+  }
+  return match[1].replace(/^['"]|['"]$/g, '');
+}
+
+async function postFactorySubmit(ref: string): Promise<{
+  ticket_id: string;
+  linear_identifier: string;
+  label: string;
+  cloud_execution_id: string;
+}> {
+  const token = readRushToken();
+  const res = await fetch(`${FACTORY_URL}/factory/submit`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ref }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    die(`Factory submit failed (${res.status}): ${body.slice(0, 400)}`);
+  }
+  return res.json() as Promise<{
+    ticket_id: string;
+    linear_identifier: string;
+    label: string;
+    cloud_execution_id: string;
+  }>;
+}
+
 export function registerFactoryCommands(program: Command): void {
   const factory = program
     .command('factory')
     .description('Software Factory — planner/worker DAG with a shared team Ledger.');
+
+  // `agents factory submit <ref>` — Software Factory v0. One shot: hand
+  // off a Linear ref, factory dispatches a pod, the laptop is done.
+  factory
+    .command('submit <linear-ref>')
+    .description('Submit a Linear issue (RUSH-123 or URL) to the Software Factory.')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (ref: string, opts: { json?: boolean }) => {
+      const result = await postFactorySubmit(ref);
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(chalk.green(`Submitted ${result.linear_identifier} (${result.label})`));
+      console.log(`  ticket       ${result.ticket_id}`);
+      console.log(`  execution    ${result.cloud_execution_id}`);
+      console.log(`  tail output  agents cloud tail ${result.cloud_execution_id}`);
+    });
 
   // `agents factory start <brief>` — seed a team with a Planner teammate.
   factory
