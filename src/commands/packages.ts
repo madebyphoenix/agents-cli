@@ -347,10 +347,6 @@ When to use:
 
         if (results.length === 0) {
           console.log(chalk.yellow('\nNo packages found.'));
-
-          if (!options.type) {
-            console.log(chalk.gray('\nTip: skill registries not yet available. Use gh:user/repo for skills.'));
-          }
           return;
         }
 

@@ -179,9 +179,23 @@ export const DEFAULT_REGISTRIES: Record<RegistryType, Record<string, RegistryCon
       enabled: true,
     },
   },
+  skill: {},
+};
+
+/**
+ * Registries that ship pre-seeded into new users' agents.yaml once, but are
+ * not "defaults" — after seeding they behave like any user-added registry
+ * (listable, disable-able, removable, and gone for good once removed).
+ */
+export const SEEDED_REGISTRIES: Record<RegistryType, Record<string, RegistryConfig>> = {
+  mcp: {},
   skill: {
-    // No public API available yet - skills.sh has no programmatic access
-    // When available: official: { url: 'https://api.skills.sh/v1', enabled: true }
+    // Hermes Agent (Nous Research) — flat JSON index of 1800+ skills aggregated
+    // from official, github, lobehub, skills.sh, and claude-marketplace. No auth.
+    hermes: {
+      url: 'https://hermes-agent.nousresearch.com/docs/api/skills-index.json',
+      enabled: true,
+    },
   },
 };
 
@@ -224,15 +238,22 @@ export interface McpRegistryResponse {
   };
 }
 
-/** A skill listing returned by a skill registry API (not yet available). */
+/** A skill listing returned by a skill registry API. */
 export interface SkillEntry {
   name: string;
   description?: string;
+  /** Upstream catalog (e.g. 'official', 'github', 'lobehub', 'skills.sh'). */
   source: string;
+  /** Stable unique id used by the registry (e.g. 'official/security/1password'). */
+  identifier?: string;
+  /** Origin repo in 'owner/repo' form. Empty for registry-hosted catalogs. */
+  repo?: string;
   path?: string;
   author?: string;
   installs?: number;
   tags?: string[];
+  /** Registry-specific trust signal (e.g. 'builtin', 'trusted', 'community'). */
+  trustLevel?: string;
 }
 
 /** Paginated response from a skill registry search endpoint. */
@@ -329,6 +350,11 @@ export interface Meta {
   versions?: Partial<Record<AgentId, Record<string, VersionResources>>>;
   // Git remote source URL (when ~/.agents/ is a git repo)
   source?: string;
+  /**
+   * Keys like `skill.hermes` — registries seeded from SEEDED_REGISTRIES exactly
+   * once. Tracked so a user `registry remove` won't silently re-seed.
+   */
+  seededPresets?: string[];
 }
 
 /** Options controlling which agents and resources are synced during `agents pull` / `agents use`. */

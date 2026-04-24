@@ -10,7 +10,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as yaml from 'yaml';
-import type { Meta } from './types.js';
+import type { Meta, RegistryType } from './types.js';
+import { SEEDED_REGISTRIES } from './types.js';
 
 const HOME = os.homedir();
 const AGENTS_DIR = path.join(HOME, '.agents');
@@ -237,6 +238,36 @@ export function createDefaultMeta(): Meta {
 
 let metaCache: { mtime: number; meta: Meta } | null = null;
 
+/**
+ * Seed presets from SEEDED_REGISTRIES into meta.registries exactly once per
+ * (type, name) pair. Mutates `meta` and returns true if anything changed, so
+ * the caller can persist. Removed-then-re-added is NOT re-seeded: presence in
+ * `meta.seededPresets` is a tombstone that survives user removals.
+ */
+function applyRegistrySeeds(meta: Meta): boolean {
+  const seeded = new Set(meta.seededPresets || []);
+  let changed = false;
+
+  for (const [type, presets] of Object.entries(SEEDED_REGISTRIES) as Array<[RegistryType, Record<string, any>]>) {
+    for (const [name, config] of Object.entries(presets)) {
+      const key = `${type}.${name}`;
+      if (seeded.has(key)) continue;
+
+      if (!meta.registries) meta.registries = { mcp: {}, skill: {} };
+      if (!meta.registries[type]) meta.registries[type] = {};
+      // Don't clobber if the user already has an entry with this name.
+      if (!meta.registries[type][name]) {
+        meta.registries[type][name] = { ...config };
+      }
+      seeded.add(key);
+      changed = true;
+    }
+  }
+
+  if (changed) meta.seededPresets = [...seeded];
+  return changed;
+}
+
 /** Read and cache ~/.agents/agents.yaml, migrating from the legacy meta.yaml format if needed. */
 export function readMeta(): Meta {
   ensureAgentsDir();
@@ -290,6 +321,10 @@ export function readMeta(): Meta {
       const content = fs.readFileSync(META_FILE, 'utf-8');
       const parsed = yaml.parse(content) as Meta;
       const meta = parsed || createDefaultMeta();
+      if (applyRegistrySeeds(meta)) {
+        writeMeta(meta);
+        return meta;
+      }
       metaCache = { mtime, meta };
       return meta;
     } catch {
@@ -298,7 +333,12 @@ export function readMeta(): Meta {
     }
   }
 
-  return createDefaultMeta();
+  // Fresh install: seed presets and persist so subsequent reads are steady-state.
+  const meta = createDefaultMeta();
+  if (applyRegistrySeeds(meta)) {
+    writeMeta(meta);
+  }
+  return meta;
 }
 
 /** Serialize and write agents.yaml, invalidating the in-memory cache. */

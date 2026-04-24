@@ -174,21 +174,165 @@ export async function getMcpServerInfo(
   return null;
 }
 
-/** Search skill registries (stub -- skill registries are not yet available). */
+/** Raw shape of the skill index document served by Hermes and compatible registries. */
+interface SkillIndexDocument {
+  version?: number;
+  generated_at?: string;
+  skill_count?: number;
+  skills: Array<{
+    name: string;
+    description?: string;
+    source?: string;
+    identifier?: string;
+    trust_level?: string;
+    repo?: string;
+    path?: string;
+    tags?: string[];
+    author?: string;
+    installs?: number;
+  }>;
+}
+
+const skillIndexCache = new Map<string, { fetchedAt: number; doc: SkillIndexDocument }>();
+const SKILL_INDEX_TTL_MS = 10 * 60_000;
+
+/** Fetch and cache a flat skill-index JSON document. */
+async function fetchSkillIndex(url: string, apiKey?: string): Promise<SkillIndexDocument> {
+  const cached = skillIndexCache.get(url);
+  if (cached && Date.now() - cached.fetchedAt < SKILL_INDEX_TTL_MS) {
+    return cached.doc;
+  }
+
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    throw new Error(`Registry request failed: ${response.status} ${response.statusText}`);
+  }
+
+  const doc = (await response.json()) as SkillIndexDocument;
+  skillIndexCache.set(url, { fetchedAt: Date.now(), doc });
+  return doc;
+}
+
+/** Map a raw skill-index row into the canonical SkillEntry shape. */
+function normalizeSkillEntry(raw: SkillIndexDocument['skills'][number]): SkillEntry {
+  return {
+    name: raw.name,
+    description: raw.description,
+    source: raw.source || 'unknown',
+    identifier: raw.identifier,
+    repo: raw.repo || undefined,
+    path: raw.path || undefined,
+    author: raw.author,
+    installs: raw.installs,
+    tags: raw.tags,
+    trustLevel: raw.trust_level,
+  };
+}
+
+/** Case-insensitive substring match against the fields users expect to search. */
+function skillMatchesQuery(entry: SkillEntry, query: string): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  const haystack = [
+    entry.name,
+    entry.identifier,
+    entry.description,
+    entry.source,
+    ...(entry.tags || []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
+/** Search skill registries for entries matching a query string. */
 export async function searchSkillRegistries(
-  _query: string,
-  _options?: { registry?: string; limit?: number }
+  query: string,
+  options?: { registry?: string; limit?: number }
 ): Promise<RegistrySearchResult[]> {
   const registries = getEnabledRegistries('skill');
+  if (registries.length === 0) return [];
 
-  if (registries.length === 0) {
-    // No skill registries configured - this is expected for now
+  const targetRegistries = options?.registry
+    ? registries.filter((r) => r.name === options.registry)
+    : registries;
+
+  if (targetRegistries.length === 0) {
+    if (options?.registry) {
+      throw new Error(`Registry '${options.registry}' not found or not enabled`);
+    }
     return [];
   }
 
-  // Future: implement skill registry API calls when available
-  // For now, skill: prefix falls back to git sources
-  return [];
+  const limit = options?.limit ?? 20;
+  const results: RegistrySearchResult[] = [];
+
+  for (const { name, config } of targetRegistries) {
+    try {
+      const doc = await fetchSkillIndex(config.url, config.apiKey);
+      for (const raw of doc.skills || []) {
+        const entry = normalizeSkillEntry(raw);
+        if (!skillMatchesQuery(entry, query)) continue;
+        results.push({
+          name: entry.identifier || entry.name,
+          description: entry.description,
+          type: 'skill',
+          source: entry.source,
+          registry: name,
+          installs: entry.installs,
+        });
+        if (results.length >= limit) break;
+      }
+      if (results.length >= limit) break;
+    } catch (err) {
+      console.error(`Failed to search ${name}: ${(err as Error).message}`);
+    }
+  }
+
+  return results;
+}
+
+/** Look up a skill by identifier (or name) across enabled skill registries. */
+export async function getSkillEntry(
+  skillIdentifier: string,
+  registryName?: string
+): Promise<SkillEntry | null> {
+  const registries = getEnabledRegistries('skill');
+  const targets = registryName
+    ? registries.filter((r) => r.name === registryName)
+    : registries;
+
+  for (const { config } of targets) {
+    try {
+      const doc = await fetchSkillIndex(config.url, config.apiKey);
+      const match = (doc.skills || []).find(
+        (s) => s.identifier === skillIdentifier || s.name === skillIdentifier
+      );
+      if (match) return normalizeSkillEntry(match);
+    } catch {
+      /* try next registry */
+    }
+  }
+  return null;
+}
+
+/** Derive a cloneable git source from a skill entry's repo/source metadata. */
+export function skillEntryToGitSource(entry: SkillEntry): string | null {
+  if (entry.repo) {
+    // Already an owner/repo; cloneRepo understands the `gh:` shorthand.
+    return `gh:${entry.repo.replace(/\.git$/, '')}`;
+  }
+  if (entry.source === 'official') {
+    // Hermes 'official' entries live in NousResearch/hermes-agent; the path
+    // sits under optional-skills/. cloneRepo pulls the whole repo — the
+    // per-path narrowing is a follow-on improvement.
+    return 'gh:NousResearch/hermes-agent';
+  }
+  return null;
 }
 
 /** Unified search across all enabled registries of the specified type(s). */
@@ -276,7 +420,20 @@ export async function resolvePackage(identifier: string): Promise<ResolvedPackag
   }
 
   if (parsed.type === 'skill') {
-    // Skill registries not available yet, treat as git source
+    const entry = await getSkillEntry(parsed.name);
+    if (entry) {
+      const gitSource = skillEntryToGitSource(entry);
+      if (gitSource) {
+        return {
+          type: 'skill',
+          source: gitSource,
+          skillEntry: entry,
+        };
+      }
+      // Entry found but has no installable repo (e.g. lobehub-only listings).
+      return null;
+    }
+    // Fall back to git shorthand when the identifier isn't in any registry.
     const gitSource = parsed.name.startsWith('gh:') ? parsed.name : `gh:${parsed.name}`;
     return { type: 'git', source: gitSource };
   }
