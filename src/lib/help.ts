@@ -6,6 +6,25 @@
  */
 import type { Command, Help } from 'commander';
 
+/** Description of a named command group rendered as its own section in help output. */
+export interface CommandGroup {
+  /** Section heading, e.g. 'Bundle commands'. */
+  title: string;
+  /** Subcommand names (in desired display order) that belong to this group. */
+  names: readonly string[];
+}
+
+const commandGroupRegistry = new WeakMap<Command, readonly CommandGroup[]>();
+
+/**
+ * Register named groups for a parent command so its help output splits the
+ * Commands section into multiple labeled sections. Subcommands not listed in
+ * any group fall back to a plain "Commands:" section below the groups.
+ */
+export function registerCommandGroups(parent: Command, groups: readonly CommandGroup[]): void {
+  commandGroupRegistry.set(parent, groups);
+}
+
 /** Format help output with Commands listed before Options for better discoverability. */
 function formatHelpCommandsFirst(cmd: Command, helper: Help): string {
   const termWidth = helper.padWidth(cmd, helper);
@@ -39,11 +58,38 @@ function formatHelpCommandsFirst(cmd: Command, helper: Help): string {
     output = output.concat(['Arguments:', formatList(argumentList), '']);
   }
 
-  const commandList = helper.visibleCommands(cmd).map((subcommand) => {
-    return formatItem(helper.subcommandTerm(subcommand), helper.subcommandDescription(subcommand));
-  });
-  if (commandList.length > 0) {
-    output = output.concat(['Commands:', formatList(commandList), '']);
+  const visibleCommands = helper.visibleCommands(cmd);
+  const subcommandTermNoAlias = (sub: Command): string => {
+    // Mirror commander's default subcommandTerm but drop the |alias suffix.
+    const argList = (sub as unknown as { registeredArguments?: ReadonlyArray<{ name(): string; required: boolean; variadic: boolean }> }).registeredArguments ?? [];
+    const args = argList
+      .map((a) => {
+        const n = a.name() + (a.variadic ? '...' : '');
+        return a.required ? `<${n}>` : `[${n}]`;
+      })
+      .join(' ');
+    return sub.name() + (sub.options.length > 0 ? ' [options]' : '') + (args ? ` ${args}` : '');
+  };
+  const renderCommand = (sub: Command): string =>
+    formatItem(subcommandTermNoAlias(sub), helper.subcommandDescription(sub));
+  const groups = commandGroupRegistry.get(cmd);
+  if (groups && groups.length > 0) {
+    const byName = new Map(visibleCommands.map((s) => [s.name(), s] as const));
+    const placed = new Set<string>();
+    for (const { title, names } of groups) {
+      const subs = names
+        .map((n) => byName.get(n))
+        .filter((s): s is Command => s !== undefined);
+      if (subs.length === 0) continue;
+      subs.forEach((s) => placed.add(s.name()));
+      output = output.concat([`${title}:`, formatList(subs.map(renderCommand)), '']);
+    }
+    const remaining = visibleCommands.filter((s) => !placed.has(s.name()));
+    if (remaining.length > 0) {
+      output = output.concat(['Commands:', formatList(remaining.map(renderCommand)), '']);
+    }
+  } else if (visibleCommands.length > 0) {
+    output = output.concat(['Commands:', formatList(visibleCommands.map(renderCommand)), '']);
   }
 
   const optionList = helper.visibleOptions(cmd).map((option) => {

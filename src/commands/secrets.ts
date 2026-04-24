@@ -30,6 +30,7 @@ import {
   secretsKeychainItem,
   setKeychainToken,
 } from '../lib/secrets.js';
+import { registerCommandGroups } from '../lib/help.js';
 import { isInteractiveTerminal, isPromptCancelled } from './utils.js';
 
 /** Prompt the user for a secret value with masked input. Requires an interactive TTY. */
@@ -163,7 +164,50 @@ function redact(value: string, reveal: boolean): string {
 export function registerSecretsCommands(program: Command): void {
   const cmd = program
     .command('secrets')
-    .description('Named bundles of env variables backed by macOS Keychain. Inject into agents via `agents run --secrets <name>`.');
+    .description('Named bundles of env variables backed by macOS Keychain. Inject into agents via `agents run --secrets <name>`.')
+    .addHelpText('after', `
+Workflow:
+  Bundles are containers; secrets are the variables inside them. Create a
+  bundle once, add secrets to it, then inject the whole bundle into any agent
+  run with --secrets <name>. Keychain-backed values never touch disk in
+  plaintext.
+
+Examples:
+  # Create a bundle for production credentials
+  agents secrets create prod --description "Production keys for the api stack"
+
+  # Add a keychain-backed secret (prompts for the value)
+  agents secrets add prod STRIPE_API_KEY
+
+  # Add a literal (non-sensitive) value
+  agents secrets add prod LOG_LEVEL --value info
+
+  # Import an entire .env file straight into keychain
+  agents secrets import prod --from .env.prod
+
+  # See what's in a bundle (values masked)
+  agents secrets view prod
+
+  # Reveal the real values in an interactive shell
+  agents secrets view prod --reveal
+
+  # Inject the bundle into an agent run
+  agents run claude "deploy the worker" --secrets prod
+
+  # Eval the bundle into your current shell
+  eval "$(agents secrets export prod --plaintext)"
+
+  # Remove one key (purges the keychain item by default)
+  agents secrets remove prod STRIPE_API_KEY
+
+  # Delete the whole bundle and purge every keychain item it owned
+  agents secrets delete prod
+`);
+
+  registerCommandGroups(cmd, [
+    { title: 'Bundle commands', names: ['list', 'view', 'create', 'delete'] },
+    { title: 'Secret commands', names: ['add', 'remove', 'import', 'export'] },
+  ]);
 
   cmd
     .command('list')
