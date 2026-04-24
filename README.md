@@ -25,6 +25,10 @@
   <a href="https://github.com/sst/opencode" title="OpenCode"><img src="assets/harnesses/opencode.png" height="32" alt="OpenCode" /></a>
   &nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://github.com/openclaw/openclaw" title="OpenClaw"><img src="assets/harnesses/openclaw.svg" height="36" alt="OpenClaw" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://getrush.ai" title="Rush"><img src="assets/harnesses/rush.png" height="32" alt="Rush" /></a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://github.com/NousResearch/hermes-agent" title="Hermes Agent"><img src="assets/harnesses/hermes.png" height="32" alt="Hermes Agent" /></a>
 </p>
 
 https://github.com/user-attachments/assets/cf0b2248-6672-4458-8027-b88525572f3e
