@@ -1005,8 +1005,10 @@ export async function installVersion(
             if (!fs.existsSync(actualVersionDir)) {
               fs.renameSync(versionDir, actualVersionDir);
             } else {
-              // Already exists, remove the 'latest' dir
-              fs.rmSync(versionDir, { recursive: true, force: true });
+              // Already exists — drop the 'latest' install artifacts but keep
+              // `home/` (may contain conversation history from sessions that
+              // ran while the user was on `latest`).
+              removeInstallArtifacts(versionDir);
             }
           }
         }
@@ -1033,16 +1035,31 @@ export async function installVersion(
 
     return { success: true, installedVersion };
   } catch (err) {
-    // Clean up on failure
+    // Clean up on failure — preserve `home/` in case a prior install left
+    // conversation history behind that we must not wipe on a failed reinstall.
     if (fs.existsSync(versionDir)) {
-      fs.rmSync(versionDir, { recursive: true, force: true });
+      removeInstallArtifacts(versionDir);
     }
     return { success: false, installedVersion: version, error: (err as Error).message };
   }
 }
 
 /**
- * Remove a specific version of an agent.
+ * Remove install artifacts from a version directory, preserving `home/` which
+ * contains the user's conversation history, sessions, history.jsonl, tasks,
+ * todos, file-history, etc. Called by removeVersion so that uninstalling a
+ * version never deletes the user's transcripts.
+ */
+function removeInstallArtifacts(versionDir: string): void {
+  for (const entry of fs.readdirSync(versionDir)) {
+    if (entry === 'home') continue;
+    fs.rmSync(path.join(versionDir, entry), { recursive: true, force: true });
+  }
+}
+
+/**
+ * Remove a specific version of an agent. Preserves `home/` under the version
+ * directory so conversation history survives reinstalls.
  */
 export function removeVersion(agent: AgentId, version: string): boolean {
   const versionDir = getVersionDir(agent, version);
@@ -1051,7 +1068,7 @@ export function removeVersion(agent: AgentId, version: string): boolean {
     return false;
   }
 
-  fs.rmSync(versionDir, { recursive: true, force: true });
+  removeInstallArtifacts(versionDir);
 
   // Remove versioned alias (e.g., claude@2.0.65)
   removeVersionedAlias(agent, version);
@@ -1087,7 +1104,9 @@ export function removeVersion(agent: AgentId, version: string): boolean {
 }
 
 /**
- * Remove all versions of an agent.
+ * Remove all versions of an agent. Preserves each version's `home/` directory
+ * so conversation history is never deleted; the per-version folders (now
+ * containing only `home/`) remain under the agent dir.
  */
 export function removeAllVersions(agent: AgentId): number {
   const versions = listInstalledVersions(agent);
@@ -1097,12 +1116,6 @@ export function removeAllVersions(agent: AgentId): number {
     if (removeVersion(agent, version)) {
       removed++;
     }
-  }
-
-  // Clean up the agent directory
-  const agentDir = path.join(getVersionsDir(), agent);
-  if (fs.existsSync(agentDir)) {
-    fs.rmSync(agentDir, { recursive: true, force: true });
   }
 
   return removed;

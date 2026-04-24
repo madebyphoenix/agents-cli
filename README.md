@@ -242,6 +242,10 @@ agents secrets set prod-stripe TEST_CARD --value "4242..."
 agents run claude "charge a test card" --secrets prod-stripe
 ```
 
+<p align="center">
+  <img src="assets/secrets.svg" alt="How agents-cli secrets work: stripe.yml holds a pointer, the macOS Keychain holds the value, agents-cli resolves at runtime and injects the env into the child process" width="100%" />
+</p>
+
 Merge order: profile env < `--secrets` < `--env K=V`. A missing keychain item aborts before the child starts.
 
 ---

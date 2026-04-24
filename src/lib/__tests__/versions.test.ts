@@ -2,8 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 
-import { getProjectVersion } from '../versions.js';
+import { getProjectVersion, removeVersion } from '../versions.js';
+import { getVersionsDir } from '../state.js';
+import type { AgentId } from '../types.js';
 
 let tmpDir: string;
 
@@ -84,4 +87,56 @@ describe('getProjectVersion', () => {
     );
     expect(getProjectVersion('claude', tmpDir)).toBe('1.7.2');
   });
+});
+
+// Scenario: the user uninstalls an agent version. Their conversation history,
+// which lives at ~/.agents/versions/<agent>/<version>/home/, must survive.
+// Verified for every AgentId since removeVersion is parametrised on agent and
+// the layout is shared across all agents.
+describe('removeVersion preserves home/', () => {
+  // One case per agent, using that agent's own history path so the test
+  // proves history at the real per-agent location is preserved.
+  const cases: { agent: AgentId; historyDir: string; binaryName: string }[] = [
+    { agent: 'claude',   historyDir: path.join('home', '.claude',   'projects'), binaryName: 'claude' },
+    { agent: 'codex',    historyDir: path.join('home', '.codex',    'sessions'), binaryName: 'codex' },
+    { agent: 'gemini',   historyDir: path.join('home', '.gemini',   'sessions'), binaryName: 'gemini' },
+    { agent: 'cursor',   historyDir: path.join('home', '.cursor',   'sessions'), binaryName: 'cursor-agent' },
+    { agent: 'opencode', historyDir: path.join('home', '.opencode', 'sessions'), binaryName: 'opencode' },
+    { agent: 'openclaw', historyDir: path.join('home', '.openclaw', 'sessions'), binaryName: 'openclaw' },
+  ];
+
+  for (const { agent, historyDir, binaryName } of cases) {
+    it(`[${agent}] keeps home/ intact, drops install artifacts`, () => {
+      const testVersion = `0.0.0-test-${crypto.randomBytes(4).toString('hex')}`;
+      const versionDir = path.join(getVersionsDir(), agent, testVersion);
+
+      try {
+        // Install artifacts that MUST be removed. The binary makes
+        // listInstalledVersions() recognise this as an installed version.
+        fs.mkdirSync(path.join(versionDir, 'node_modules', '.bin'), { recursive: true });
+        fs.writeFileSync(path.join(versionDir, 'node_modules', '.bin', binaryName), '#!/bin/sh\n');
+        fs.writeFileSync(path.join(versionDir, 'package.json'), '{}');
+        fs.writeFileSync(path.join(versionDir, 'package-lock.json'), '{}');
+
+        // Simulated user history that MUST survive.
+        const sessionDir = path.join(versionDir, historyDir);
+        fs.mkdirSync(sessionDir, { recursive: true });
+        const sessionFile = path.join(sessionDir, 'session.jsonl');
+        fs.writeFileSync(sessionFile, '{"type":"user"}\n');
+
+        expect(removeVersion(agent, testVersion)).toBe(true);
+
+        expect(fs.existsSync(path.join(versionDir, 'node_modules'))).toBe(false);
+        expect(fs.existsSync(path.join(versionDir, 'package.json'))).toBe(false);
+        expect(fs.existsSync(path.join(versionDir, 'package-lock.json'))).toBe(false);
+
+        expect(fs.existsSync(sessionFile)).toBe(true);
+      } finally {
+        // Clean up the preserved home/ left behind by removeVersion.
+        if (fs.existsSync(versionDir)) {
+          fs.rmSync(versionDir, { recursive: true, force: true });
+        }
+      }
+    });
+  }
 });
