@@ -1,0 +1,171 @@
+/**
+ * Agent Client Protocol (ACP) client wrapper for agents-cli.
+ *
+ * Spawns an ACP-capable agent CLI as a stdio subprocess and drives it through
+ * initialize -> newSession -> prompt, streaming `session/update` notifications
+ * back to the caller as async iterables.
+ *
+ * Also implements the Client interface (fs read/write, terminal exec) so the
+ * agent can request filesystem and shell operations through us. `--mode plan`
+ * rejects all write/terminal requests; `edit`/`full` allow them.
+ */
+
+import { spawn, type ChildProcess } from 'child_process';
+import { Readable, Writable } from 'stream';
+import { promises as fs } from 'fs';
+import * as path from 'path';
+import {
+  ClientSideConnection,
+  ndJsonStream,
+  type Client,
+  type Agent,
+  type InitializeResponse,
+  type NewSessionResponse,
+  type PromptResponse,
+  type SessionNotification,
+  type WriteTextFileRequest,
+  type WriteTextFileResponse,
+  type ReadTextFileRequest,
+  type ReadTextFileResponse,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+  type CreateTerminalRequest,
+  type CreateTerminalResponse,
+} from '@zed-industries/agent-client-protocol';
+import { getAcpSpec, supportsAcp } from './harnesses.js';
+import type { AgentId } from '../types.js';
+import type { ExecMode } from '../exec.js';
+
+const PROTOCOL_VERSION = 1;
+
+export interface AcpRunOptions {
+  agent: AgentId;
+  prompt: string;
+  cwd: string;
+  mode: ExecMode;
+  /** Optional: callback invoked for every session/update notification. */
+  onUpdate?: (n: SessionNotification) => void;
+}
+
+export interface AcpRunResult {
+  stopReason: string;
+  sessionId: string;
+}
+
+/**
+ * Runs a single prompt turn against an ACP-capable agent and streams updates
+ * to `onUpdate`. Resolves when the turn completes (StopReason is returned).
+ */
+export async function runAcp(opts: AcpRunOptions): Promise<AcpRunResult> {
+  if (!supportsAcp(opts.agent)) {
+    throw new Error(`Agent '${opts.agent}' does not support ACP. Use direct exec instead.`);
+  }
+  const spec = getAcpSpec(opts.agent)!;
+
+  const child: ChildProcess = spawn(spec.command, spec.args, {
+    cwd: opts.cwd,
+    stdio: ['pipe', 'pipe', 'inherit'],
+    env: process.env,
+  });
+
+  const stream = ndJsonStream(
+    Writable.toWeb(child.stdin!) as WritableStream<Uint8Array>,
+    Readable.toWeb(child.stdout!) as ReadableStream<Uint8Array>,
+  );
+
+  const client: Client = buildClient(opts);
+
+  const connection: Agent = new ClientSideConnection(() => client, stream);
+
+  const initResp: InitializeResponse = await connection.initialize({
+    protocolVersion: PROTOCOL_VERSION,
+    clientCapabilities: {
+      fs: { readTextFile: true, writeTextFile: true },
+      terminal: true,
+    },
+  });
+
+  if (initResp.protocolVersion < PROTOCOL_VERSION) {
+    throw new Error(
+      `Agent '${opts.agent}' speaks ACP protocol v${initResp.protocolVersion}, need v${PROTOCOL_VERSION}.`,
+    );
+  }
+
+  const session: NewSessionResponse = await connection.newSession({
+    cwd: opts.cwd,
+    mcpServers: [],
+  });
+
+  try {
+    const resp: PromptResponse = await connection.prompt({
+      sessionId: session.sessionId,
+      prompt: [{ type: 'text', text: opts.prompt }],
+    });
+    return { stopReason: resp.stopReason, sessionId: session.sessionId };
+  } finally {
+    child.kill('SIGTERM');
+  }
+}
+
+function buildClient(opts: AcpRunOptions): Client {
+  const { mode, onUpdate, cwd } = opts;
+  const canWrite = mode !== 'plan';
+
+  return {
+    async sessionUpdate(params: SessionNotification): Promise<void> {
+      if (onUpdate) onUpdate(params);
+    },
+
+    async readTextFile(params: ReadTextFileRequest): Promise<ReadTextFileResponse> {
+      const abs = resolveInCwd(cwd, params.path);
+      const content = await fs.readFile(abs, 'utf8');
+      const sliced = sliceByLines(content, params.line, params.limit);
+      return { content: sliced };
+    },
+
+    async writeTextFile(params: WriteTextFileRequest): Promise<WriteTextFileResponse> {
+      if (!canWrite) {
+        throw new Error(`File writes are denied in plan mode: ${params.path}`);
+      }
+      const abs = resolveInCwd(cwd, params.path);
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(abs, params.content, 'utf8');
+      return {};
+    },
+
+    async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+      const optionId = mode === 'full'
+        ? (params.options.find(o => o.kind === 'allow_always')?.optionId
+            ?? params.options[0]?.optionId)
+        : params.options.find(o => o.kind === 'allow_once')?.optionId;
+      if (!optionId) {
+        return { outcome: { outcome: 'cancelled' } };
+      }
+      return { outcome: { outcome: 'selected', optionId } };
+    },
+
+    async createTerminal(params: CreateTerminalRequest): Promise<CreateTerminalResponse> {
+      if (!canWrite) {
+        throw new Error(`Terminal commands are denied in plan mode: ${params.command}`);
+      }
+      throw new Error('Terminal support not yet implemented in agents-cli ACP client.');
+    },
+  };
+}
+
+function resolveInCwd(cwd: string, target: string): string {
+  const abs = path.resolve(cwd, target);
+  const rel = path.relative(cwd, abs);
+  if (rel.startsWith('..')) {
+    throw new Error(`Path '${target}' escapes session cwd '${cwd}'`);
+  }
+  return abs;
+}
+
+function sliceByLines(content: string, startLine?: number | null, limit?: number | null): string {
+  if (startLine == null && limit == null) return content;
+  const lines = content.split('\n');
+  const from = Math.max(0, (startLine ?? 1) - 1);
+  const to = limit != null ? from + limit : lines.length;
+  return lines.slice(from, to).join('\n');
+}

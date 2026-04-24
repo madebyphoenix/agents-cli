@@ -41,6 +41,7 @@ interface ExecCommandActionOptions {
   timeout?: string;
   fallback?: string;
   rotate?: boolean;
+  acp?: boolean;
 }
 
 /** Type guard that narrows a string to a known AgentId. */
@@ -95,6 +96,10 @@ export function registerRunCommand(program: Command): void {
     .option(
       '-r, --rotate',
       'Rotate across installed versions of the agent. Picks the signed-in, not-out-of-credits account with the oldest last-active timestamp. Ignored when @version is pinned.',
+    )
+    .option(
+      '--acp',
+      'Route through the Agent Client Protocol instead of direct exec. Supported for gemini, claude (via @zed-industries/claude-code-acp adapter). Unified event stream; emits ndjson when --json.',
     )
     .addHelpText('after', `
 Modes:
@@ -279,6 +284,36 @@ Examples:
             process.exit(1);
           }
           fallback.push({ agent: fbAgent, version: fbVersion || undefined });
+        }
+      }
+
+      if (options.acp) {
+        if (prompt === undefined) {
+          console.error(chalk.red('--acp requires a prompt. ACP is a programmatic protocol; interactive TUI sessions still use the native CLI.'));
+          process.exit(1);
+        }
+        if (fallback.length > 0) {
+          console.error(chalk.red('--acp is not compatible with --fallback yet. Drop one.'));
+          process.exit(1);
+        }
+        const { supportsAcp } = await import('../lib/acp/harnesses.js');
+        if (!supportsAcp(agent)) {
+          console.error(chalk.red(`Agent '${agent}' does not support ACP. Drop --acp to use direct exec.`));
+          process.exit(1);
+        }
+        const { runAcpHeadless } = await import('../lib/acp/run.js');
+        try {
+          const exitCode = await runAcpHeadless({
+            agent,
+            prompt,
+            cwd: options.cwd ?? process.cwd(),
+            mode,
+            json: options.json ?? false,
+          });
+          process.exit(exitCode);
+        } catch (err) {
+          console.error(chalk.red(`ACP run failed for ${agent}: ${(err as Error).message}`));
+          process.exit(1);
         }
       }
 
