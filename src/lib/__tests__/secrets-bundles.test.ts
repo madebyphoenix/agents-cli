@@ -115,7 +115,7 @@ describe('describeBundle + resolveBundleEnv', () => {
 
   it('resolveBundleEnv wraps missing-keychain errors with the remediation hint', () => {
     const bundle = b({ MISSING: 'keychain:NEVER_SET' });
-    expect(() => resolveBundleEnv(bundle)).toThrow(/agents secrets set unit MISSING/);
+    expect(() => resolveBundleEnv(bundle)).toThrow(/agents secrets add unit MISSING/);
   });
 
   it('keychainItemsForBundle enumerates keychain-backed keys only', () => {

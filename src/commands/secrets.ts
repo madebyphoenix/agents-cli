@@ -41,6 +41,80 @@ async function promptForSecret(message: string): Promise<string> {
   return await password({ message, mask: true });
 }
 
+/** Prompt the user to pick an existing bundle by name. Requires an interactive TTY. */
+async function pickBundleName(action: string): Promise<string> {
+  const bundles = listBundles();
+  if (bundles.length === 0) {
+    throw new Error('No secrets bundles configured. Try: agents secrets create <name>');
+  }
+  if (!isInteractiveTerminal()) {
+    throw new Error('A bundle name is required. Pass it as an argument or run from a TTY.');
+  }
+  const { select } = await import('@inquirer/prompts');
+  return await select({
+    message: `Which bundle to ${action}?`,
+    choices: bundles.map((b) => ({
+      name: b.name,
+      value: b.name,
+      description: b.description || undefined,
+    })),
+  });
+}
+
+/** Prompt the user to type a new bundle name. Requires an interactive TTY. */
+async function promptBundleName(): Promise<string> {
+  if (!isInteractiveTerminal()) {
+    throw new Error('A bundle name is required. Pass it as an argument or run from a TTY.');
+  }
+  const { input } = await import('@inquirer/prompts');
+  return await input({
+    message: 'Bundle name',
+    validate: (value: string) => {
+      try {
+        validateBundleName(value);
+        return true;
+      } catch (err) {
+        return (err as Error).message;
+      }
+    },
+  });
+}
+
+/** Prompt the user to pick an existing key from a bundle. Requires an interactive TTY. */
+async function pickKey(bundle: SecretsBundle, action: string): Promise<string> {
+  const keys = Object.keys(bundle.vars);
+  if (keys.length === 0) {
+    throw new Error(`Bundle '${bundle.name}' has no keys.`);
+  }
+  if (!isInteractiveTerminal()) {
+    throw new Error('A key name is required. Pass it as an argument or run from a TTY.');
+  }
+  const { select } = await import('@inquirer/prompts');
+  return await select({
+    message: `Which key to ${action}?`,
+    choices: keys.map((k) => ({ name: k, value: k })),
+  });
+}
+
+/** Prompt the user to type a new key name for a bundle. Requires an interactive TTY. */
+async function promptKeyName(bundleName: string): Promise<string> {
+  if (!isInteractiveTerminal()) {
+    throw new Error('A key name is required. Pass it as an argument or run from a TTY.');
+  }
+  const { input } = await import('@inquirer/prompts');
+  return await input({
+    message: `Key name to add to '${bundleName}'`,
+    validate: (value: string) => {
+      try {
+        validateEnvKey(value);
+        return true;
+      } catch (err) {
+        return (err as Error).message;
+      }
+    },
+  });
+}
+
 /** Read all available data from stdin synchronously, trimmed. */
 function readStdinSync(): string {
   const chunks: Buffer[] = [];
@@ -99,7 +173,7 @@ export function registerSecretsCommands(program: Command): void {
       const bundles = listBundles();
       if (bundles.length === 0) {
         console.log(chalk.gray('No secrets bundles configured.'));
-        console.log(chalk.gray('Try: agents secrets add <name>'));
+        console.log(chalk.gray('Try: agents secrets create <name>'));
         return;
       }
       console.log(chalk.bold(`${'NAME'.padEnd(20)} ${'KEYS'.padEnd(6)} ${'SENSITIVE'.padEnd(10)} DESCRIPTION`));
@@ -109,14 +183,15 @@ export function registerSecretsCommands(program: Command): void {
     });
 
   cmd
-    .command('view <name>')
+    .command('view [name]')
     .alias('show')
     .description('Show a bundle. Keychain values are masked by default — pass --reveal to see them.')
     .option('--reveal', 'Print keychain-backed values in the clear (TTY only unless --plaintext)')
     .option('--plaintext', 'Allow --reveal in non-interactive shells (use with care)')
-    .action((name: string, opts: { reveal?: boolean; plaintext?: boolean }) => {
+    .action(async (name: string | undefined, opts: { reveal?: boolean; plaintext?: boolean }) => {
       try {
-        const bundle = readBundle(name);
+        const resolvedName = name ?? (await pickBundleName('view'));
+        const bundle = readBundle(resolvedName);
         const entries = describeBundle(bundle);
         console.log(chalk.bold(bundle.name));
         if (bundle.description) console.log(chalk.gray(bundle.description));
@@ -157,101 +232,35 @@ export function registerSecretsCommands(program: Command): void {
           }
         }
       } catch (err) {
+        if (isPromptCancelled(err)) return;
         console.error(chalk.red((err as Error).message));
         process.exit(1);
       }
     });
 
   cmd
-    .command('add <name>')
+    .command('create [name]')
     .description('Create an empty bundle')
     .option('--description <text>', 'Free-form description')
     .option('--allow-exec', 'Allow exec: refs in this bundle (off by default)')
     .option('--force', 'Overwrite an existing bundle')
-    .action((name: string, opts: { description?: string; allowExec?: boolean; force?: boolean }) => {
+    .action(async (name: string | undefined, opts: { description?: string; allowExec?: boolean; force?: boolean }) => {
       try {
-        validateBundleName(name);
-        if (bundleExists(name) && !opts.force) {
-          console.error(chalk.red(`Bundle '${name}' already exists. Use --force to overwrite.`));
+        const resolvedName = name ?? (await promptBundleName());
+        validateBundleName(resolvedName);
+        if (bundleExists(resolvedName) && !opts.force) {
+          console.error(chalk.red(`Bundle '${resolvedName}' already exists. Use --force to overwrite.`));
           process.exit(1);
         }
         const bundle: SecretsBundle = {
-          name,
+          name: resolvedName,
           description: opts.description,
           allow_exec: opts.allowExec,
           vars: {},
         };
         writeBundle(bundle);
-        console.log(chalk.green(`Bundle '${name}' created.`));
-        console.log(chalk.gray(`Try: agents secrets set ${name} MY_KEY`));
-      } catch (err) {
-        console.error(chalk.red((err as Error).message));
-        process.exit(1);
-      }
-    });
-
-  cmd
-    .command('set <bundle> <key>')
-    .description('Set a variable. Defaults to keychain-backed; pass --value for literal, --env/--file/--exec for refs.')
-    .option('--value <v>', 'Store as a plaintext literal in the YAML (non-sensitive values only)')
-    .option('--value-stdin', 'Read the value from stdin (stored in keychain unless combined with --value)')
-    .option('--env <VAR>', 'Store as an env: ref that reads from the parent process.env at run time')
-    .option('--file <path>', 'Store as a file: ref that reads from a file at run time')
-    .option('--exec <cmd>', 'Store as an exec: ref that runs a command at run time (requires allow_exec)')
-    .action(async (bundleName: string, key: string, opts: {
-      value?: string;
-      valueStdin?: boolean;
-      env?: string;
-      file?: string;
-      exec?: string;
-    }) => {
-      try {
-        validateEnvKey(key);
-        const bundle = readBundle(bundleName);
-        const sources = [opts.value !== undefined, Boolean(opts.env), Boolean(opts.file), Boolean(opts.exec)].filter(Boolean).length;
-        if (sources > 1) {
-          throw new Error('Pick one of: --value, --env, --file, --exec.');
-        }
-        if (opts.env) {
-          bundle.vars[key] = `env:${opts.env}`;
-          writeBundle(bundle);
-          console.log(chalk.green(`${bundleName}.${key} -> env:${opts.env}`));
-          return;
-        }
-        if (opts.file) {
-          bundle.vars[key] = `file:${opts.file}`;
-          writeBundle(bundle);
-          console.log(chalk.green(`${bundleName}.${key} -> file:${opts.file}`));
-          return;
-        }
-        if (opts.exec) {
-          if (!bundle.allow_exec) {
-            throw new Error(`Bundle '${bundleName}' does not allow exec refs. Re-create with --allow-exec.`);
-          }
-          bundle.vars[key] = `exec:${opts.exec}`;
-          writeBundle(bundle);
-          console.log(chalk.green(`${bundleName}.${key} -> exec:${opts.exec}`));
-          return;
-        }
-        if (opts.value !== undefined) {
-          bundle.vars[key] = { value: opts.value };
-          writeBundle(bundle);
-          console.log(chalk.green(`${bundleName}.${key} = <literal>`));
-          return;
-        }
-        // Default path: keychain-backed.
-        let secretValue: string;
-        if (opts.valueStdin) {
-          secretValue = readStdinSync();
-          if (!secretValue) throw new Error('No value received on stdin.');
-        } else {
-          secretValue = await promptForSecret(`Enter value for ${bundleName}.${key}`);
-        }
-        const item = secretsKeychainItem(bundleName, key);
-        setKeychainToken(item, secretValue);
-        bundle.vars[key] = keychainRef(key);
-        writeBundle(bundle);
-        console.log(chalk.green(`${bundleName}.${key} stored in keychain (${item}).`));
+        console.log(chalk.green(`Bundle '${resolvedName}' created.`));
+        console.log(chalk.gray(`Try: agents secrets add ${resolvedName} MY_KEY`));
       } catch (err) {
         if (isPromptCancelled(err)) return;
         console.error(chalk.red((err as Error).message));
@@ -260,68 +269,164 @@ export function registerSecretsCommands(program: Command): void {
     });
 
   cmd
-    .command('unset <bundle> <key>')
-    .description('Remove a key from the bundle. Purges the keychain item if the ref was keychain:. Use --keep-secret to retain it.')
-    .option('--keep-secret', 'Leave the keychain item in place after removing the YAML ref')
-    .action((bundleName: string, key: string, opts: { keepSecret?: boolean }) => {
+    .command('add [bundle] [key]')
+    .description('Add a variable to a bundle. Defaults to keychain-backed; pass --value for literal, --env/--file/--exec for refs.')
+    .option('--value <v>', 'Store as a plaintext literal in the YAML (non-sensitive values only)')
+    .option('--value-stdin', 'Read the value from stdin (stored in keychain unless combined with --value)')
+    .option('--env <VAR>', 'Store as an env: ref that reads from the parent process.env at run time')
+    .option('--file <path>', 'Store as a file: ref that reads from a file at run time')
+    .option('--exec <cmd>', 'Store as an exec: ref that runs a command at run time (requires allow_exec)')
+    .action(async (bundleName: string | undefined, key: string | undefined, opts: {
+      value?: string;
+      valueStdin?: boolean;
+      env?: string;
+      file?: string;
+      exec?: string;
+    }) => {
       try {
-        const bundle = readBundle(bundleName);
-        if (!(key in bundle.vars)) {
-          console.error(chalk.red(`Key '${key}' not found in bundle '${bundleName}'.`));
-          process.exit(1);
+        const resolvedBundleName = bundleName ?? (await pickBundleName('add to'));
+        const bundle = readBundle(resolvedBundleName);
+        const resolvedKey = key ?? (await promptKeyName(resolvedBundleName));
+        validateEnvKey(resolvedKey);
+        const sources = [opts.value !== undefined, Boolean(opts.env), Boolean(opts.file), Boolean(opts.exec)].filter(Boolean).length;
+        if (sources > 1) {
+          throw new Error('Pick one of: --value, --env, --file, --exec.');
         }
-        const raw = bundle.vars[key];
-        delete bundle.vars[key];
-        writeBundle(bundle);
-        if (!opts.keepSecret && typeof raw === 'string' && raw.startsWith('keychain:')) {
-          const item = secretsKeychainItem(bundleName, raw.slice('keychain:'.length));
-          const removed = deleteKeychainToken(item);
-          if (removed) {
-            console.log(chalk.green(`Removed ${bundleName}.${key} and purged keychain item.`));
-            return;
+        if (opts.env) {
+          bundle.vars[resolvedKey] = `env:${opts.env}`;
+          writeBundle(bundle);
+          console.log(chalk.green(`${resolvedBundleName}.${resolvedKey} -> env:${opts.env}`));
+          return;
+        }
+        if (opts.file) {
+          bundle.vars[resolvedKey] = `file:${opts.file}`;
+          writeBundle(bundle);
+          console.log(chalk.green(`${resolvedBundleName}.${resolvedKey} -> file:${opts.file}`));
+          return;
+        }
+        if (opts.exec) {
+          if (!bundle.allow_exec) {
+            throw new Error(`Bundle '${resolvedBundleName}' does not allow exec refs. Re-create with --allow-exec.`);
           }
+          bundle.vars[resolvedKey] = `exec:${opts.exec}`;
+          writeBundle(bundle);
+          console.log(chalk.green(`${resolvedBundleName}.${resolvedKey} -> exec:${opts.exec}`));
+          return;
         }
-        console.log(chalk.green(`Removed ${bundleName}.${key}.`));
+        if (opts.value !== undefined) {
+          bundle.vars[resolvedKey] = { value: opts.value };
+          writeBundle(bundle);
+          console.log(chalk.green(`${resolvedBundleName}.${resolvedKey} = <literal>`));
+          return;
+        }
+        // Default path: keychain-backed.
+        let secretValue: string;
+        if (opts.valueStdin) {
+          secretValue = readStdinSync();
+          if (!secretValue) throw new Error('No value received on stdin.');
+        } else {
+          secretValue = await promptForSecret(`Enter value for ${resolvedBundleName}.${resolvedKey}`);
+        }
+        const item = secretsKeychainItem(resolvedBundleName, resolvedKey);
+        setKeychainToken(item, secretValue);
+        bundle.vars[resolvedKey] = keychainRef(resolvedKey);
+        writeBundle(bundle);
+        console.log(chalk.green(`${resolvedBundleName}.${resolvedKey} stored in keychain (${item}).`));
       } catch (err) {
+        if (isPromptCancelled(err)) return;
         console.error(chalk.red((err as Error).message));
         process.exit(1);
       }
     });
 
   cmd
-    .command('rm <name>')
-    .alias('remove')
+    .command('remove [bundle] [key]')
+    .description('Remove a key from the bundle. Purges the keychain item if the ref was keychain:. Use --keep-secret to retain it.')
+    .option('--keep-secret', 'Leave the keychain item in place after removing the YAML ref')
+    .action(async (bundleName: string | undefined, key: string | undefined, opts: { keepSecret?: boolean }) => {
+      try {
+        const resolvedBundleName = bundleName ?? (await pickBundleName('remove from'));
+        const bundle = readBundle(resolvedBundleName);
+        const resolvedKey = key ?? (await pickKey(bundle, 'remove'));
+        if (!(resolvedKey in bundle.vars)) {
+          console.error(chalk.red(`Key '${resolvedKey}' not found in bundle '${resolvedBundleName}'.`));
+          process.exit(1);
+        }
+        const raw = bundle.vars[resolvedKey];
+        delete bundle.vars[resolvedKey];
+        writeBundle(bundle);
+        if (!opts.keepSecret && typeof raw === 'string' && raw.startsWith('keychain:')) {
+          const item = secretsKeychainItem(resolvedBundleName, raw.slice('keychain:'.length));
+          const removed = deleteKeychainToken(item);
+          if (removed) {
+            console.log(chalk.green(`Removed ${resolvedBundleName}.${resolvedKey} and purged keychain item.`));
+            return;
+          }
+        }
+        console.log(chalk.green(`Removed ${resolvedBundleName}.${resolvedKey}.`));
+      } catch (err) {
+        if (isPromptCancelled(err)) return;
+        console.error(chalk.red((err as Error).message));
+        process.exit(1);
+      }
+    });
+
+  cmd
+    .command('delete [name]')
     .description('Delete a bundle and purge all its keychain items (use --keep-secrets to retain them).')
     .option('--keep-secrets', 'Leave keychain items in place after deleting the bundle file')
-    .action((name: string, opts: { keepSecrets?: boolean }) => {
+    .option('-y, --yes', 'Skip the confirmation prompt')
+    .action(async (name: string | undefined, opts: { keepSecrets?: boolean; yes?: boolean }) => {
       try {
-        const bundle = readBundle(name);
+        const resolvedName = name ?? (await pickBundleName('delete'));
+        const bundle = readBundle(resolvedName);
+        if (!opts.yes) {
+          if (!isInteractiveTerminal()) {
+            console.error(chalk.red(`Refusing to delete '${resolvedName}' without --yes in a non-interactive shell.`));
+            process.exit(1);
+          }
+          const keychainCount = describeBundle(bundle).filter((e) => e.kind === 'keychain').length;
+          const suffix = keychainCount && !opts.keepSecrets
+            ? ` and purge ${keychainCount} keychain item${keychainCount === 1 ? '' : 's'}`
+            : '';
+          const { confirm } = await import('@inquirer/prompts');
+          const proceed = await confirm({
+            message: `Delete bundle '${resolvedName}'${suffix}?`,
+            default: false,
+          });
+          if (!proceed) {
+            console.log(chalk.gray('Cancelled.'));
+            return;
+          }
+        }
         if (!opts.keepSecrets) {
           for (const { item } of keychainItemsForBundle(bundle)) {
             deleteKeychainToken(item);
           }
         }
-        const existed = deleteBundle(name);
+        const existed = deleteBundle(resolvedName);
         if (!existed) {
-          console.error(chalk.red(`Bundle '${name}' not found.`));
+          console.error(chalk.red(`Bundle '${resolvedName}' not found.`));
           process.exit(1);
         }
-        console.log(chalk.green(`Bundle '${name}' removed.`));
+        console.log(chalk.green(`Bundle '${resolvedName}' deleted.`));
       } catch (err) {
+        if (isPromptCancelled(err)) return;
         console.error(chalk.red((err as Error).message));
         process.exit(1);
       }
     });
 
   cmd
-    .command('import <bundle>')
+    .command('import [bundle]')
     .description('Import keys from a .env file into a bundle. By default every key is stored in keychain.')
     .requiredOption('--from <path>', 'Path to a .env file')
     .option('--all-plaintext', 'Store every imported value as a YAML literal (skip keychain prompts)')
     .option('--force', 'Overwrite an existing key in the bundle')
-    .action((bundleName: string, opts: { from: string; allPlaintext?: boolean; force?: boolean }) => {
+    .action(async (bundleName: string | undefined, opts: { from: string; allPlaintext?: boolean; force?: boolean }) => {
       try {
-        const bundle = readBundle(bundleName);
+        const resolvedBundleName = bundleName ?? (await pickBundleName('import into'));
+        const bundle = readBundle(resolvedBundleName);
         const raw = fs.readFileSync(opts.from, 'utf-8');
         const pairs = parseDotenv(raw);
         let added = 0;
@@ -334,7 +439,7 @@ export function registerSecretsCommands(program: Command): void {
           if (opts.allPlaintext) {
             bundle.vars[key] = { value };
           } else {
-            const item = secretsKeychainItem(bundleName, key);
+            const item = secretsKeychainItem(resolvedBundleName, key);
             setKeychainToken(item, value);
             bundle.vars[key] = keychainRef(key);
           }
@@ -343,19 +448,21 @@ export function registerSecretsCommands(program: Command): void {
         writeBundle(bundle);
         console.log(chalk.green(`Imported ${added} key(s)${skipped ? `, skipped ${skipped} (already set, pass --force)` : ''}.`));
       } catch (err) {
+        if (isPromptCancelled(err)) return;
         console.error(chalk.red((err as Error).message));
         process.exit(1);
       }
     });
 
   cmd
-    .command('export <bundle>')
+    .command('export [bundle]')
     .description('Resolve a bundle and print KEY=VALUE lines (for `eval "$(agents secrets export prod)"`). Refuses on a TTY unless --plaintext.')
     .option('--plaintext', 'Acknowledge that the resolved values will be printed in the clear')
-    .action(async (bundleName: string, opts: { plaintext?: boolean }) => {
+    .action(async (bundleName: string | undefined, opts: { plaintext?: boolean }) => {
       try {
         const { resolveBundleEnv } = await import('../lib/secrets-bundles.js');
-        const bundle = readBundle(bundleName);
+        const resolvedBundleName = bundleName ?? (await pickBundleName('export'));
+        const bundle = readBundle(resolvedBundleName);
         if (isInteractiveTerminal() && !opts.plaintext) {
           console.error(chalk.red('export to a TTY requires --plaintext (prevents shoulder-surfing).'));
           process.exit(1);
@@ -366,6 +473,7 @@ export function registerSecretsCommands(program: Command): void {
           process.stdout.write(`export ${k}='${escaped}'\n`);
         }
       } catch (err) {
+        if (isPromptCancelled(err)) return;
         console.error(chalk.red((err as Error).message));
         process.exit(1);
       }

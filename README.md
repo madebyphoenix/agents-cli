@@ -234,9 +234,9 @@ Team state is observable via `agents teams list --json` / `agents teams status -
 
 ```bash
 # API keys in Keychain, not in .env files.
-agents secrets add prod-stripe
-agents secrets set prod-stripe STRIPE_SECRET_KEY     # Prompts, stores in Keychain
-agents secrets set prod-stripe TEST_CARD --value "4242..."
+agents secrets create prod-stripe
+agents secrets add prod-stripe STRIPE_SECRET_KEY     # Prompts, stores in Keychain
+agents secrets add prod-stripe TEST_CARD --value "4242..."
 
 # Injected at run time. The YAML on disk has only refs.
 agents run claude "charge a test card" --secrets prod-stripe

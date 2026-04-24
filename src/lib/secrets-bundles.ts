@@ -157,7 +157,7 @@ export function resolveBundleEnv(bundle: SecretsBundle): Record<string, string> 
       const msg = (err as Error).message;
       if (parsed.ref.provider === 'keychain' && /not found/.test(msg)) {
         throw new Error(
-          `${msg} Run: agents secrets set ${bundle.name} ${key}`
+          `${msg} Run: agents secrets add ${bundle.name} ${key}`
         );
       }
       throw new Error(`Bundle '${bundle.name}' key '${key}': ${msg}`);
