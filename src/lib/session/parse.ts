@@ -27,6 +27,7 @@ export function parseSession(filePath: string, agent?: SessionAgentId): SessionE
     case 'opencode': return parseOpenCode(filePath);
     case 'rush': return parseRush(filePath);
     case 'openclaw': return []; // OpenClaw sessions don't have parseable files yet
+    case 'hermes': return parseHermes(filePath);
   }
 }
 
@@ -36,6 +37,7 @@ export function detectAgent(filePath: string): SessionAgentId | null {
   if (filePath.includes('/.codex/') || filePath.includes('\\.codex\\')) return 'codex';
   if (filePath.includes('/.gemini/') || filePath.includes('\\.gemini\\')) return 'gemini';
   if (filePath.includes('/.rush/') || filePath.includes('\\.rush\\')) return 'rush';
+  if (filePath.includes('/.hermes/') || filePath.includes('\\.hermes\\')) return 'hermes';
   // Cloud convention: cloud-sessions/<id>/session.<format>.jsonl
   const cloudMatch = filePath.match(/session\.(claude|codex|rush)\.jsonl(?:$|[?#])/);
   if (cloudMatch) return cloudMatch[1] as SessionAgentId;
@@ -795,4 +797,57 @@ export function parseRush(filePath: string): SessionEvent[] {
   }
 
   return events;
+}
+
+// ---------------------------------------------------------------------------
+// Hermes parser
+//
+// Hermes stores one JSON file per session at ~/.hermes/sessions/session_<id>.json:
+//   { session_id, model, platform, session_start, last_updated,
+//     system_prompt, message_count, messages: [{role, content}, ...] }
+// Content may be a string or an array of text parts.
+// ---------------------------------------------------------------------------
+
+/** Parse a Hermes session JSON file into normalized events. */
+export function parseHermes(filePath: string): SessionEvent[] {
+  let session: any;
+  try {
+    session = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return [];
+  }
+
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const timestamp = typeof session.session_start === 'string'
+    ? session.session_start
+    : new Date().toISOString();
+
+  const events: SessionEvent[] = [];
+  for (const msg of messages) {
+    const role = msg?.role === 'user' ? 'user' : 'assistant';
+    const text = hermesContentToText(msg?.content);
+    if (!text) continue;
+    events.push({
+      type: 'message',
+      agent: 'hermes',
+      timestamp,
+      role,
+      content: text,
+    });
+  }
+
+  return events;
+}
+
+function hermesContentToText(content: any): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part: any) => {
+      if (typeof part === 'string') return part;
+      if (typeof part?.text === 'string') return part.text;
+      return '';
+    })
+    .join('\n')
+    .trim();
 }

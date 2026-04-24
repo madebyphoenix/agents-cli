@@ -38,6 +38,8 @@ import {
 
 const HOME = os.homedir();
 const AGENTS_DIR = path.join(HOME, '.agents');
+const RUSH_SESSIONS_DIR = path.join(HOME, '.rush', 'sessions');
+const HERMES_SESSIONS_DIR = path.join(HOME, '.hermes', 'sessions');
 
 /** How long OpenClaw channel/cron snapshots stay valid before we re-shell-out. */
 const OPENCLAW_TTL_MS = 60_000;
@@ -133,6 +135,8 @@ export async function discoverSessions(options?: DiscoverOptions): Promise<Sessi
         case 'gemini': return scanGeminiIncremental(onProgress);
         case 'opencode': return scanOpenCodeIncremental();
         case 'openclaw': return scanOpenClawIncremental();
+        case 'rush': return scanRushIncremental(onProgress);
+        case 'hermes': return scanHermesIncremental(onProgress);
       }
     }),
   );
@@ -165,7 +169,9 @@ function buildQueryOptions(
   let cwdPrefixFilter: string | undefined;
   if (options?.cwdPrefix) {
     cwdPrefixFilter = normalizeCwd(options.cwdPrefix);
-  } else if (!options?.all && !projectQuery) {
+  } else if (!options?.all && !projectQuery && options?.agent !== 'rush' && options?.agent !== 'hermes') {
+    // Rush and Hermes sessions are cloud/gateway-bound and have no cwd — skip
+    // cwd filtering when the user explicitly asked for them.
     cwdFilter = normalizeCwd(options?.cwd || process.cwd());
   }
 
@@ -1052,6 +1058,282 @@ async function scanOpenClawIncremental(): Promise<void> {
 
   upsertSessionsBatch(entries);
   db.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES ('openclaw_last_scan_ms', ?)`).run(String(Date.now()));
+}
+
+// ---------------------------------------------------------------------------
+// Rush
+//
+// Rush sessions live at ~/.rush/sessions/<session-id>/messages.jsonl.
+// Each line is { id, session_id, agent_id, role, type, content, created_at, ... }.
+// The directory name is the canonical session id. Rush sessions are cloud-bound
+// (not tied to a local cwd), so cwd is left unset.
+// ---------------------------------------------------------------------------
+
+interface RushSessionScan {
+  timestamp?: string;
+  topic?: string;
+  agentId?: string;
+  messageCount: number;
+  contentText?: string;
+}
+
+/** Incrementally re-scan changed Rush session files and upsert into the DB. */
+async function scanRushIncremental(onProgress?: (p: ScanProgress) => void): Promise<void> {
+  if (!fs.existsSync(RUSH_SESSIONS_DIR)) return;
+
+  const filePaths: string[] = [];
+  let dirNames: string[];
+  try {
+    dirNames = fs.readdirSync(RUSH_SESSIONS_DIR);
+  } catch {
+    return;
+  }
+
+  for (const dirName of dirNames) {
+    const sessionDir = path.join(RUSH_SESSIONS_DIR, dirName);
+    const stat = safeStatSync(sessionDir);
+    if (!stat?.isDirectory()) continue;
+    const messagesPath = path.join(sessionDir, 'messages.jsonl');
+    if (!fs.existsSync(messagesPath)) continue;
+    filePaths.push(messagesPath);
+  }
+
+  const changed = filterChangedFiles(filePaths);
+  if (changed.length === 0) return;
+
+  onProgress?.({ agent: 'rush', parsed: 0, total: changed.length });
+
+  const entries: ScanEntry[] = [];
+  const touched: Array<{ filePath: string; scan: ScanStamp }> = [];
+  let parsed = 0;
+  for (const { filePath, scan } of changed) {
+    try {
+      const sessionId = path.basename(path.dirname(filePath));
+      const result = await readRushMeta(filePath, sessionId);
+      if (result) {
+        entries.push({ meta: result.meta, content: result.content, scan });
+      } else {
+        touched.push({ filePath, scan });
+      }
+    } catch {
+      touched.push({ filePath, scan });
+    }
+    parsed++;
+    onProgress?.({ agent: 'rush', parsed, total: changed.length });
+  }
+
+  upsertSessionsBatch(entries);
+  recordScans(touched);
+}
+
+/** Stream-parse a single Rush messages.jsonl file to extract session metadata. */
+async function readRushMeta(
+  filePath: string,
+  sessionId: string,
+): Promise<{ meta: SessionMeta; content: string } | null> {
+  const scan = await scanRushSession(filePath);
+
+  const stat = safeStatSync(filePath);
+  const timestamp = scan.timestamp
+    || (stat ? stat.mtime.toISOString() : new Date().toISOString());
+
+  const shortId = sessionId.replace(/^session_/, '').slice(0, 8);
+
+  const meta: SessionMeta = {
+    id: sessionId,
+    shortId,
+    agent: 'rush',
+    timestamp,
+    project: scan.agentId,
+    filePath,
+    topic: scan.topic,
+    messageCount: scan.messageCount,
+  };
+
+  return { meta, content: scan.contentText || '' };
+}
+
+/** Stream a Rush messages.jsonl file and extract scan-level metadata. */
+async function scanRushSession(filePath: string): Promise<RushSessionScan> {
+  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+  let timestamp: string | undefined;
+  let topic: string | undefined;
+  let agentId: string | undefined;
+  let messageCount = 0;
+  const userTexts: string[] = [];
+
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      if (!timestamp && typeof parsed.created_at === 'string') {
+        timestamp = parsed.created_at;
+      }
+      if (!agentId && typeof parsed.agent_id === 'string') {
+        agentId = parsed.agent_id;
+      }
+
+      if (parsed.type !== 'message') continue;
+      const text = typeof parsed.content?.text === 'string' ? parsed.content.text.trim() : '';
+      if (!text) continue;
+
+      const cleaned = text
+        .replace(/^<user_input>/, '')
+        .replace(/<\/user_input>$/, '')
+        .trim();
+      if (!cleaned) continue;
+      if (parsed.role === 'system' && cleaned === 'execution_start') continue;
+
+      messageCount++;
+      if (parsed.role === 'user') {
+        userTexts.push(cleaned);
+        if (!topic) topic = extractSessionTopic(cleaned);
+      }
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+
+  return {
+    timestamp,
+    topic,
+    agentId,
+    messageCount,
+    contentText: userTexts.length > 0 ? userTexts.join('\n') : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Hermes
+//
+// Hermes sessions live at ~/.hermes/sessions/session_<id>.json (one JSON
+// file per session). Shape:
+//   { session_id, model, platform, session_start, last_updated,
+//     system_prompt, message_count, messages: [{role, content}, ...] }
+// request_dump_*.json files in the same dir are per-turn debug dumps — skip.
+// Hermes is a gateway/API agent, so cwd is left unset.
+// ---------------------------------------------------------------------------
+
+/** Incrementally re-scan changed Hermes session files and upsert into the DB. */
+async function scanHermesIncremental(onProgress?: (p: ScanProgress) => void): Promise<void> {
+  if (!fs.existsSync(HERMES_SESSIONS_DIR)) return;
+
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(HERMES_SESSIONS_DIR);
+  } catch {
+    return;
+  }
+
+  const filePaths: string[] = [];
+  for (const name of entries) {
+    if (!name.startsWith('session_') || !name.endsWith('.json')) continue;
+    filePaths.push(path.join(HERMES_SESSIONS_DIR, name));
+  }
+
+  const changed = filterChangedFiles(filePaths);
+  if (changed.length === 0) return;
+
+  onProgress?.({ agent: 'hermes', parsed: 0, total: changed.length });
+
+  const scanEntries: ScanEntry[] = [];
+  const touched: Array<{ filePath: string; scan: ScanStamp }> = [];
+  const seen = new Set<string>();
+  let parsed = 0;
+  for (const { filePath, scan } of changed) {
+    try {
+      const result = readHermesMeta(filePath);
+      if (result && !seen.has(result.meta.id)) {
+        seen.add(result.meta.id);
+        scanEntries.push({ meta: result.meta, content: result.content, scan });
+      } else {
+        touched.push({ filePath, scan });
+      }
+    } catch {
+      touched.push({ filePath, scan });
+    }
+    parsed++;
+    onProgress?.({ agent: 'hermes', parsed, total: changed.length });
+  }
+
+  upsertSessionsBatch(scanEntries);
+  recordScans(touched);
+}
+
+/** Parse a single Hermes session JSON file to extract session metadata. */
+function readHermesMeta(filePath: string): { meta: SessionMeta; content: string } | null {
+  let session: any;
+  try {
+    session = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+
+  const sessionId = typeof session.session_id === 'string' ? session.session_id : '';
+  if (!sessionId) return null;
+
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const userTexts: string[] = [];
+  let topic: string | undefined;
+  let messageCount = 0;
+  for (const msg of messages) {
+    const text = extractHermesMessageText(msg?.content);
+    if (!text) continue;
+    messageCount++;
+    if (msg?.role === 'user') {
+      userTexts.push(text);
+      if (!topic) topic = extractSessionTopic(text);
+    }
+  }
+
+  const stat = safeStatSync(filePath);
+  const timestamp = typeof session.last_updated === 'string'
+    ? session.last_updated
+    : typeof session.session_start === 'string'
+      ? session.session_start
+      : stat ? stat.mtime.toISOString() : new Date().toISOString();
+
+  const shortId = sessionId.replace(/^api-/, '').slice(0, 8);
+  const model = typeof session.model === 'string' ? session.model : undefined;
+  const platform = typeof session.platform === 'string' ? session.platform : undefined;
+
+  const meta: SessionMeta = {
+    id: sessionId,
+    shortId,
+    agent: 'hermes',
+    timestamp,
+    project: platform,
+    filePath,
+    version: model,
+    topic,
+    messageCount: messageCount || (typeof session.message_count === 'number' ? session.message_count : undefined),
+  };
+
+  return { meta, content: userTexts.join('\n') };
+}
+
+/** Extract plain text from a Hermes message content field (string or list of parts). */
+function extractHermesMessageText(content: any): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((part: any) => {
+      if (typeof part === 'string') return part;
+      if (typeof part?.text === 'string') return part.text;
+      return '';
+    })
+    .join('\n')
+    .trim();
 }
 
 /** Stream a Claude JSONL file and extract scan-level metadata (timestamp, cwd, topic, tokens). */

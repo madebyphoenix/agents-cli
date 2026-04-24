@@ -8,10 +8,10 @@
  */
 
 /** Agents that store session data on disk and can be discovered by `agents sessions`. */
-export type SessionAgentId = 'claude' | 'codex' | 'gemini' | 'opencode' | 'openclaw' | 'rush';
+export type SessionAgentId = 'claude' | 'codex' | 'gemini' | 'opencode' | 'openclaw' | 'rush' | 'hermes';
 
 /** All agents with session discovery support, in display order. */
-export const SESSION_AGENTS: SessionAgentId[] = ['claude', 'codex', 'gemini', 'opencode', 'openclaw', 'rush'];
+export const SESSION_AGENTS: SessionAgentId[] = ['claude', 'codex', 'gemini', 'opencode', 'openclaw', 'rush', 'hermes'];
 
 /** A single normalized event within a session (message, tool call, thinking, etc.). */
 export interface SessionEvent {

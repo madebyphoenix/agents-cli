@@ -746,7 +746,8 @@ export function buildResumeCommand(session: SessionMeta, activeVersion?: string)
     case 'gemini':
     case 'openclaw':
     case 'rush':
-      // Rush cloud sessions are captured artifacts, not resumable locally.
+    case 'hermes':
+      // Rush and Hermes sessions are captured artifacts, not resumable locally.
       return null;
   }
 }
