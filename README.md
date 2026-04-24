@@ -136,6 +136,17 @@ agents run claude "Review PRs merged this week, summarize risks" \
 
 Supports plan (read-only) and edit modes, effort levels, JSON output for scripting, and timeout limits.
 
+### One protocol, every harness
+
+```bash
+# Typed event stream instead of raw stdout. Same command, any supported agent.
+agents run claude "review this diff" --acp --json
+```
+
+`--acp` routes through the [Agent Client Protocol](https://agentclientprotocol.com/) so you get a unified event stream -- `agent_message_chunk`, `tool_call`, `plan_update`, `stop_reason` -- instead of writing a parser per CLI. File writes and shell commands flow through agents-cli, which means `--mode plan` becomes a real sandbox: the write RPC is denied, not just unused.
+
+Works today with claude, codex, gemini, cursor, opencode, openclaw. Other harnesses keep running on the direct-exec path.
+
 ---
 
 ## Sessions across agents
