@@ -92,4 +92,26 @@ describe('pickRotateCandidate', () => {
     expect(result!.picked.version).toBe('2.1.113');
     expect(result!.healthy).toHaveLength(2);
   });
+
+  it('distributes across tied candidates so parallel callers fan out', () => {
+    // All four fresh installs (lastActive: null → all sort to time 0).
+    // Without jitter, every caller picks the same version. With jitter,
+    // each version should be picked at least 5% of the time over 1000 runs.
+    const versions = ['2.1.110', '2.1.111', '2.1.112', '2.1.113'];
+    const counts: Record<string, number> = {};
+    for (const v of versions) counts[v] = 0;
+
+    const iterations = 1000;
+    for (let i = 0; i < iterations; i++) {
+      const result = pickRotateCandidate(
+        versions.map((v) => cand({ version: v, lastActive: null })),
+      );
+      counts[result!.picked.version] += 1;
+    }
+
+    for (const v of versions) {
+      const ratio = counts[v] / iterations;
+      expect(ratio).toBeGreaterThan(0.05);
+    }
+  });
 });

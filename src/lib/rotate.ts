@@ -33,8 +33,11 @@ export interface RotateResult {
  * next run. Kept separate from I/O so it can be unit-tested with fixtures.
  *
  * Eligibility: signed in (email present) and not out of credits.
- * Tie-break: least-recently-active wins. Never-used versions sort oldest
+ * Primary order: least-recently-active wins. Never-used versions sort oldest
  * so fresh installs are tried before recently-used ones.
+ * Tie-break: random — when two candidates share a `lastActive` timestamp
+ * (common when N pods read the same snapshot), distribute across them so
+ * parallel callers fan out instead of all picking the same version.
  */
 export function pickRotateCandidate(candidates: RotateCandidate[]): RotateResult | null {
   const healthy: RotateCandidate[] = [];
@@ -60,7 +63,8 @@ export function pickRotateCandidate(candidates: RotateCandidate[]): RotateResult
   const sorted = [...healthy].sort((a, b) => {
     const ta = a.lastActive ? a.lastActive.getTime() : 0;
     const tb = b.lastActive ? b.lastActive.getTime() : 0;
-    return ta - tb;
+    if (ta !== tb) return ta - tb;
+    return Math.random() - 0.5;
   });
 
   return { picked: sorted[0], healthy: sorted, excluded };
