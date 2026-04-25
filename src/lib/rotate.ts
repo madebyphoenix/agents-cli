@@ -33,6 +33,11 @@ export interface RotateResult {
  * next run. Kept separate from I/O so it can be unit-tested with fixtures.
  *
  * Eligibility: signed in (email present) and not out of credits.
+ * Dedupe: when multiple versions share an email (same Anthropic account
+ * installed under several agent versions), collapse to one candidate per
+ * email — the least-recently-active version. Without this, two parallel
+ * pods could "rotate" to different versions but hit the same account and
+ * both 429 against the same Anthropic quota.
  * Primary order: least-recently-active wins. Never-used versions sort oldest
  * so fresh installs are tried before recently-used ones.
  * Tie-break: random — when two candidates share a `lastActive` timestamp
@@ -60,7 +65,24 @@ export function pickRotateCandidate(candidates: RotateCandidate[]): RotateResult
 
   if (healthy.length === 0) return null;
 
-  const sorted = [...healthy].sort((a, b) => {
+  const byEmail = new Map<string, RotateCandidate>();
+  for (const c of healthy) {
+    const email = c.email!;
+    const existing = byEmail.get(email);
+    if (!existing) {
+      byEmail.set(email, c);
+      continue;
+    }
+    const tc = c.lastActive ? c.lastActive.getTime() : 0;
+    const te = existing.lastActive ? existing.lastActive.getTime() : 0;
+    if (tc < te) byEmail.set(email, c);
+  }
+  const deduped = [...byEmail.values()];
+  for (const c of healthy) {
+    if (byEmail.get(c.email!) !== c) excluded.push(c);
+  }
+
+  const sorted = deduped.sort((a, b) => {
     const ta = a.lastActive ? a.lastActive.getTime() : 0;
     const tb = b.lastActive ? b.lastActive.getTime() : 0;
     if (ta !== tb) return ta - tb;

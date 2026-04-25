@@ -35,9 +35,9 @@ describe('pickRotateCandidate', () => {
   });
 
   it('picks the least-recently-active healthy candidate', () => {
-    const newest = cand({ version: '2.1.113', lastActive: new Date('2026-04-20T10:00:00Z') });
-    const middle = cand({ version: '2.1.112', lastActive: new Date('2026-04-20T05:00:00Z') });
-    const oldest = cand({ version: '2.1.92', lastActive: new Date('2026-04-16T00:00:00Z') });
+    const newest = cand({ version: '2.1.113', email: 'a@x.com', lastActive: new Date('2026-04-20T10:00:00Z') });
+    const middle = cand({ version: '2.1.112', email: 'b@x.com', lastActive: new Date('2026-04-20T05:00:00Z') });
+    const oldest = cand({ version: '2.1.92', email: 'c@x.com', lastActive: new Date('2026-04-16T00:00:00Z') });
 
     const result = pickRotateCandidate([newest, middle, oldest]);
     expect(result).not.toBeNull();
@@ -85,8 +85,8 @@ describe('pickRotateCandidate', () => {
   });
 
   it('treats rate_limited as healthy (transient, not exhausted)', () => {
-    const rateLimited = cand({ version: '2.1.113', usageStatus: 'rate_limited', lastActive: new Date('2026-04-15T00:00:00Z') });
-    const newer = cand({ version: '2.1.112', lastActive: new Date('2026-04-20T10:00:00Z') });
+    const rateLimited = cand({ version: '2.1.113', email: 'a@x.com', usageStatus: 'rate_limited', lastActive: new Date('2026-04-15T00:00:00Z') });
+    const newer = cand({ version: '2.1.112', email: 'b@x.com', lastActive: new Date('2026-04-20T10:00:00Z') });
 
     const result = pickRotateCandidate([rateLimited, newer]);
     expect(result!.picked.version).toBe('2.1.113');
@@ -94,24 +94,80 @@ describe('pickRotateCandidate', () => {
   });
 
   it('distributes across tied candidates so parallel callers fan out', () => {
-    // All four fresh installs (lastActive: null → all sort to time 0).
-    // Without jitter, every caller picks the same version. With jitter,
-    // each version should be picked at least 5% of the time over 1000 runs.
-    const versions = ['2.1.110', '2.1.111', '2.1.112', '2.1.113'];
+    // All four fresh installs with distinct emails (lastActive: null → all
+    // sort to time 0). Without jitter, every caller picks the same version.
+    // With jitter, each version should be picked at least 5% of the time
+    // over 1000 runs.
+    const accounts = [
+      { version: '2.1.110', email: 'a@x.com' },
+      { version: '2.1.111', email: 'b@x.com' },
+      { version: '2.1.112', email: 'c@x.com' },
+      { version: '2.1.113', email: 'd@x.com' },
+    ];
     const counts: Record<string, number> = {};
-    for (const v of versions) counts[v] = 0;
+    for (const a of accounts) counts[a.version] = 0;
 
     const iterations = 1000;
     for (let i = 0; i < iterations; i++) {
       const result = pickRotateCandidate(
-        versions.map((v) => cand({ version: v, lastActive: null })),
+        accounts.map((a) => cand({ version: a.version, email: a.email, lastActive: null })),
       );
       counts[result!.picked.version] += 1;
     }
 
-    for (const v of versions) {
-      const ratio = counts[v] / iterations;
+    for (const a of accounts) {
+      const ratio = counts[a.version] / iterations;
       expect(ratio).toBeGreaterThan(0.05);
+    }
+  });
+
+  it('dedupes by email — same account on two versions collapses to one candidate', () => {
+    // Real scenario: muqsit@trp.so installed under 2.1.118 and 2.1.110.
+    // Without dedup, two parallel pods could "rotate" to different versions
+    // but hit the same Anthropic account and both 429.
+    const a = cand({ version: '2.1.110', email: 'muqsit@trp.so', lastActive: new Date('2026-04-20T10:00:00Z') });
+    const b = cand({ version: '2.1.118', email: 'muqsit@trp.so', lastActive: new Date('2026-04-20T05:00:00Z') });
+    const c = cand({ version: '2.1.111', email: 'other@x.com', lastActive: new Date('2026-04-20T08:00:00Z') });
+
+    const result = pickRotateCandidate([a, b, c]);
+    expect(result!.healthy).toHaveLength(2);
+    const emails = result!.healthy.map((x) => x.email).sort();
+    expect(emails).toEqual(['muqsit@trp.so', 'other@x.com']);
+    // The duplicate (newer of the two muqsit@trp.so versions) lands in excluded.
+    expect(result!.excluded.map((x) => x.version)).toContain('2.1.110');
+    // Among the muqsit@trp.so versions, the older lastActive wins.
+    const survivor = result!.healthy.find((x) => x.email === 'muqsit@trp.so');
+    expect(survivor!.version).toBe('2.1.118');
+  });
+
+  it('parallel rotation fans out across unique accounts even when versions share emails', () => {
+    // 6 versions, 5 unique accounts (muqsit@trp.so on 2.1.118 + 2.1.110).
+    // After dedup, 5 candidates fan out. The duplicated email should still
+    // appear ~1/5 of the time (not 2/6) because it dedupes to one slot.
+    const candidates = [
+      { version: '2.1.118', email: 'muqsit@trp.so' },
+      { version: '2.1.110', email: 'muqsit@trp.so' },
+      { version: '2.1.113', email: 'muqsitnawaz@icloud.com' },
+      { version: '2.1.112', email: 'muqsitnawaz@gmail.com' },
+      { version: '2.1.111', email: 'muqsit@getrush.ai' },
+      { version: '2.1.109', email: 'bisma@getrush.ai' },
+    ];
+    const emailCounts: Record<string, number> = {};
+    const iterations = 2000;
+    for (let i = 0; i < iterations; i++) {
+      const result = pickRotateCandidate(
+        candidates.map((c) => cand({ version: c.version, email: c.email, lastActive: null })),
+      );
+      const email = result!.picked.email!;
+      emailCounts[email] = (emailCounts[email] ?? 0) + 1;
+    }
+
+    // 5 unique accounts -> expected ~20% each. Allow each to land within [10%, 30%].
+    expect(Object.keys(emailCounts)).toHaveLength(5);
+    for (const email of Object.keys(emailCounts)) {
+      const ratio = emailCounts[email] / iterations;
+      expect(ratio).toBeGreaterThan(0.1);
+      expect(ratio).toBeLessThan(0.3);
     }
   });
 });
