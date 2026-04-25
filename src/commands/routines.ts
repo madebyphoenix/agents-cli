@@ -36,6 +36,7 @@ import {
 } from '../lib/routines.js';
 import type { JobConfig } from '../lib/routines.js';
 import { getRoutinesDir } from '../lib/state.js';
+import { safeJoin } from '../lib/paths.js';
 import { executeJob } from '../lib/runner.js';
 import { JobScheduler } from '../lib/scheduler.js';
 import { isInteractiveTerminal, requireInteractiveSelection } from './utils.js';
@@ -368,7 +369,7 @@ Examples:
       if (!jobPath) {
         // Job doesn't exist - create a new one
         const cronDir = getRoutinesDir();
-        const newPath = path.join(cronDir, `${name}.yml`);
+        const newPath = safeJoin(cronDir, `${name}.yml`);
 
         // Create template
         const template = yaml.stringify({

@@ -13,6 +13,7 @@ import chalk from 'chalk';
 import { checkbox } from '@inquirer/prompts';
 
 import { AGENTS, PLUGINS_CAPABLE_AGENTS, agentLabel } from '../lib/agents.js';
+import { safeJoin } from '../lib/paths.js';
 import type { AgentId } from '../lib/types.js';
 import { discoverPlugins, getPlugin, pluginSupportsAgent, removePluginFromVersion } from '../lib/plugins.js';
 import {
@@ -303,7 +304,7 @@ Examples:
       }
       const name = nameArg;
       const pluginsDir = path.join(process.env.HOME || '', '.agents', 'plugins');
-      const pluginRoot = path.join(pluginsDir, name);
+      const pluginRoot = safeJoin(pluginsDir, name);
 
       // Use discovered plugin when present; fall back to name+root if source is already gone
       const plugin = getPlugin(name);

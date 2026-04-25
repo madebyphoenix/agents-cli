@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as yaml from 'yaml';
 import { Cron } from 'croner';
 import { getRoutinesDir, getRunsDir, ensureAgentsDir } from './state.js';
+import { safeJoin } from './paths.js';
 import type { AgentId } from './types.js';
 import { ALL_AGENT_IDS } from './agents.js';
 
@@ -81,7 +82,7 @@ export function readJob(name: string): JobConfig | null {
   ensureAgentsDir();
   const jobsDir = getRoutinesDir();
   for (const ext of ['.yml', '.yaml']) {
-    const filePath = path.join(jobsDir, name + ext);
+    const filePath = safeJoin(jobsDir, name + ext);
     if (fs.existsSync(filePath)) {
       return readJobFile(filePath);
     }
@@ -109,7 +110,7 @@ function readJobFile(filePath: string): JobConfig | null {
 export function writeJob(config: JobConfig): void {
   ensureAgentsDir();
   const jobsDir = getRoutinesDir();
-  const filePath = path.join(jobsDir, config.name + '.yml');
+  const filePath = safeJoin(jobsDir, config.name + '.yml');
 
   const output: Record<string, unknown> = { ...config };
   if (output.mode === 'plan') delete output.mode;
@@ -125,7 +126,7 @@ export function writeJob(config: JobConfig): void {
 export function deleteJob(name: string): boolean {
   const jobsDir = getRoutinesDir();
   for (const ext of ['.yml', '.yaml']) {
-    const filePath = path.join(jobsDir, name + ext);
+    const filePath = safeJoin(jobsDir, name + ext);
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
       return true;
@@ -308,7 +309,7 @@ export function jobExists(name: string): boolean {
 export function getJobPath(name: string): string | null {
   const jobsDir = getRoutinesDir();
   for (const ext of ['.yml', '.yaml']) {
-    const filePath = path.join(jobsDir, name + ext);
+    const filePath = safeJoin(jobsDir, name + ext);
     if (fs.existsSync(filePath)) {
       return filePath;
     }
