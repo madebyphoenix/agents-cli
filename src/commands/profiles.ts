@@ -124,6 +124,37 @@ Custom endpoints — drop a YAML file at ~/.agents/profiles/<name>.yml:
     keychainItem: agents-cli.ollama.token
 
 Profiles store no secrets — safe to 'agents push' to a shared repo.
+
+Examples:
+  # One-time: store the OpenRouter key (every preset reuses it)
+  agents profiles login openrouter
+
+  # Add Kimi (top HumanEval) and run it through the Claude Code UI
+  agents profiles add kimi
+  agents run kimi "refactor api/handlers/checkout.py to use async sqlalchemy"
+
+  # Add MiniMax for SWE-bench style fixes; reuses the same OpenRouter key
+  agents profiles add minimax
+  agents run minimax "investigate RUSH-2317 and patch the off-by-one in pagination"
+
+  # Add DeepSeek for cheap, fast non-reasoning work
+  agents profiles add deepseek
+  agents run deepseek "rename UserSession -> AuthSession across the codebase"
+
+  # See every profile and which provider it talks to
+  agents profiles list
+
+  # Browse the catalog (pricing, context sizes, reasoning vs print-safe)
+  agents profiles presets
+
+  # Rotate the OpenRouter key (every openrouter profile picks it up)
+  agents profiles login openrouter
+
+  # Drop a profile, keep the key in Keychain for the next one
+  agents profiles remove kimi
+
+  # Fully remove the OpenRouter key from Keychain
+  agents profiles logout openrouter
 `,
     );
 

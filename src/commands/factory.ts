@@ -333,7 +333,47 @@ async function postFactorySubmit(ref: string): Promise<{
 export function registerFactoryCommands(program: Command): void {
   const factory = program
     .command('factory')
-    .description('Software Factory — planner/worker DAG with a shared team Ledger.');
+    .description('Software Factory — planner/worker DAG with a shared team Ledger.')
+    .addHelpText('after', `
+Mental model:
+  Submit Linear tickets; the factory plans a DAG of worker agents, dispatches
+  them to the cloud, and lands PRs. The local laptop is just the dispatcher —
+  workers run on Rush Cloud / Codex Cloud / Factory pods, not your machine.
+
+Examples:
+  # Hand off a Linear ticket and walk away (one-shot, factory picks the agent)
+  agents factory submit RUSH-2451
+
+  # Same thing from a Linear URL (drag-and-drop friendly)
+  agents factory submit https://linear.app/getrush/issue/RUSH-2451
+
+  # Spin up a planner from a free-form brief — emits the DAG, you approve, it runs
+  agents factory start "Cut Stripe webhook latency in half; ship behind a flag"
+
+  # Drive a team dynamically — keep dispatching ready workers as the DAG drains
+  agents factory run rush-stripe-latency
+
+  # Tail the supervisor log while the factory works
+  agents factory watch rush-stripe-latency
+
+  # Roll-up status: who's blocked, what's ready, last activity per worker
+  agents factory status rush-stripe-latency
+
+  # See every factory team on disk, with last-activity and supervisor liveness
+  agents factory list
+
+  # A worker asked a question — answer it from your laptop
+  agents factory answer rush-stripe-latency "use the v2 webhook payload, drop legacy"
+
+  # Stop firing new waves; leave running workers alone
+  agents factory stop rush-stripe-latency
+
+  # Show / edit factory config (cloud provider priority, default planner agent)
+  agents factory config
+
+  # Snapshot a teammate's state to the Ledger before SIGTERM (preempt-safe)
+  agents factory evict worker-7c4a
+`);
 
   // `agents factory submit <ref>` — Software Factory v0. One shot: hand
   // off a Linear ref, factory dispatches a pod, the laptop is done.

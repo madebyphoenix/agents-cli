@@ -57,7 +57,47 @@ function isJsonMode(opts: { json?: boolean }): boolean {
 export function registerCloudCommands(program: Command): void {
   const cloud = program
     .command('cloud')
-    .description('Dispatch and manage cloud agent tasks across providers (Rush Cloud, Codex Cloud, Factory).');
+    .description('Dispatch and manage cloud agent tasks across providers (Rush Cloud, Codex Cloud, Factory).')
+    .addHelpText('after', `
+Providers:
+  rush      Rush Cloud — dispatches against a GitHub repo + branch
+  codex     Codex Cloud — runs in a pre-built Codex environment
+  factory   Factory pods — Droid + computer-use targets
+
+Examples:
+  # Dispatch a quick fix to Rush Cloud and stream the output
+  agents cloud run "fix the flaky e2e in apps/web/tests/checkout.spec.ts" --provider rush --repo getrush/rush --branch main
+
+  # Fire-and-forget (returns the task id, no streaming)
+  agents cloud run "bump tailwind to v4 and fix the breaks" --provider rush --repo getrush/rush --no-follow
+
+  # Multi-repo dispatch: touch both rush and rush-extension in one task
+  agents cloud run "rename POST /v1/charge -> /v2/charge across server + extension" --provider rush --repo getrush/rush --repo getrush/rush-extension
+
+  # Codex Cloud against a saved environment
+  agents cloud run "add pytest fixtures for the new billing module" --provider codex --env env_a1b2c3 --agent codex --timeout 30m
+
+  # Factory pod targeting a specific computer (Droid)
+  agents cloud run "QA the new onboarding flow end-to-end" --provider factory --computer mac-mini-1 --agent droid
+
+  # See every cloud task you've dispatched (most recent first)
+  agents cloud list
+
+  # Inspect a specific task
+  agents cloud status tsk_4f2a91
+
+  # Live-tail logs for a running task
+  agents cloud logs tsk_4f2a91
+
+  # Send a follow-up while the task is in needs-review
+  agents cloud message tsk_4f2a91 "Looks good — also update the OpenAPI spec"
+
+  # Cancel a runaway task
+  agents cloud cancel tsk_4f2a91
+
+  # See which providers are signed in and ready
+  agents cloud providers
+`);
 
   // ── agents cloud run ──────────────────────────────────────────────────
   cloud

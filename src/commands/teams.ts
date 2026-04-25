@@ -586,27 +586,32 @@ create DAG-style dependencies (one teammate waits for another to finish first).
 Teammate sessions appear in 'agents sessions --teams' with a [team/name · mode] tag.
 
 Examples:
-  # Start a new team for a feature
-  agents teams create auth-feature
+  # Spin up a team to ship the new pricing page end-to-end
+  agents teams create pricing-page
 
-  # Add Alice (Claude) to work on the backend
-  agents teams add auth-feature claude "Add JWT auth middleware" --name alice
+  # Backend first: Claude rewrites the billing endpoint
+  agents teams add pricing-page claude "Rewrite /v2/pricing to return tiered plans from billing.plans table" --name backend
 
-  # Add Bob (Codex 0.116.0) to write tests, but wait for Alice to finish first
-  agents teams add auth-feature codex@0.116.0 "Write integration tests" --name bob --after alice
+  # Frontend can start in parallel — it stubs the API while backend lands
+  agents teams add pricing-page codex "Build the new /pricing route in apps/web with the three-tier layout" --name frontend
 
-  # Kick off any staged teammates whose dependencies are satisfied
-  agents teams start auth-feature
+  # QA waits for both to finish before running e2e
+  agents teams add pricing-page claude "Run the full Playwright suite, fix any flakes, paste failing screenshots" --name qa --after backend,frontend
 
-  # Check in on progress (delta polling with --since for efficiency)
-  agents teams status auth-feature
-  agents teams status auth-feature --since 2026-04-19T10:30:00Z
+  # Drain the DAG: backend + frontend launch now, qa picks up when they're done
+  agents teams start pricing-page --watch
 
-  # Let Alice go when she's done
-  agents teams remove auth-feature alice
+  # Check in without re-reading everything (delta poll)
+  agents teams status pricing-page --since 2026-04-24T09:00:00-07:00
 
-  # Wind down the whole team when work is complete
-  agents teams disband auth-feature
+  # Pull the live log of one teammate
+  agents teams logs frontend
+
+  # A teammate is stuck — pull them out, the rest keeps going
+  agents teams remove pricing-page frontend
+
+  # Ship done — wind everyone down
+  agents teams disband pricing-page
 
 Short aliases:
   teams c  = create    teams a  = add       teams s  = status
