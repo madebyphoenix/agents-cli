@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import * as yaml from 'yaml';
 import type {
   CloudProvider,
@@ -18,6 +19,9 @@ import type {
 } from './types.js';
 import { resolveDispatchRepos } from './types.js';
 import { parseSSE } from './stream.js';
+import { listInstalledVersions, getVersionHomePath } from '../versions.js';
+import { getAccountInfo } from '../agents.js';
+import { loadClaudeOauth } from '../usage.js';
 
 const PROXY_BASE = 'https://api.prix.dev';
 const USER_YAML = path.join(os.homedir(), '.rush', 'user.yaml');
@@ -112,6 +116,123 @@ async function findInstallation(token: string, owner: string, repo: string): Pro
   );
 }
 
+/** One version's entry in the account manifest sent on every dispatch. */
+export interface AccountManifestEntry {
+  version: string;
+  email: string;
+  cred_fp: string;
+}
+
+/**
+ * Manifest of the user's local Claude accounts. Sent on every dispatch so the
+ * server can detect "new account" or "token rotated" drift and ask the client
+ * to upload the underlying credentials. The manifest itself contains no
+ * secrets — only public-ish identifiers + a hash of each token.
+ */
+export interface AccountManifest {
+  fp: string;
+  versions: AccountManifestEntry[];
+}
+
+/** Token blob uploaded on retry when the server detects drift. */
+export interface AccountTokenEntry {
+  version: string;
+  /** Stringified OAuth credentials JSON (Mac: keychain blob; Linux: .credentials.json). */
+  credentials_json: string;
+}
+
+/** sha256 → hex. */
+function sha256(input: string): string {
+  return crypto.createHash('sha256').update(input).digest('hex');
+}
+
+/**
+ * Pull `prompt_code` out of a JSON-encoded error body. Returns null when the
+ * body isn't JSON or doesn't carry one — caller falls through to the generic
+ * dispatch-failed path.
+ */
+function parsePromptCode(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { prompt_code?: unknown };
+    return typeof parsed.prompt_code === 'string' ? parsed.prompt_code : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the raw OAuth credentials for one Claude version. On Mac, prefer the
+ * Keychain blob (canonical). On Linux/CI, fall back to `.claude/.credentials.json`
+ * inside the version home (where the Linux Claude CLI stores its OAuth).
+ *
+ * Returns null when no credentials are findable — caller treats as "version
+ * is installed but not signed in" and skips it from the manifest.
+ */
+async function readClaudeCredentialsBlob(home: string): Promise<string | null> {
+  if (process.platform === 'darwin') {
+    const oauth = await loadClaudeOauth(home);
+    if (oauth && oauth.accessToken) {
+      return JSON.stringify(oauth);
+    }
+  }
+  const credsPath = path.join(home, '.claude', '.credentials.json');
+  try {
+    if (fs.existsSync(credsPath)) {
+      const raw = fs.readFileSync(credsPath, 'utf-8').trim();
+      if (raw) return raw;
+    }
+  } catch {
+    // fall through to null
+  }
+  return null;
+}
+
+/**
+ * Build a manifest of the user's local Claude installations to send on every
+ * cloud dispatch. The manifest is the contract the server uses to detect when
+ * the user has added a new account or rotated a token.
+ *
+ * Returns null when no Claude versions are signed in (the dispatch falls back
+ * to the platform-wide key, current behavior).
+ */
+export async function buildAccountManifest(): Promise<AccountManifest | null> {
+  const versions = listInstalledVersions('claude');
+  if (versions.length === 0) return null;
+
+  const entries: AccountManifestEntry[] = [];
+  for (const version of versions) {
+    const home = getVersionHomePath('claude', version);
+    const info = await getAccountInfo('claude', home);
+    if (!info.email) continue;
+    const blob = await readClaudeCredentialsBlob(home);
+    if (!blob) continue;
+    entries.push({ version, email: info.email, cred_fp: sha256(blob) });
+  }
+
+  if (entries.length === 0) return null;
+  entries.sort((a, b) => a.version.localeCompare(b.version));
+  const fp = sha256(JSON.stringify(entries));
+  return { fp, versions: entries };
+}
+
+/**
+ * Re-load OAuth blobs for the given versions so they can be uploaded to the
+ * server on a retry. Only the versions named in the manifest are loaded — we
+ * never upload tokens for versions the server hasn't asked about.
+ */
+export async function buildAccountTokensPayload(
+  versions: string[],
+): Promise<AccountTokenEntry[]> {
+  const out: AccountTokenEntry[] = [];
+  for (const version of versions) {
+    const home = getVersionHomePath('claude', version);
+    const blob = await readClaudeCredentialsBlob(home);
+    if (!blob) continue;
+    out.push({ version, credentials_json: blob });
+  }
+  return out;
+}
+
 /**
  * Build the POST body for /api/v1/cloud-runs. Exported so tests can verify
  * the back-compat shape (singular fields + repos[]) without needing real
@@ -123,6 +244,8 @@ export function buildDispatchBody(input: {
   prompt: string;
   mode?: string;
   resolvedRepos: Array<{ installation_id: number; repo_owner: string; repo_name: string }>;
+  accountManifest?: AccountManifest | null;
+  accountTokens?: AccountTokenEntry[] | null;
 }): Record<string, unknown> {
   if (input.resolvedRepos.length === 0) {
     throw new Error('buildDispatchBody: resolvedRepos must have at least one entry');
@@ -138,6 +261,12 @@ export function buildDispatchBody(input: {
     body.installation_id = primary.installation_id;
     body.repo_owner = primary.repo_owner;
     body.repo_name = primary.repo_name;
+  }
+  if (input.accountManifest) {
+    body.account_manifest = input.accountManifest;
+  }
+  if (input.accountTokens && input.accountTokens.length > 0) {
+    body.account_tokens = input.accountTokens;
   }
   return body;
 }
@@ -176,14 +305,45 @@ export class RushCloudProvider implements CloudProvider {
       })),
     );
 
+    const accountManifest = await buildAccountManifest();
+
     const body = buildDispatchBody({
       agent: options.agent,
       prompt: options.prompt,
       mode: options.providerOptions?.mode,
       resolvedRepos,
+      accountManifest,
     });
 
-    const res = await api('POST', '/api/v1/cloud-runs', token, body);
+    let res = await api('POST', '/api/v1/cloud-runs', token, body);
+
+    // Server detects drift (new account or rotated token) by comparing the
+    // manifest's fp against what's stored. It returns 401 with a prompt_code
+    // telling the client to re-upload the actual token blobs and retry once.
+    if (res.status === 401 && accountManifest) {
+      const errBody = await res.clone().text();
+      const promptCode = parsePromptCode(errBody);
+      if (promptCode === 'NEW_ACCOUNT' || promptCode === 'TOKEN_ROTATED') {
+        if (process.stdout.isTTY) {
+          process.stderr.write(
+            `[rush] cloud needs to sync your Claude tokens (${promptCode.toLowerCase()}). Uploading...\n`,
+          );
+        }
+        const accountTokens = await buildAccountTokensPayload(
+          accountManifest.versions.map((v) => v.version),
+        );
+        const retryBody = buildDispatchBody({
+          agent: options.agent,
+          prompt: options.prompt,
+          mode: options.providerOptions?.mode,
+          resolvedRepos,
+          accountManifest,
+          accountTokens,
+        });
+        res = await api('POST', '/api/v1/cloud-runs', token, retryBody);
+      }
+    }
+
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Dispatch failed (${res.status}): ${text}`);
