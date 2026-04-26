@@ -93,18 +93,27 @@ export function getKeychainToken(item: string): string {
   }
 }
 
+// Quote a string for `security -i`'s shell-like tokenizer. The value never
+// appears in argv when passed this way, so it is invisible to `ps`.
+function quoteForSecurityCli(s: string): string {
+  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
+
 /** Store or update a secret value in the macOS Keychain. */
 export function setKeychainToken(item: string, value: string): void {
   assertMacOS();
   if (!value || !value.trim()) {
     throw new Error('Secret value is empty.');
   }
+  if (/[\r\n]/.test(value)) {
+    throw new Error('Secret value contains newlines, which are not supported.');
+  }
   const user = os.userInfo().username;
-  const result = spawnSync(
-    'security',
-    ['add-generic-password', '-a', user, '-s', item, '-w', value, '-U'],
-    { stdio: ['ignore', 'pipe', 'pipe'] }
-  );
+  const cmd = `add-generic-password -a ${quoteForSecurityCli(user)} -s ${quoteForSecurityCli(item)} -w ${quoteForSecurityCli(value)} -U\n`;
+  const result = spawnSync('security', ['-i'], {
+    input: cmd,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
   if (result.status !== 0) {
     throw new Error(`Failed to write keychain item '${item}' (exit ${result.status}).`);
   }
