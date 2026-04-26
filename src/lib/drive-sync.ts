@@ -10,13 +10,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getDriveDir } from './state.js';
 import { AGENTS } from './agents.js';
 import type { AgentId } from './types.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const AGENT: AgentId = 'claude';
 
@@ -76,7 +76,7 @@ export async function pull(): Promise<void> {
   const localDir = getDriveDir() + '/';
   const remote = `${config.remote}:~/.agents/drive/`;
 
-  await execAsync(`rsync -az --exclude='config.json' ${remote} ${localDir}`);
+  await execFileAsync('rsync', ['-az', '--exclude=config.json', remote, localDir]);
 
   config.lastPull = new Date().toISOString();
   writeDriveConfig(config);
@@ -91,8 +91,8 @@ export async function push(): Promise<void> {
   const remote = `${config.remote}:~/.agents/drive/`;
 
   // Ensure remote directory exists
-  await execAsync(`ssh ${config.remote} 'mkdir -p ~/.agents/drive'`);
-  await execAsync(`rsync -az --exclude='config.json' ${localDir} ${remote}`);
+  await execFileAsync('ssh', [config.remote, 'mkdir -p ~/.agents/drive']);
+  await execFileAsync('rsync', ['-az', '--exclude=config.json', localDir, remote]);
 
   config.lastPush = new Date().toISOString();
   writeDriveConfig(config);

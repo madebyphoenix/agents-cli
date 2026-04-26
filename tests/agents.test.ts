@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { AGENTS, COMMANDS_CAPABLE_AGENTS, ALL_AGENT_IDS, getAccountEmail } from '../src/lib/agents.js';
+import { AGENTS, COMMANDS_CAPABLE_AGENTS, ALL_AGENT_IDS, getAccountEmail, registerMcp } from '../src/lib/agents.js';
 
 describe('COMMANDS_CAPABLE_AGENTS', () => {
   it('excludes openclaw since it uses Gateway-based slash commands', () => {
@@ -31,6 +31,21 @@ describe('COMMANDS_CAPABLE_AGENTS', () => {
       if (id === 'openclaw') continue;
       expect(AGENTS[id].commandsDir).not.toBe('');
     }
+  });
+});
+
+describe('registerMcp - shell injection prevention (RUSH-554)', () => {
+  it('does not execute injected shell commands via malicious MCP name', async () => {
+    const pwn = '/tmp/pwn_RUSH554';
+    if (fs.existsSync(pwn)) fs.unlinkSync(pwn);
+
+    // '"; touch /tmp/pwn_RUSH554 #' would break out of shell quoting in the old exec-based code.
+    // With execFile there is no shell, so the name is treated as a literal string.
+    await registerMcp('claude', '"; touch /tmp/pwn_RUSH554 #', 'npx -y some-pkg', 'user', 'stdio', {
+      binary: '/bin/echo',
+    });
+
+    expect(fs.existsSync(pwn)).toBe(false);
   });
 });
 
