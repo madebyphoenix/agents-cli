@@ -21,6 +21,7 @@ import type {
   CodexPermissions,
 } from './types.js';
 import { getPermissionsDir, ensureAgentsDir } from './state.js';
+import { safeJoin } from './paths.js';
 import { AGENTS } from './agents.js';
 
 const HOME = os.homedir();
@@ -384,7 +385,7 @@ export function removePermissionSet(name: string): { success: boolean; error?: s
   const dir = getPermissionsDir();
 
   for (const ext of ['.yml', '.yaml']) {
-    const filePath = path.join(dir, name + ext);
+    const filePath = safeJoin(dir, name + ext);
     if (fs.existsSync(filePath)) {
       try {
         fs.unlinkSync(filePath);
@@ -1186,7 +1187,7 @@ export function exportPermissionsFromPath(filePath: string): PermissionSet | nul
  */
 export function savePermissionSet(set: PermissionSet): { success: boolean; error?: string } {
   ensurePermissionsDir();
-  const filePath = path.join(getPermissionsDir(), set.name + '.yml');
+  const filePath = safeJoin(getPermissionsDir(), set.name + '.yml');
 
   try {
     const content = yaml.stringify({

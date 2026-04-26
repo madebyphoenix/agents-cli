@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
 import { getSubagentsDir } from './state.js';
+import { safeJoin } from './paths.js';
 import type { AgentId, DiscoveredSubagent, InstalledSubagent, SubagentFrontmatter } from './types.js';
 
 /**
@@ -190,7 +191,7 @@ export function installSubagentCentrally(
   name: string
 ): { success: boolean; error?: string } {
   const subagentsDir = getSubagentsDir();
-  const targetDir = path.join(subagentsDir, name);
+  const targetDir = safeJoin(subagentsDir, name);
 
   try {
     // Ensure subagents directory exists
@@ -217,7 +218,7 @@ export function installSubagentCentrally(
  */
 export function removeSubagent(name: string): { success: boolean; error?: string } {
   const subagentsDir = getSubagentsDir();
-  const targetDir = path.join(subagentsDir, name);
+  const targetDir = safeJoin(subagentsDir, name);
 
   if (!fs.existsSync(targetDir)) {
     return { success: false, error: `Subagent '${name}' not found` };
@@ -320,14 +321,14 @@ export function installSubagentToAgent(
 
     try {
       const transformed = transformSubagentForClaude(subagentDir);
-      fs.writeFileSync(path.join(agentsDir, `${subagentName}.md`), transformed);
+      fs.writeFileSync(safeJoin(agentsDir, `${subagentName}.md`), transformed);
       return { success: true };
     } catch (err) {
       return { success: false, error: String(err) };
     }
   } else if (agent === 'openclaw') {
     // OpenClaw: copy full directory
-    const targetDir = path.join(agentHome, '.openclaw', subagentName);
+    const targetDir = safeJoin(path.join(agentHome, '.openclaw'), subagentName);
     return syncSubagentToOpenclaw(subagentDir, targetDir);
   } else {
     // Other agents don't support subagents yet
@@ -345,13 +346,13 @@ export function removeSubagentFromAgent(
 ): { success: boolean; error?: string } {
   try {
     if (agent === 'claude') {
-      const targetPath = path.join(agentHome, '.claude', 'agents', `${subagentName}.md`);
+      const targetPath = safeJoin(path.join(agentHome, '.claude', 'agents'), `${subagentName}.md`);
       if (fs.existsSync(targetPath)) {
         fs.unlinkSync(targetPath);
       }
       return { success: true };
     } else if (agent === 'openclaw') {
-      const targetDir = path.join(agentHome, '.openclaw', subagentName);
+      const targetDir = safeJoin(path.join(agentHome, '.openclaw'), subagentName);
       if (fs.existsSync(targetDir)) {
         fs.rmSync(targetDir, { recursive: true });
       }
