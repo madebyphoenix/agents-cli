@@ -1,6 +1,6 @@
 import * as path from 'path';
 
-const SAFE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
+const SAFE_NAME = /^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$/;
 
 /**
  * Resolve base + name while preventing path-traversal attacks.
