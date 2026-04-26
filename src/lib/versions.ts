@@ -18,7 +18,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as yaml from 'yaml';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import chalk from 'chalk';
 import * as TOML from 'smol-toml';
@@ -37,7 +37,7 @@ import { compileMemoryForAgent } from './memory-compile.js';
 import { PLUGINS_CAPABLE_AGENTS } from './agents.js';
 
 /** Promisified exec for running shell commands. */
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Resource selection for syncing to a version.
@@ -893,7 +893,7 @@ export async function getLatestNpmVersion(agent: AgentId): Promise<string | null
   if (!agentConfig.npmPackage) return null;
 
   try {
-    const { stdout } = await execAsync(`npm view ${agentConfig.npmPackage} version`);
+    const { stdout } = await execFileAsync('npm', ['view', agentConfig.npmPackage, 'version']);
     return stdout.trim();
   } catch {
     return null;
@@ -995,7 +995,7 @@ export async function installVersion(
 
   try {
     onProgress?.(`Installing ${packageSpec}...`);
-    const { stdout } = await execAsync(`npm install ${packageSpec}`, { cwd: versionDir });
+    const { stdout } = await execFileAsync('npm', ['install', packageSpec], { cwd: versionDir });
 
     // Determine the actual installed version
     let installedVersion = version;
