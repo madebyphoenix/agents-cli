@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
 import type { Manifest } from './types.js';
+import { safeJoin } from './paths.js';
 
 /** Canonical filename for the manifest in any agents repo or project root. */
 export const MANIFEST_FILENAME = 'agents.yaml';
@@ -24,7 +25,7 @@ export function serializeManifest(manifest: Manifest): string {
 
 /** Read and parse agents.yaml from a directory. Returns null if the file does not exist. */
 export function readManifest(repoPath: string): Manifest | null {
-  const manifestPath = path.join(repoPath, MANIFEST_FILENAME);
+  const manifestPath = safeJoin(repoPath, MANIFEST_FILENAME);
   if (!fs.existsSync(manifestPath)) {
     return null;
   }
@@ -34,7 +35,7 @@ export function readManifest(repoPath: string): Manifest | null {
 
 /** Write a Manifest object to agents.yaml in the given directory. */
 export function writeManifest(repoPath: string, manifest: Manifest): void {
-  const manifestPath = path.join(repoPath, MANIFEST_FILENAME);
+  const manifestPath = safeJoin(repoPath, MANIFEST_FILENAME);
   const content = serializeManifest(manifest);
   fs.writeFileSync(manifestPath, content, 'utf-8');
 }

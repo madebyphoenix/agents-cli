@@ -35,6 +35,7 @@ import { parseHookManifest, registerHooksToSettings } from './hooks.js';
 import { discoverPlugins, syncPluginToVersion, isPluginSynced, pluginSupportsAgent, cleanOrphanedPluginSkills } from './plugins.js';
 import { compileMemoryForAgent } from './memory-compile.js';
 import { PLUGINS_CAPABLE_AGENTS } from './agents.js';
+import { safeJoin } from './paths.js';
 
 /** Promisified exec for running shell commands. */
 const execAsync = promisify(exec);
@@ -1401,11 +1402,12 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     fs.mkdirSync(dest, { recursive: true });
     const entries = fs.readdirSync(src, { withFileTypes: true });
     for (const entry of entries) {
-      const srcPath = path.join(src, entry.name);
-      const destPath = path.join(dest, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      const srcPath = safeJoin(src, entry.name);
+      const destPath = safeJoin(dest, entry.name);
       if (entry.isDirectory()) {
         copyDir(srcPath, destPath);
-      } else {
+      } else if (entry.isFile()) {
         fs.copyFileSync(srcPath, destPath);
       }
     }
@@ -1414,7 +1416,10 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
   // Helper: resolve selection to list of items
   const resolveSelection = (sel: string[] | 'all' | undefined, available: string[]): string[] => {
     if (sel === 'all') return available;
-    if (Array.isArray(sel)) return sel;
+    if (Array.isArray(sel)) {
+      const availableSet = new Set(available);
+      return sel.filter((item) => availableSet.has(item));
+    }
     return [];
   };
 
@@ -1432,19 +1437,19 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     const syncedCommands: string[] = [];
     for (const cmd of commandsToSync) {
       const candidates: Array<string | null> = [
-        projectCommandsDir ? path.join(projectCommandsDir, `${cmd}.md`) : null,
-        path.join(centralCommands, `${cmd}.md`),
-        ...extraRepos.map((e) => path.join(e.dir, 'commands', `${cmd}.md`)),
+        projectCommandsDir ? safeJoin(projectCommandsDir, `${cmd}.md`) : null,
+        safeJoin(centralCommands, `${cmd}.md`),
+        ...extraRepos.map((e) => safeJoin(path.join(e.dir, 'commands'), `${cmd}.md`)),
       ];
-      const srcFile = candidates.find((p) => p && fs.existsSync(p)) || null;
+      const srcFile = candidates.find((p) => p && fs.existsSync(p) && !fs.lstatSync(p).isSymbolicLink()) || null;
       if (!srcFile) continue;
 
       if (agentConfig.format === 'toml') {
         const content = fs.readFileSync(srcFile, 'utf-8');
         const tomlContent = markdownToToml(cmd, content);
-        fs.writeFileSync(path.join(commandsTarget, `${cmd}.toml`), tomlContent);
+        fs.writeFileSync(safeJoin(commandsTarget, `${cmd}.toml`), tomlContent);
       } else {
-        fs.copyFileSync(srcFile, path.join(commandsTarget, `${cmd}.md`));
+        fs.copyFileSync(srcFile, safeJoin(commandsTarget, `${cmd}.md`));
       }
       syncedCommands.push(cmd);
     }
@@ -1473,14 +1478,14 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
       const syncedSkills: string[] = [];
       for (const skill of skillsToSync) {
         const candidates: Array<string | null> = [
-          projectSkills ? path.join(projectSkills, skill) : null,
-          path.join(centralSkills, skill),
-          ...extraRepos.map((e) => path.join(e.dir, 'skills', skill)),
+          projectSkills ? safeJoin(projectSkills, skill) : null,
+          safeJoin(centralSkills, skill),
+          ...extraRepos.map((e) => safeJoin(path.join(e.dir, 'skills'), skill)),
         ];
-        const srcDir = candidates.find((p) => p && fs.existsSync(p)) || null;
+        const srcDir = candidates.find((p) => p && fs.existsSync(p) && fs.lstatSync(p).isDirectory()) || null;
         if (!srcDir) continue;
 
-        const destDir = path.join(skillsTarget, skill);
+        const destDir = safeJoin(skillsTarget, skill);
         removePath(destDir);
         copyDir(srcDir, destDir);
         syncedSkills.push(skill);
@@ -1511,14 +1516,14 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
         const syncedHooks: string[] = [];
         for (const hook of hooksToSync) {
           const candidates: Array<string | null> = [
-            projectHooksDir ? path.join(projectHooksDir, hook) : null,
-            path.join(centralHooks, hook),
-            ...extraRepos.map((e) => path.join(e.dir, 'hooks', hook)),
+            projectHooksDir ? safeJoin(projectHooksDir, hook) : null,
+            safeJoin(centralHooks, hook),
+            ...extraRepos.map((e) => safeJoin(path.join(e.dir, 'hooks'), hook)),
           ];
-          const srcFile = candidates.find((p) => p && fs.existsSync(p)) || null;
+          const srcFile = candidates.find((p) => p && fs.existsSync(p) && !fs.lstatSync(p).isSymbolicLink()) || null;
           if (!srcFile) continue;
 
-          const destFile = path.join(hooksTarget, hook);
+          const destFile = safeJoin(hooksTarget, hook);
           fs.copyFileSync(srcFile, destFile);
           fs.chmodSync(destFile, 0o755);
           syncedHooks.push(hook);
@@ -1532,7 +1537,7 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
         if (fs.existsSync(hooksTarget)) {
           for (const file of fs.readdirSync(hooksTarget).filter(f => !f.startsWith('.'))) {
             if (!centralHookNames.has(file)) {
-              removePath(path.join(hooksTarget, file));
+              removePath(safeJoin(hooksTarget, file));
             }
           }
         }
@@ -1562,15 +1567,15 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
 
     for (const mem of memoryToSync) {
       const candidates: Array<string | null> = [
-        projectMemoryDir ? path.join(projectMemoryDir, `${mem}.md`) : null,
-        path.join(centralMemory, `${mem}.md`),
-        ...extraRepos.map((e) => path.join(e.dir, 'memory', `${mem}.md`)),
+        projectMemoryDir ? safeJoin(projectMemoryDir, `${mem}.md`) : null,
+        safeJoin(centralMemory, `${mem}.md`),
+        ...extraRepos.map((e) => safeJoin(path.join(e.dir, 'memory'), `${mem}.md`)),
       ];
-      const srcFile = candidates.find((p) => p && fs.existsSync(p)) || null;
+      const srcFile = candidates.find((p) => p && fs.existsSync(p) && !fs.lstatSync(p).isSymbolicLink()) || null;
       if (!srcFile) continue;
 
       const targetName = mem === 'AGENTS' ? agentConfig.instructionsFile : `${mem}.md`;
-      const destFile = path.join(agentDir, targetName);
+      const destFile = safeJoin(agentDir, targetName);
 
       removePath(destFile);
       // For the primary memory file (AGENTS.md), agents that don't natively
@@ -1672,11 +1677,11 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
           const agentsDir = path.join(agentDir, 'agents');
           fs.mkdirSync(agentsDir, { recursive: true });
           const transformed = transformSubagentForClaude(subagent.path);
-          fs.writeFileSync(path.join(agentsDir, `${subagent.name}.md`), transformed);
+          fs.writeFileSync(safeJoin(agentsDir, `${subagent.name}.md`), transformed);
           result.subagents.push(subagent.name);
         } else if (agent === 'openclaw') {
           // OpenClaw: copy full directory, rename AGENT.md -> AGENTS.md
-          const targetDir = path.join(versionHome, '.openclaw', subagent.name);
+          const targetDir = safeJoin(path.join(versionHome, '.openclaw'), subagent.name);
           const syncResult = syncSubagentToOpenclaw(subagent.path, targetDir);
           if (syncResult.success) {
             result.subagents.push(subagent.name);

@@ -104,6 +104,22 @@ function truncate(s: string, n: number): string {
   return s.slice(0, n - 1) + '…';
 }
 
+function compactPrompt(s: string, n = 160): string {
+  return truncate(s.replace(/\s+/g, ' ').trim(), n);
+}
+
+function formatTimestamp(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 function padRight(s: string, width: number): string {
   return s.length >= width ? s : s + ' '.repeat(width - s.length);
 }
@@ -245,10 +261,17 @@ async function runOneWave(mgr: AgentManager, team: string, json: boolean): Promi
   }
 }
 
-// Pick the display handle for a teammate: their given name if they have one,
-// otherwise the 8-char UUID prefix.
-function handle(a: { name?: string | null; agent_id: string }): string {
-  return a.name || shortId(a.agent_id);
+// Pick the display handle for a teammate: explicit teammate name, Claude
+// session label, then the 8-char UUID prefix.
+function handle(a: { name?: string | null; session_label?: string | null; agent_id: string }): string {
+  return a.name || a.session_label || shortId(a.agent_id);
+}
+
+function displayHandle(a: AgentStatusDetail): string {
+  if (a.name && a.session_label && a.name !== a.session_label) {
+    return `${a.name} / ${a.session_label}`;
+  }
+  return handle(a);
 }
 
 type TeammateLookup =
@@ -323,13 +346,27 @@ async function resolveTeammateAcrossTeams(
 function printAgentDetail(a: AgentStatusDetail, session: SessionMeta | null): void {
   const label = statusColor(a.status)(a.status.toUpperCase());
   const who = fullName(a.agent_type as AgentType, a.version);
-  const h = handle(a);
+  const h = displayHandle(a);
   const secondary = a.name ? chalk.gray(`(${shortId(a.agent_id)})`) : '';
   const duration = a.duration ? `${chalk.gray(' · ')}${chalk.white(a.duration)}` : '';
   console.log(
     `  ${chalk.cyan(h.padEnd(10))} ${secondary.padEnd(11)} ${who.padEnd(18)} ${label}${duration}`
   );
 
+  if (a.task_type) {
+    console.log(`    ${chalk.gray('type    ')} ${chalk.magenta(a.task_type)}`);
+  }
+  if (a.prompt) {
+    console.log(`    ${chalk.gray('task    ')} ${chalk.white(compactPrompt(a.prompt))}`);
+  }
+  const started = formatTimestamp(a.started_at);
+  const completed = formatTimestamp(a.completed_at);
+  if (started || completed) {
+    const parts = [];
+    if (started) parts.push(`started ${started}`);
+    if (completed) parts.push(`ended ${completed}`);
+    console.log(`    ${chalk.gray('time    ')} ${parts.join(chalk.gray(' · '))}`);
+  }
   if (a.after && a.after.length) {
     console.log(`    ${chalk.gray('after   ')} ${a.after.join(', ')}`);
   }
@@ -365,6 +402,13 @@ function printAgentDetail(a: AgentStatusDetail, session: SessionMeta | null): vo
     }
   }
 
+  if (a.recent_tool_calls.length) {
+    console.log(`    ${chalk.gray('tools   ')}`);
+    for (const call of a.recent_tool_calls.slice(-5)) {
+      const when = call.timestamp ? `${relTime(call.timestamp)} ` : '';
+      console.log(`      ${chalk.gray(when)}${chalk.bold(call.tool)} ${chalk.gray(truncate(call.summary, 96))}`);
+    }
+  }
   if (a.has_errors) console.log(`    ${chalk.red('! reported an error')}`);
   if (a.pr_url) console.log(`    ${chalk.gray('PR  ')}${a.pr_url}`);
 }

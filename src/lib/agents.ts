@@ -8,7 +8,7 @@
  * Provides functions for detecting installed CLIs, resolving version-managed binaries,
  * reading account/auth info, and managing MCP server registrations across agents.
  */
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -28,7 +28,7 @@ export interface CliState {
   path: string | null;
 }
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const HOME = os.homedir();
 
@@ -84,6 +84,69 @@ function findInPath(command: string): string | null {
     }
   }
   return null;
+}
+
+function splitCommandLine(command: string): string[] {
+  const args: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let tokenStarted = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+        tokenStarted = true;
+      } else if (char === '\\' && quote === '"' && i + 1 < command.length) {
+        current += command[++i];
+        tokenStarted = true;
+      } else {
+        current += char;
+        tokenStarted = true;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      tokenStarted = true;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (tokenStarted) {
+        args.push(current);
+        current = '';
+        tokenStarted = false;
+      }
+      continue;
+    }
+
+    if (char === '\\' && i + 1 < command.length) {
+      current += command[++i];
+      tokenStarted = true;
+      continue;
+    }
+
+    current += char;
+    tokenStarted = true;
+  }
+
+  if (quote) {
+    throw new Error('Unterminated quote in MCP command');
+  }
+
+  if (tokenStarted) {
+    args.push(current);
+  }
+
+  if (args.length === 0) {
+    throw new Error('MCP command is required');
+  }
+
+  return args;
 }
 
 /**
@@ -367,7 +430,7 @@ async function getCachedVersionForBinary(agentId: AgentId, binaryPath: string): 
   const agent = AGENTS[agentId];
   let version: string | null = null;
   try {
-    const { stdout } = await execAsync(`${agent.cliCommand} --version`, { timeout: 3000 });
+    const { stdout } = await execFileAsync(agent.cliCommand, ['--version'], { timeout: 3000 });
     if (agentId === 'openclaw') {
       const match = stdout.match(/openclaw\/(\d+\.\d+\.\d+)/);
       version = match ? match[1] : stdout.trim();
@@ -750,7 +813,7 @@ export async function isMcpRegistered(agentId: AgentId, mcpName: string): Promis
     return false;
   }
   try {
-    const { stdout } = await execAsync(`${agent.cliCommand} mcp list`);
+    const { stdout } = await execFileAsync(agent.cliCommand, ['mcp', 'list']);
     return stdout.toLowerCase().includes(mcpName.toLowerCase());
   } catch {
     /* mcp list command failed */
@@ -778,15 +841,16 @@ export async function registerMcp(
   try {
     // Use explicit binary path when provided (bypasses shim for version-managed agents)
     const bin = options?.binary || agent.cliCommand;
-    let cmd: string;
+    let args: string[];
+    const commandArgs = splitCommandLine(command);
     if (agentId === 'claude') {
-      cmd = `${bin} mcp add --transport ${transport} --scope ${scope} "${name}" -- ${command}`;
+      args = ['mcp', 'add', '--transport', transport, '--scope', scope, name, '--', ...commandArgs];
     } else {
-      cmd = `${bin} mcp add "${name}" -- ${command}`;
+      args = ['mcp', 'add', name, '--', ...commandArgs];
     }
     // When home is specified, override HOME so MCP config writes to the version's config dir
     const env = options?.home ? { ...process.env, HOME: options.home } : undefined;
-    await execAsync(cmd, env ? { env } : undefined);
+    await execFileAsync(bin, args, env ? { env } : undefined);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -810,7 +874,7 @@ export async function unregisterMcp(
   try {
     const bin = options?.binary || agent.cliCommand;
     const env = options?.home ? { ...process.env, HOME: options.home } : undefined;
-    await execAsync(`${bin} mcp remove "${name}"`, env ? { env } : undefined);
+    await execFileAsync(bin, ['mcp', 'remove', name], env ? { env } : undefined);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };

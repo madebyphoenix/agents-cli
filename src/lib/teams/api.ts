@@ -9,6 +9,7 @@ import { AgentManager, AgentStatus, resolveMode, type TaskType } from './agents.
 import { AgentType } from './parsers.js';
 import { getDelta } from './summarizer.js';
 import { debug } from './debug.js';
+import { buildClaudeLabelMap } from '../session/discover.js';
 
 /**
  * Truncate a bash command for status output.
@@ -24,6 +25,47 @@ function truncateBashCommand(cmd: string, maxLen: number = 120): string {
   // For regular commands, just truncate
   if (cmd.length <= maxLen) return cmd;
   return cmd.substring(0, maxLen - 3) + '...';
+}
+
+function eventToolName(event: any): string | null {
+  const eventType = event.type || '';
+  if (eventType === 'bash') return 'Bash';
+  if (eventType === 'file_write') return 'Write';
+  if (eventType === 'file_create') return 'Create';
+  if (eventType === 'file_read') return 'Read';
+  if (eventType === 'file_delete') return 'Delete';
+  if (eventType === 'directory_list') return 'List';
+  if (eventType === 'tool_use') return event.tool || 'Tool';
+  return null;
+}
+
+function eventToolSummary(event: any): string {
+  const value =
+    event.command ||
+    event.path ||
+    event.args?.command ||
+    event.args?.path ||
+    event.input?.command ||
+    event.input?.path ||
+    '';
+  return truncateBashCommand(String(value || eventToolName(event) || 'tool call'));
+}
+
+export interface ToolCallDetail {
+  tool: string;
+  summary: string;
+  timestamp: string | null;
+}
+
+function recentToolCalls(events: any[], max = 10): ToolCallDetail[] {
+  return events
+    .filter((event) => eventToolName(event))
+    .slice(-max)
+    .map((event) => ({
+      tool: eventToolName(event) || 'Tool',
+      summary: eventToolSummary(event),
+      timestamp: typeof event.timestamp === 'string' ? event.timestamp : null,
+    }));
 }
 
 /** Result returned after spawning a new teammate. */
@@ -47,12 +89,16 @@ export interface AgentStatusDetail {
   agent_id: string;
   agent_type: string;
   status: string;
+  prompt: string;
+  started_at: string;
+  completed_at: string | null;
   duration: string | null;
   files_created: string[];
   files_modified: string[];
   files_read: string[];
   files_deleted: string[];
   bash_commands: string[];
+  recent_tool_calls: ToolCallDetail[];
   last_messages: string[];
   tool_count: number;
   has_errors: boolean;
@@ -63,6 +109,7 @@ export interface AgentStatusDetail {
   pr_url?: string | null;
   version?: string | null;
   remote_session_id?: string | null;
+  session_label?: string | null;
   name?: string | null;
   after?: string[];
   task_type?: TaskType | null;
@@ -218,6 +265,9 @@ export async function handleStatus(
 
   // Build details only for filtered agents
   let maxTimestamp = since || new Date(0).toISOString();  // Track max timestamp for cursor
+  const claudeLabels = allAgents.some((agent) => agent.agentType === 'claude')
+    ? buildClaudeLabelMap()
+    : new Map<string, string | null>();
 
   for (const agent of agents) {
     await agent.readNewEvents();
@@ -243,19 +293,28 @@ export async function handleStatus(
       agent_id: agent.agentId,
       agent_type: agent.agentType,
       status: agent.status,
+      prompt: agent.prompt,
+      started_at: agent.startedAt.toISOString(),
+      completed_at: agent.completedAt?.toISOString() ?? null,
       duration: agent.duration(),
       version: agent.version,
       remote_session_id: agent.remoteSessionId,
+      session_label: agent.remoteSessionId
+        ? claudeLabels.get(agent.remoteSessionId) ?? null
+        : null,
       name: agent.name,
       after: agent.after,
       task_type: agent.taskType,
+      mode: agent.mode,
       cloud_session_id: agent.cloudSessionId,
       cloud_provider: agent.cloudProvider,
+      pr_url: agent.prUrl,
       files_created: delta.new_files_created,
       files_modified: delta.new_files_modified,
       files_read: delta.new_files_read,
       files_deleted: delta.new_files_deleted,
       bash_commands: delta.new_bash_commands.map((cmd: string) => truncateBashCommand(cmd)),
+      recent_tool_calls: recentToolCalls(events),
       last_messages: delta.new_messages,
       tool_count: delta.new_tool_count,
       has_errors: delta.new_errors.length > 0,

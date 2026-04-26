@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
 import * as TOML from 'smol-toml';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import * as os from 'os';
 import type { AgentId } from './types.js';
 import { getMcpDir, getProjectAgentsDir } from './state.js';
@@ -150,14 +150,14 @@ function installMcpViaClaude(binaryPath: string, server: InstalledMcpServer, ver
       ...(server.config.args || [])
     ];
 
-    execSync(`"${binaryPath}" ${args.map(a => a.includes(' ') ? `"${a}"` : a).join(' ')}`, {
+    execFileSync(binaryPath, args, {
       stdio: 'pipe',
       timeout: 30000,
       env: execEnv,
     });
   } else {
     // claude mcp add --scope user --transport http <name> <url>
-    execSync(`"${binaryPath}" mcp add --scope user --transport http "${server.name}" "${server.config.url}"`, {
+    execFileSync(binaryPath, ['mcp', 'add', '--scope', 'user', '--transport', 'http', server.name, server.config.url!], {
       stdio: 'pipe',
       timeout: 30000,
       env: execEnv,
@@ -179,7 +179,7 @@ function installMcpViaCodex(binaryPath: string, server: InstalledMcpServer, vers
       ...(server.config.args || [])
     ];
 
-    execSync(`"${binaryPath}" ${args.map(a => a.includes(' ') ? `"${a}"` : a).join(' ')}`, {
+    execFileSync(binaryPath, args, {
       stdio: 'pipe',
       timeout: 30000,
       env: { ...process.env, HOME: versionHome },

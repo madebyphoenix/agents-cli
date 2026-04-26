@@ -65,6 +65,22 @@ function firstLine(s: string): string {
   return '';
 }
 
+function compactPrompt(s: string, max = 140): string {
+  return truncate(s.replace(/\s+/g, ' ').trim(), max);
+}
+
+function formatTimestamp(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 function displayAgent(agent: string, version?: string | null): string {
   const label = AGENT_LABEL[agent] || agent;
   return version ? `${label}@${version}` : label;
@@ -165,6 +181,13 @@ function handle(a: AgentStatusDetail): string {
   return a.name || a.agent_id.slice(0, 8);
 }
 
+function displayHandle(a: AgentStatusDetail): string {
+  if (a.name && a.session_label && a.name !== a.session_label) {
+    return `${a.name} / ${a.session_label}`;
+  }
+  return a.name || a.session_label || a.agent_id.slice(0, 8);
+}
+
 /** Build a multi-line preview string for the picker's detail pane. */
 export function buildTeamPreview(row: TeamRow): string {
   const t = row.team;
@@ -193,12 +216,13 @@ export function buildTeamPreview(row: TeamRow): string {
   lines.push('');
 
   // Column widths
-  const nameW = Math.max(6, ...row.agents.map((a) => handle(a).length));
+  const nameW = Math.max(6, ...row.agents.map((a) => displayHandle(a).length));
   const agentW = Math.max(8, ...row.agents.map((a) => displayAgent(a.agent_type, a.version).length));
 
   for (const a of row.agents) {
     const stat = statusColor(a.status)(a.status);
     const metaParts: string[] = [];
+    if (a.task_type) metaParts.push(chalk.magenta(a.task_type));
     if (a.duration) metaParts.push(chalk.white(a.duration));
     metaParts.push(chalk.gray(`${a.tool_count} tools`));
     const modified = a.files_modified.length;
@@ -206,8 +230,25 @@ export function buildTeamPreview(row: TeamRow): string {
     const meta = metaParts.join(DOT);
 
     lines.push(
-      `  ${chalk.cyan(handle(a).padEnd(nameW))}  ${displayAgent(a.agent_type, a.version).padEnd(agentW)}  ${stat}${DOT}${meta}`
+      `  ${chalk.cyan(displayHandle(a).padEnd(nameW))}  ${displayAgent(a.agent_type, a.version).padEnd(agentW)}  ${stat}${DOT}${meta}`
     );
+
+    if (a.prompt) {
+      lines.push(`    ${chalk.gray('task')} ${chalk.white(compactPrompt(a.prompt))}`);
+    }
+    const started = formatTimestamp(a.started_at);
+    const completed = formatTimestamp(a.completed_at);
+    if (started || completed) {
+      const parts = [];
+      if (started) parts.push(`started ${started}`);
+      if (completed) parts.push(`ended ${completed}`);
+      lines.push(`    ${chalk.gray(parts.join(' · '))}`);
+    }
+
+    for (const call of a.recent_tool_calls.slice(-3)) {
+      const when = call.timestamp ? `${relTime(call.timestamp)} ` : '';
+      lines.push(`    ${chalk.gray(when)}${chalk.bold(call.tool)} ${chalk.gray(truncate(call.summary, 96))}`);
+    }
 
     const lastMsg = a.last_messages[a.last_messages.length - 1];
     if (lastMsg) {

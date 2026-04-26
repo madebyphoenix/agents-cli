@@ -371,7 +371,7 @@ function getClaudeAccount(): string | undefined {
  * For sessionId collisions (re-resume of the same session), prefer the most
  * recent startedAt.
  */
-function buildClaudeLabelMap(): Map<string, string | null> {
+export function buildClaudeLabelMap(): Map<string, string | null> {
   const map = new Map<string, { label: string | null; startedAt: number }>();
   const dir = path.join(HOME, '.claude', 'sessions');
   if (!fs.existsSync(dir)) return new Map();

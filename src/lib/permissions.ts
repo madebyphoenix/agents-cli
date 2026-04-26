@@ -48,7 +48,7 @@ export function convertDenyToCodexRules(deny: string[]): string | null {
     if (!command) continue;
 
     const parts = command.split(/\s+/);
-    const patternStr = parts.map(p => `"${p}"`).join(', ');
+    const patternStr = parts.map(p => JSON.stringify(p)).join(', ');
     rules.push(`prefix_rule(\n    pattern = [${patternStr}],\n    decision = "forbidden",\n)`);
   }
 
@@ -215,7 +215,7 @@ export const PERMISSION_SET_ENV_VAR = 'AGENTS_PERMISSION_SET';
 export function readPermissionSetRecipe(name: string): PermissionSetRecipe | null {
   const setsDir = path.join(getPermissionsDir(), 'sets');
   for (const ext of ['.yaml', '.yml']) {
-    const filePath = path.join(setsDir, name + ext);
+    const filePath = safeJoin(setsDir, name + ext);
     if (!fs.existsSync(filePath)) continue;
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
@@ -257,9 +257,9 @@ export function buildPermissionsFromGroups(groupNames: string[]): PermissionSet 
 
   for (const groupName of groupNames) {
     // Try both .yaml and .yml extensions
-    let filePath = path.join(groupsDir, `${groupName}.yaml`);
+    let filePath = safeJoin(groupsDir, `${groupName}.yaml`);
     if (!fs.existsSync(filePath)) {
-      filePath = path.join(groupsDir, `${groupName}.yml`);
+      filePath = safeJoin(groupsDir, `${groupName}.yml`);
     }
     if (!fs.existsSync(filePath)) {
       continue;
@@ -342,7 +342,7 @@ export function getPermissionSet(name: string): InstalledPermission | null {
   const dir = getPermissionsDir();
 
   for (const ext of ['.yml', '.yaml']) {
-    const filePath = path.join(dir, name + ext);
+    const filePath = safeJoin(dir, name + ext);
     if (fs.existsSync(filePath)) {
       const set = parsePermissionSet(filePath);
       if (set) {
@@ -368,7 +368,7 @@ export function installPermissionSet(
     return { success: false, error: 'Invalid permission file' };
   }
 
-  const targetPath = path.join(getPermissionsDir(), name + '.yml');
+  const targetPath = safeJoin(getPermissionsDir(), name + '.yml');
 
   try {
     fs.copyFileSync(sourcePath, targetPath);
