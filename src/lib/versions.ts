@@ -1202,7 +1202,7 @@ export async function getInstalledVersion(agent: AgentId, version: string): Prom
   }
 
   try {
-    const { stdout } = await execAsync(`${binaryPath} --version`);
+    const { stdout } = await execFileAsync(binaryPath, ['--version']);
     const match = stdout.match(/(\d+\.\d+\.\d+)/);
     return match ? match[1] : version;
   } catch {

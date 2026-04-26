@@ -90,16 +90,16 @@ Requirements:
 
         // Fork the system repo
         const forkSpinner = ora('Forking system repo...').start();
-        const { exec } = await import('child_process');
+        const { execFile } = await import('child_process');
         const { promisify } = await import('util');
-        const execAsync = promisify(exec);
+        const execFileAsync = promisify(execFile);
 
         const repoSlug = systemRepoSlug(DEFAULT_SYSTEM_REPO);
 
         try {
           // gh repo fork creates a fork and optionally clones it
           // We just want to create the fork on GitHub, not clone
-          await execAsync(`gh repo fork ${repoSlug} --clone=false`);
+          await execFileAsync('gh', ['repo', 'fork', repoSlug, '--clone=false']);
           forkSpinner.succeed(`Forked to ${username}/.agents`);
         } catch (err) {
           const errorMsg = (err as Error).message;
