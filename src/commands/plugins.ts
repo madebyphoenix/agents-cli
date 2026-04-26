@@ -37,6 +37,7 @@ import {
   type SyncTarget,
 } from './resource-view.js';
 import { getPluginsDir } from '../lib/state.js';
+import { safeJoin } from '../lib/paths.js';
 
 /** Replace the home directory prefix with ~ for display. */
 function formatPath(p: string): string {
@@ -303,7 +304,7 @@ Examples:
       }
       const name = nameArg;
       const pluginsDir = path.join(process.env.HOME || '', '.agents', 'plugins');
-      const pluginRoot = path.join(pluginsDir, name);
+      const pluginRoot = safeJoin(pluginsDir, name);
 
       // Use discovered plugin when present; fall back to name+root if source is already gone
       const plugin = getPlugin(name);
