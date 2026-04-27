@@ -17,11 +17,11 @@ import { checkbox, confirm } from '@inquirer/prompts';
 import {
   AGENTS,
   HOOKS_CAPABLE_AGENTS,
-  CODEX_HOOKS_MIN_VERSION,
   resolveAgentName,
   formatAgentError,
   agentLabel,
 } from '../lib/agents.js';
+import { supports } from '../lib/capabilities.js';
 import type { AgentId } from '../lib/types.js';
 import { cloneRepo } from '../lib/git.js';
 import {
@@ -44,7 +44,6 @@ import {
   promptAgentVersionSelection,
   getVersionHomePath,
   resolveAgentVersionTargets,
-  compareVersions,
 } from '../lib/versions.js';
 import { recordVersionResources } from '../lib/state.js';
 import {
@@ -138,15 +137,12 @@ When to use:
         const defaultLabel = isDefault ? ' default' : '';
         const versionStr = chalk.gray(` (${version}${defaultLabel})`);
 
-        if (!agent.supportsHooks) {
-          console.log(`  ${chalk.bold(agentLabel(agent.id))} (${version}${defaultLabel}): ${chalk.gray('hooks not supported')}`);
-          console.log();
-          return;
-        }
-
-        // Version gate for Codex hooks
-        if (agentId === 'codex' && compareVersions(version, CODEX_HOOKS_MIN_VERSION) < 0) {
-          console.log(`  ${chalk.bold(agentLabel(agentId))}${versionStr}: ${chalk.gray(`unsupported (codex@${version} < ${CODEX_HOOKS_MIN_VERSION})`)}`);
+        const gate = supports(agentId, 'hooks', version);
+        if (!gate.ok) {
+          const detail = gate.reason === 'unsupported'
+            ? 'hooks not supported'
+            : `unsupported (${agentId}@${version} requires ${gate.need})`;
+          console.log(`  ${chalk.bold(agentLabel(agent.id))}${versionStr}: ${chalk.gray(detail)}`);
           console.log();
           return;
         }

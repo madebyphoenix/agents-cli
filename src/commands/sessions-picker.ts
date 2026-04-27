@@ -88,7 +88,7 @@ function formatHeader(session: SessionMeta, events: SessionEvent[]): string {
     line3.push(chalk.bold.white(formatTokens(totalTokens)) + chalk.gray(' tokens'));
   }
   if (session.label) line3.push(chalk.white(session.label));
-  line3.push(chalk.gray(session.id));
+  line3.push(chalk.gray(linkPath(session.filePath, session.id)));
 
   return [
     line1.join(DOT),

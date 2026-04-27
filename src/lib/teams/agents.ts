@@ -100,14 +100,104 @@ function hasTransitiveDep(
 
 export type { AgentType } from './parsers.js';
 
-// Base commands for plan mode (read-only, may prompt for confirmation)
+// Base commands for plan mode (read-only). applyEditMode / applyFullMode
+// rewrite these for write-capable modes. Each agent's read-only flag MUST be
+// here so a plan-mode teammate truly cannot write — even if the teammate
+// prompt tries to ignore the instruction. See agents.test.ts for the contract.
 export const AGENT_COMMANDS: Record<AgentType, string[]> = {
-  codex: ['codex', 'exec', '--sandbox', 'workspace-write', '{prompt}', '--json'],
+  codex: ['codex', 'exec', '--sandbox', 'read-only', '{prompt}', '--json'],
   cursor: ['cursor-agent', '-p', '--output-format', 'stream-json', '{prompt}'],
   gemini: ['gemini', '{prompt}', '--output-format', 'stream-json', '--approval-mode', 'plan'],
   claude: ['claude', '-p', '--verbose', '{prompt}', '--output-format', 'stream-json', '--permission-mode', 'plan'],
   opencode: ['opencode', 'run', '--format', 'json', '{prompt}'],
 };
+
+/**
+ * Rewrite a plan-mode command into edit mode (writes inside cwd allowed,
+ * approval prompts may still appear). Pure function — exported for tests.
+ */
+export function applyEditMode(agentType: AgentType, cmd: string[]): string[] {
+  const editCmd: string[] = [...cmd];
+
+  switch (agentType) {
+    case 'codex': {
+      // Swap --sandbox read-only -> --sandbox workspace-write so the codex
+      // sandbox actually permits writes. --full-auto then disables approvals.
+      const sandboxIndex = editCmd.indexOf('--sandbox');
+      if (sandboxIndex !== -1 && sandboxIndex + 1 < editCmd.length) {
+        editCmd[sandboxIndex + 1] = 'workspace-write';
+      }
+      editCmd.push('--full-auto');
+      break;
+    }
+
+    case 'cursor':
+      editCmd.push('-f');
+      break;
+
+    case 'gemini': {
+      const approvalIndex = editCmd.indexOf('--approval-mode');
+      if (approvalIndex !== -1) {
+        editCmd.splice(approvalIndex, 2);
+      }
+      editCmd.push('--yolo');
+      break;
+    }
+
+    case 'claude': {
+      const permModeIndex = editCmd.indexOf('--permission-mode');
+      if (permModeIndex !== -1 && permModeIndex + 1 < editCmd.length) {
+        editCmd[permModeIndex + 1] = 'acceptEdits';
+      }
+      break;
+    }
+  }
+
+  return editCmd;
+}
+
+/**
+ * Rewrite a plan-mode command into full mode (writes + approval gates
+ * bypassed). Pure function — exported for tests.
+ */
+export function applyFullMode(agentType: AgentType, cmd: string[]): string[] {
+  const fullCmd: string[] = [...cmd];
+
+  switch (agentType) {
+    case 'codex': {
+      const sandboxIndex = fullCmd.indexOf('--sandbox');
+      if (sandboxIndex !== -1 && sandboxIndex + 1 < fullCmd.length) {
+        fullCmd[sandboxIndex + 1] = 'workspace-write';
+      }
+      fullCmd.push('--full-auto');
+      break;
+    }
+
+    case 'cursor':
+      fullCmd.push('-f');
+      break;
+
+    case 'gemini': {
+      const approvalIndex = fullCmd.indexOf('--approval-mode');
+      if (approvalIndex !== -1) {
+        fullCmd.splice(approvalIndex, 2);
+      }
+      fullCmd.push('--yolo');
+      break;
+    }
+
+    case 'claude': {
+      const permModeIndex = fullCmd.indexOf('--permission-mode');
+      if (permModeIndex !== -1) {
+        fullCmd.splice(permModeIndex, 2);
+      }
+      fullCmd.push('--dangerously-skip-permissions');
+      break;
+    }
+  }
+
+  return fullCmd;
+}
 
 /**
  * Reasoning-intensity knob wired into buildReasoningFlags.
@@ -1294,72 +1384,11 @@ export type CompletionHook = (agent: AgentProcess) => Promise<void>;
   }
 
   private applyEditMode(agentType: AgentType, cmd: string[]): string[] {
-    const editCmd: string[] = [...cmd];
-
-    switch (agentType) {
-      case 'codex':
-        editCmd.push('--full-auto');
-        break;
-
-      case 'cursor':
-        editCmd.push('-f');
-        break;
-
-      case 'gemini': {
-        const approvalIndex = editCmd.indexOf('--approval-mode');
-        if (approvalIndex !== -1) {
-          editCmd.splice(approvalIndex, 2);
-        }
-        editCmd.push('--yolo');
-        break;
-      }
-
-      case 'claude':
-        const permModeIndex = editCmd.indexOf('--permission-mode');
-        if (permModeIndex !== -1 && permModeIndex + 1 < editCmd.length) {
-          editCmd[permModeIndex + 1] = 'acceptEdits';
-        }
-        break;
-    }
-
-    return editCmd;
+    return applyEditMode(agentType, cmd);
   }
 
-  // "full" mode: edit-level write access with permission gates bypassed.
-  // For Claude that's --dangerously-skip-permissions; other agents already
-  // lack gates in edit mode so their commands match applyEditMode.
   private applyFullMode(agentType: AgentType, cmd: string[]): string[] {
-    const fullCmd: string[] = [...cmd];
-
-    switch (agentType) {
-      case 'codex':
-        fullCmd.push('--full-auto');
-        break;
-
-      case 'cursor':
-        fullCmd.push('-f');
-        break;
-
-      case 'gemini': {
-        const approvalIndex = fullCmd.indexOf('--approval-mode');
-        if (approvalIndex !== -1) {
-          fullCmd.splice(approvalIndex, 2);
-        }
-        fullCmd.push('--yolo');
-        break;
-      }
-
-      case 'claude':
-        // Replace --permission-mode plan with --dangerously-skip-permissions
-        const permModeIndex = fullCmd.indexOf('--permission-mode');
-        if (permModeIndex !== -1) {
-          fullCmd.splice(permModeIndex, 2); // Remove --permission-mode and its value
-        }
-        fullCmd.push('--dangerously-skip-permissions');
-        break;
-    }
-
-    return fullCmd;
+    return applyFullMode(agentType, cmd);
   }
 
   async get(agentId: string): Promise<AgentProcess | null> {

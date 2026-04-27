@@ -321,14 +321,21 @@ Extras clone into `~/.agents/.repos/<alias>/` and ship the same layout as the pr
 
 ## Compatibility
 
-| Agent | Versions | MCP | Commands | Skills | Rules | Hooks | Permissions | Routines | Teams |
-|-------|----------|-----|----------|--------|-------|-------|-------------|----------|-------|
-| Claude Code | yes | yes | yes | yes | CLAUDE.md | yes | yes | yes | yes |
-| Codex CLI | yes | yes | yes | yes | AGENTS.md | yes | yes | yes | yes |
-| Gemini CLI | yes | yes | yes | yes | GEMINI.md | yes | -- | yes | yes |
-| Cursor | yes | yes | yes | yes | .cursorrules | -- | -- | -- | yes |
-| OpenCode | yes | yes | yes | yes | AGENTS.md | yes | yes | -- | yes |
-| OpenClaw | yes | yes | -- | yes | workspace/AGENTS.md | yes | -- | -- | -- |
+| Agent | Versions | MCP | Commands | Skills | Rules | Hooks | Plugins | Permissions | Routines | Teams |
+|-------|----------|-----|----------|--------|-------|-------|---------|-------------|----------|-------|
+| Claude Code | yes | yes | yes | yes | CLAUDE.md | yes | yes | yes | yes | yes |
+| Codex CLI | yes | yes | yes | yes | AGENTS.md | yes (>= 0.116.0) | -- | yes | yes | yes |
+| Gemini CLI | yes | yes | yes | yes | GEMINI.md | yes (>= 0.26.0) | -- | -- | yes | yes |
+| OpenClaw | yes | yes | -- | yes | workspace/AGENTS.md | yes | yes | -- | -- | -- |
+| Cursor | yes | yes | yes | yes | .cursorrules | -- | -- | -- | -- | yes |
+| OpenCode | yes | yes | yes | yes | AGENTS.md | -- | -- | yes | -- | yes |
+| Copilot | yes | yes | yes | yes | AGENTS.md | -- | -- | -- | -- | -- |
+| Amp | yes | yes | yes | yes | AGENTS.md | -- | -- | -- | -- | -- |
+| Kiro | yes | yes | yes | yes | AGENTS.md | -- | -- | -- | -- | -- |
+| Goose | yes | yes | -- | -- | AGENTS.md | -- | -- | -- | -- | -- |
+| Roo Code | yes | yes | yes | yes | AGENTS.md | -- | -- | -- | -- | -- |
+
+Hooks columns marked `yes (>= X.Y.Z)` are version-gated: `agents hooks add` skips with a clear message when the installed binary is older than the listed version, instead of writing config the older binary would silently ignore. OpenCode's plugin-based hook system is on the roadmap; the entry is `--` until a writer ships.
 
 ## FAQ
 

@@ -22,7 +22,13 @@ import {
 import type { AgentId } from '../lib/types.js';
 import { profileExists, resolveProfileForRun } from '../lib/profiles.js';
 import { readBundle, resolveBundleEnv } from '../lib/secrets-bundles.js';
-import { resolveRunVersion, type RotateResult } from '../lib/rotate.js';
+import {
+  getConfiguredRunStrategy,
+  normalizeRunStrategy,
+  resolveRunVersion,
+  RUN_STRATEGIES,
+  type RotateResult,
+} from '../lib/rotate.js';
 
 const VALID_AGENTS = Object.keys(AGENT_COMMANDS);
 
@@ -41,6 +47,7 @@ interface ExecCommandActionOptions {
   timeout?: string;
   fallback?: string;
   rotate?: boolean;
+  strategy?: string;
   acp?: boolean;
 }
 
@@ -95,7 +102,11 @@ export function registerRunCommand(program: Command): void {
     )
     .option(
       '-r, --rotate',
-      'Rotate across installed versions of the agent. Picks the signed-in, not-out-of-credits account with the oldest last-active timestamp. Ignored when @version is pinned.',
+      'Shortcut for --strategy rotate. Ignored when @version is pinned.',
+    )
+    .option(
+      '--strategy <strategy>',
+      'Version/account selection strategy: pinned | available | rotate. Defaults to run.<agent>.strategy, then pinned.',
     )
     .option(
       '--acp',
@@ -106,10 +117,14 @@ Modes:
   With a prompt -> headless (pipes output, no TTY, exits when the agent finishes).
   Without a prompt -> interactive (launches the agent's TUI; stdio is fully inherited).
 
-Version rotation (opt-in with --rotate):
-  Picks across installed versions using the account data 'agents view' already
-  shows: signed-in only, skip out-of-credits, least-recently-active wins. Useful
-  when you have multiple accounts of the same CLI and want to spread usage.
+Run strategy:
+  pinned     Use the workspace/global pinned version from agents.yaml.
+  available  Use the pinned version if it has usage available; otherwise switch
+             to another signed-in version with usage available.
+  rotate     Pick the signed-in account with usage available and the most
+             headroom; last-active breaks ties.
+  Configure with run.<agent>.strategy in agents.yaml, or override with
+  --strategy. --rotate is kept as a shortcut for --strategy rotate.
   Ignored when @version is pinned, when a profile is used, or with --fallback.
 
 Examples:
@@ -117,10 +132,10 @@ Examples:
   agents run claude
 
   # Interactive, rotate to the least-used healthy account
-  agents run claude --rotate
+  agents run claude --strategy rotate
 
-  # Headless, rotate per invocation (spreads across accounts over time)
-  agents run claude "summarize recent git commits" --mode plan --rotate
+  # Headless, switch away from the pinned version when usage is unavailable
+  agents run claude "summarize recent git commits" --mode plan --strategy available
 
   # Pin a specific version (rotation ignored)
   agents run codex@0.116.0 "fix linting errors in src/" --mode edit
@@ -176,32 +191,44 @@ Examples:
         process.exit(1);
       }
 
-      // Rotation is opt-in via --rotate. Default honors the pinned default
-      // version (from `agents use`) so behavior stays predictable. When
-      // opted in, pick the least-recently-active signed-in version that
-      // isn't out of credits. Skipped when @version is pinned, when running
-      // a profile (profile carries its own version + auth), or when a
-      // fallback chain is configured (fallback pins versions directly).
-      if (options.rotate) {
+      const cwd = options.cwd ?? process.cwd();
+      const configuredStrategy = getConfiguredRunStrategy(agent, cwd);
+      const explicitStrategy = options.strategy ? normalizeRunStrategy(options.strategy) : null;
+      if (options.strategy && !explicitStrategy) {
+        console.error(chalk.red(`Invalid strategy: ${options.strategy}. Use ${RUN_STRATEGIES.join(', ')}.`));
+        process.exit(1);
+      }
+      if (options.rotate && explicitStrategy && explicitStrategy !== 'rotate') {
+        console.error(chalk.red('--rotate conflicts with --strategy. Use one strategy override.'));
+        process.exit(1);
+      }
+      const strategy = options.rotate ? 'rotate' : explicitStrategy ?? configuredStrategy;
+
+      // Strategy only applies to bare agent invocations. Explicit @version,
+      // profiles, and fallback chains already define their execution target.
+      if (strategy !== 'pinned' || options.rotate || explicitStrategy) {
         if (version) {
-          process.stderr.write(chalk.yellow(`[agents] --rotate ignored: version ${version} is pinned\n`));
+          process.stderr.write(chalk.yellow(`[agents] strategy ${strategy} ignored: version ${version} is pinned\n`));
         } else if (fromProfile) {
-          process.stderr.write(chalk.yellow(`[agents] --rotate ignored: profile pins its own version/auth\n`));
+          process.stderr.write(chalk.yellow(`[agents] strategy ${strategy} ignored: profile pins its own version/auth\n`));
         } else if (options.fallback) {
-          process.stderr.write(chalk.yellow(`[agents] --rotate ignored: --fallback pins versions directly\n`));
+          process.stderr.write(chalk.yellow(`[agents] strategy ${strategy} ignored: --fallback pins versions directly\n`));
         } else {
           try {
-            const resolved = await resolveRunVersion(agent);
+            const resolved = await resolveRunVersion(agent, strategy, cwd);
             if (resolved.version) {
               version = resolved.version;
               if (resolved.rotation) {
-                process.stderr.write(chalk.gray(formatRotationBanner(resolved.rotation) + '\n'));
+                const banner = strategy === 'available'
+                  ? formatRotationBanner(resolved.rotation).replace('rotation picked', 'available picked')
+                  : formatRotationBanner(resolved.rotation);
+                process.stderr.write(chalk.gray(banner + '\n'));
               }
             } else {
-              process.stderr.write(chalk.yellow(`[agents] --rotate found no healthy ${agent} version; falling back to defaults\n`));
+              process.stderr.write(chalk.yellow(`[agents] strategy ${strategy} found no usable ${agent} version; falling back to defaults\n`));
             }
           } catch (err) {
-            process.stderr.write(chalk.yellow(`[agents] rotation skipped: ${(err as Error).message}\n`));
+            process.stderr.write(chalk.yellow(`[agents] strategy ${strategy} skipped: ${(err as Error).message}\n`));
           }
         }
       }

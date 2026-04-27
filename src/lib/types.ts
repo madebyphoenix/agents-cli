@@ -9,6 +9,9 @@
 /** Unique identifier for a supported AI coding agent. */
 export type AgentId = 'claude' | 'codex' | 'gemini' | 'cursor' | 'opencode' | 'openclaw' | 'copilot' | 'amp' | 'kiro' | 'goose' | 'roo';
 
+/** How `agents run <agent>` chooses an installed version when none is pinned. */
+export type RunStrategy = 'pinned' | 'available' | 'rotate';
+
 /** Subset of chalk color names used for agent-specific terminal output. */
 export type ChalkColor = 'magenta' | 'green' | 'blue' | 'cyan' | 'yellowBright' | 'redBright' | 'whiteBright' | 'blueBright' | 'greenBright' | 'magentaBright' | 'cyanBright';
 
@@ -32,12 +35,12 @@ export interface AgentConfig {
   supportsHooks: boolean;
   nativeAgentsSkillsDir?: boolean;
   capabilities: {
-    hooks: boolean;
-    mcp: boolean;
-    allowlist: boolean;
-    skills: boolean;
-    commands: boolean;
-    plugins: boolean;
+    hooks: Capability;
+    mcp: Capability;
+    allowlist: Capability;
+    skills: Capability;
+    commands: Capability;
+    plugins: Capability;
     /**
      * Whether the agent natively resolves `@path/to/file` imports inside its
      * memory file at session start. If false, agents-cli must pre-compile the
@@ -46,6 +49,25 @@ export interface AgentConfig {
     memoryImports?: boolean;
   };
 }
+
+/**
+ * A capability flag for an agent feature. `true` means supported on every
+ * installed version; `false` means never supported. The object form gates by
+ * semver: `since` is the minimum version that ships the feature, `until` is
+ * exclusive upper bound (set when a feature is removed in a later release).
+ */
+export type Capability = boolean | { since?: string; until?: string };
+
+/** Names of every gateable capability on AgentConfig. */
+export type CapabilityName = 'hooks' | 'mcp' | 'allowlist' | 'skills' | 'commands' | 'plugins';
+
+/** Reason a capability check failed. */
+export type CapabilityFailReason = 'unsupported' | 'too_old' | 'too_new';
+
+/** Result of `supports(agent, cap, version?)`. */
+export type CapabilityResult =
+  | { ok: true }
+  | { ok: false; reason: CapabilityFailReason; need?: string };
 
 /** Configuration for a single MCP server as stored in ~/.agents/mcp/. */
 export interface McpServerConfig {
@@ -95,6 +117,7 @@ export interface InstalledHook {
 /** Package manifest (agents.yaml) found inside a cloned config repo or package. */
 export interface Manifest {
   agents?: Partial<Record<AgentId, string>>;
+  run?: Partial<Record<AgentId, { strategy?: RunStrategy }>>;
   dependencies?: Record<string, string>;
   mcp?: Record<string, McpServerConfig>;
   defaults?: {
@@ -355,6 +378,7 @@ export interface ExtraRepoConfig {
 /** Top-level structure of ~/.agents/agents.yaml -- the CLI's persistent state. */
 export interface Meta {
   agents?: Partial<Record<AgentId, string>>;
+  run?: Partial<Record<AgentId, { strategy?: RunStrategy }>>;
   registries?: Record<RegistryType, Record<string, RegistryConfig>>;
   // Per-version resource tracking
   versions?: Partial<Record<AgentId, Record<string, VersionResources>>>;

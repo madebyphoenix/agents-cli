@@ -32,8 +32,15 @@ const execFileAsync = promisify(execFile);
 
 const HOME = os.homedir();
 
-/** Minimum Codex CLI version that supports hooks. */
+/**
+ * Minimum Codex CLI version that supports hooks.
+ * Mirrored on `AGENTS.codex.capabilities.hooks.since` -- kept exported for
+ * legacy import sites that haven't migrated to `supports()` yet.
+ */
 export const CODEX_HOOKS_MIN_VERSION = '0.116.0';
+
+/** Minimum Gemini CLI version that supports the hooks system (v0.26.0, Jan 2026). */
+export const GEMINI_HOOKS_MIN_VERSION = '0.26.0';
 
 const CLI_VERSION_CACHE_PATH = path.join(HOME, '.agents', '.cli-version-cache.json');
 
@@ -175,6 +182,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     supportsHooks: true,
     capabilities: { hooks: true, mcp: true, allowlist: true, skills: true, commands: true, plugins: true, memoryImports: true },
   },
+  // codex hooks: gated to >= 0.116.0 (introduced [features] codex_hooks flag).
   codex: {
     id: 'codex',
     name: 'Codex',
@@ -190,7 +198,7 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     format: 'markdown',
     variableSyntax: '$ARGUMENTS',
     supportsHooks: true,
-    capabilities: { hooks: true, mcp: true, allowlist: false, skills: true, commands: true, plugins: false },
+    capabilities: { hooks: { since: '0.116.0' }, mcp: true, allowlist: false, skills: true, commands: true, plugins: false },
   },
   gemini: {
     id: 'gemini',
@@ -208,7 +216,8 @@ export const AGENTS: Record<AgentId, AgentConfig> = {
     variableSyntax: '{{args}}',
     supportsHooks: true,
     nativeAgentsSkillsDir: true,
-    capabilities: { hooks: true, mcp: true, allowlist: false, skills: true, commands: true, plugins: false, memoryImports: true },
+    // gemini hooks: shipped in v0.26.0 (Jan 2026); older binaries silently ignore the `hooks` key.
+    capabilities: { hooks: { since: '0.26.0' }, mcp: true, allowlist: false, skills: true, commands: true, plugins: false, memoryImports: true },
   },
   cursor: {
     id: 'cursor',
@@ -371,11 +380,13 @@ export const COMMANDS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
 );
 
 /** Agents that support event hooks (pre/post lifecycle callbacks). */
-export const HOOKS_CAPABLE_AGENTS = ['claude', 'codex', 'gemini', 'openclaw'] as const;
+export const HOOKS_CAPABLE_AGENTS: readonly AgentId[] = ALL_AGENT_IDS.filter(
+  (id) => AGENTS[id].capabilities.hooks !== false
+);
 
 /** Agents that support the plugin system. */
 export const PLUGINS_CAPABLE_AGENTS: AgentId[] = ALL_AGENT_IDS.filter(
-  (id) => AGENTS[id].capabilities.plugins
+  (id) => AGENTS[id].capabilities.plugins !== false
 );
 
 /** Get the chalk color function for an agent. Works for any AgentId or SessionAgentId. */

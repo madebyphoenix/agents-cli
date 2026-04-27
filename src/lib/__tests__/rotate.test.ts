@@ -1,5 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { pickRotateCandidate, type RotateCandidate } from '../rotate.js';
+import {
+  normalizeRunStrategy,
+  pickAvailableCandidate,
+  pickRotateCandidate,
+  type RotateCandidate,
+} from '../rotate.js';
+import type { UsageSnapshot } from '../usage.js';
+
+function usage(usedPercent: number): UsageSnapshot {
+  return {
+    source: 'live',
+    sourceLabel: 'test',
+    capturedAt: new Date('2026-04-20T00:00:00Z'),
+    windows: [
+      {
+        key: 'session',
+        label: 'Session',
+        shortLabel: 'S',
+        usedPercent,
+        resetsAt: null,
+        windowMinutes: 300,
+      },
+    ],
+  };
+}
 
 function cand(overrides: Partial<RotateCandidate>): RotateCandidate {
   return {
@@ -7,6 +31,7 @@ function cand(overrides: Partial<RotateCandidate>): RotateCandidate {
     version: '0.0.0',
     email: 'a@b.com',
     usageStatus: 'available',
+    usageSnapshot: null,
     authValid: true,
     lastActive: new Date('2026-01-01T00:00:00Z'),
     ...overrides,
@@ -34,7 +59,7 @@ describe('pickRotateCandidate', () => {
     expect(pickRotateCandidate([])).toBeNull();
   });
 
-  it('picks the least-recently-active healthy candidate', () => {
+  it('picks the least-recently-active healthy candidate when usage is unknown', () => {
     const newest = cand({ version: '2.1.113', email: 'a@x.com', lastActive: new Date('2026-04-20T10:00:00Z') });
     const middle = cand({ version: '2.1.112', email: 'b@x.com', lastActive: new Date('2026-04-20T05:00:00Z') });
     const oldest = cand({ version: '2.1.92', email: 'c@x.com', lastActive: new Date('2026-04-16T00:00:00Z') });
@@ -84,13 +109,42 @@ describe('pickRotateCandidate', () => {
     expect(result!.excluded[0].version).toBe('2.1.112');
   });
 
-  it('treats rate_limited as healthy (transient, not exhausted)', () => {
+  it('excludes rate-limited accounts from rotation', () => {
     const rateLimited = cand({ version: '2.1.113', email: 'a@x.com', usageStatus: 'rate_limited', lastActive: new Date('2026-04-15T00:00:00Z') });
     const newer = cand({ version: '2.1.112', email: 'b@x.com', lastActive: new Date('2026-04-20T10:00:00Z') });
 
     const result = pickRotateCandidate([rateLimited, newer]);
-    expect(result!.picked.version).toBe('2.1.113');
-    expect(result!.healthy).toHaveLength(2);
+    expect(result!.picked.version).toBe('2.1.112');
+    expect(result!.healthy).toHaveLength(1);
+    expect(result!.excluded.map((c) => c.version)).toContain('2.1.113');
+  });
+
+  it('picks the account with the most usage headroom before last-active', () => {
+    const oldest = cand({
+      version: '2.1.113',
+      email: 'a@x.com',
+      usageSnapshot: usage(80),
+      lastActive: new Date('2026-04-15T00:00:00Z'),
+    });
+    const newest = cand({
+      version: '2.1.112',
+      email: 'b@x.com',
+      usageSnapshot: usage(30),
+      lastActive: new Date('2026-04-20T10:00:00Z'),
+    });
+
+    const result = pickRotateCandidate([oldest, newest]);
+    expect(result!.picked.version).toBe('2.1.112');
+    expect(result!.healthy.map((c) => c.version)).toEqual(['2.1.112', '2.1.113']);
+  });
+
+  it('excludes accounts whose live usage windows are exhausted', () => {
+    const exhausted = cand({ version: '2.1.113', email: 'a@x.com', usageSnapshot: usage(100) });
+    const available = cand({ version: '2.1.112', email: 'b@x.com', usageSnapshot: usage(60) });
+
+    const result = pickRotateCandidate([exhausted, available]);
+    expect(result!.picked.version).toBe('2.1.112');
+    expect(result!.excluded.map((c) => c.version)).toContain('2.1.113');
   });
 
   it('distributes across tied candidates so parallel callers fan out', () => {
@@ -169,5 +223,46 @@ describe('pickRotateCandidate', () => {
       expect(ratio).toBeGreaterThan(0.1);
       expect(ratio).toBeLessThan(0.3);
     }
+  });
+});
+
+describe('pickAvailableCandidate', () => {
+  it('prefers the pinned version when it has usage available', () => {
+    const preferred = cand({ version: '2.1.113', email: 'a@x.com', lastActive: new Date('2026-04-20T10:00:00Z') });
+    const older = cand({ version: '2.1.112', email: 'b@x.com', lastActive: new Date('2026-04-15T10:00:00Z') });
+
+    const result = pickAvailableCandidate([older, preferred], '2.1.113');
+    expect(result!.picked.version).toBe('2.1.113');
+  });
+
+  it('switches away from the pinned version when it is rate limited', () => {
+    const preferred = cand({ version: '2.1.113', email: 'a@x.com', usageStatus: 'rate_limited' });
+    const available = cand({ version: '2.1.112', email: 'b@x.com', usageStatus: 'available' });
+
+    const result = pickAvailableCandidate([preferred, available], '2.1.113');
+    expect(result!.picked.version).toBe('2.1.112');
+    expect(result!.excluded.map((candidate) => candidate.version)).toContain('2.1.113');
+  });
+
+  it('returns null when no signed-in account has usage available', () => {
+    const result = pickAvailableCandidate([
+      cand({ version: '2.1.113', usageStatus: 'rate_limited' }),
+      cand({ version: '2.1.112', usageStatus: 'out_of_credits' }),
+    ], '2.1.113');
+
+    expect(result).toBeNull();
+  });
+});
+
+describe('normalizeRunStrategy', () => {
+  it('accepts supported strategies', () => {
+    expect(normalizeRunStrategy('pinned')).toBe('pinned');
+    expect(normalizeRunStrategy('available')).toBe('available');
+    expect(normalizeRunStrategy('rotate')).toBe('rotate');
+  });
+
+  it('rejects unknown strategies', () => {
+    expect(normalizeRunStrategy('version_policy')).toBeNull();
+    expect(normalizeRunStrategy(null)).toBeNull();
   });
 });

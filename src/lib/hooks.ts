@@ -13,6 +13,7 @@ import * as path from 'path';
 import * as yaml from 'yaml';
 import * as TOML from 'smol-toml';
 import { AGENTS, ALL_AGENT_IDS, HOOKS_CAPABLE_AGENTS } from './agents.js';
+import { supports, explainSkip } from './capabilities.js';
 import { getAgentsDir, getHooksDir as getCentralHooksDir, getProjectAgentsDir } from './state.js';
 import { getEffectiveHome, getVersionHomePath, listInstalledVersions } from './versions.js';
 import type { AgentId, InstalledHook, ManifestHook } from './types.js';
@@ -412,6 +413,11 @@ export function installHookToVersion(
   version: string,
   hookName: string
 ): { success: boolean; error?: string } {
+  const gate = supports(agent, 'hooks', version);
+  if (!gate.ok) {
+    return { success: false, error: explainSkip(agent, 'hooks', gate, version) };
+  }
+
   const central = listHookEntriesFromDir(getCentralHooksDir()).find((e) => e.name === hookName);
   if (!central) {
     return { success: false, error: `Hook '${hookName}' not found in central` };

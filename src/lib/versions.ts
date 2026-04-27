@@ -25,13 +25,14 @@ import * as TOML from 'smol-toml';
 import { checkbox, select, confirm } from '@inquirer/prompts';
 import type { AgentId, VersionResources } from './types.js';
 import { getVersionsDir, getShimsDir, ensureAgentsDir, readMeta, writeMeta, getCommandsDir, getSkillsDir, getHooksDir, getMemoryDir, getPermissionsDir, getSubagentsDir, clearVersionResources, getVersionResources, recordVersionResources, getMcpDir, getProjectAgentsDir, getPromptcutsPath, getEnabledExtraRepos } from './state.js';
-import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig, resolveAgentName, formatAgentError, CODEX_HOOKS_MIN_VERSION } from './agents.js';
+import { AGENTS, getAccountEmail, MCP_CAPABLE_AGENTS, COMMANDS_CAPABLE_AGENTS, getMcpConfigPathForHome, parseMcpConfig, resolveAgentName, formatAgentError } from './agents.js';
 import { getDefaultPermissionSet, applyPermissionsToVersion as applyPermsToVersion, PERMISSIONS_CAPABLE_AGENTS, discoverPermissionGroups, getTotalPermissionRuleCount, buildPermissionsFromGroups, CODEX_RULES_FILENAME, getActivePermissionSetName, readPermissionSetRecipe, PERMISSION_SET_ENV_VAR } from './permissions.js';
 import { installMcpServers } from './mcp.js';
 import { markdownToToml } from './convert.js';
 import { createVersionedAlias, removeVersionedAlias, switchConfigSymlink, getConfigSymlinkVersion, ensureClaudeInsideSymlink } from './shims.js';
 import { listInstalledSubagents, transformSubagentForClaude, syncSubagentToOpenclaw, SUBAGENT_CAPABLE_AGENTS } from './subagents.js';
 import { parseHookManifest, registerHooksToSettings } from './hooks.js';
+import { supports, explainSkip } from './capabilities.js';
 import { discoverPlugins, syncPluginToVersion, isPluginSynced, pluginSupportsAgent, cleanOrphanedPluginSkills } from './plugins.js';
 import { compileMemoryForAgent } from './memory-compile.js';
 import { PLUGINS_CAPABLE_AGENTS } from './agents.js';
@@ -1497,11 +1498,11 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
     }
   }
 
-  // Sync hooks (if agent supports them)
+  // Sync hooks (if agent supports them at this version)
+  const hooksGate = supports(agent, 'hooks', version);
   if (agentConfig.supportsHooks) {
-    // Version gate: Codex hooks require >= CODEX_HOOKS_MIN_VERSION
-    if (agent === 'codex' && compareVersions(version, CODEX_HOOKS_MIN_VERSION) < 0) {
-      console.warn(`hooks skipped: codex@${version} < ${CODEX_HOOKS_MIN_VERSION}`);
+    if (!hooksGate.ok) {
+      console.warn(explainSkip(agent, 'hooks', hooksGate, version) + ' -- skipped');
     } else {
       const hooksToSync = selection
         ? resolveSelection(selection.hooks, available.hooks)
@@ -1547,7 +1548,9 @@ export function syncResourcesToVersion(agent: AgentId, version: string, selectio
           recordVersionResources(agent, version, 'hooks', syncedHooks);
         }
 
-        if (agent === 'claude' || agent === 'codex') {
+        // Register hooks into agent-native settings.json/hooks.json. Gemini
+        // shipped hooks in 0.26.0; gate already passed above so this is safe.
+        if (agent === 'claude' || agent === 'codex' || agent === 'gemini') {
           registerHooksToSettings(agent, versionHome);
         }
       }
