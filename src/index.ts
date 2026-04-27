@@ -237,7 +237,7 @@ function saveUpdateCheck(latestVersion: string): void {
 /** Present an interactive upgrade prompt (TTY) or a one-line hint (non-TTY). */
 async function promptUpgrade(latestVersion: string): Promise<void> {
   if (!process.stdout.isTTY) {
-    console.error(chalk.yellow(`Update available: ${VERSION} -> ${latestVersion}. Run: npm install -g @phnx-labs/agents-cli@latest`));
+    console.error(chalk.yellow(`Update available: ${VERSION} -> ${latestVersion}. Run: npm install -g @swarmify/agents-cli@latest`));
     return;
   }
 
@@ -266,24 +266,24 @@ async function promptUpgrade(latestVersion: string): Promise<void> {
   }
 
   if (answer === 'now') {
-    const { exec, spawnSync } = await import('child_process');
+    const { execFile, spawnSync } = await import('child_process');
     const { promisify } = await import('util');
-    const execAsync = promisify(exec);
+    const execFileAsync = promisify(execFile);
     const spinner = ora('Upgrading...').start();
     try {
-      await execAsync('npm install -g @phnx-labs/agents-cli@latest');
+      await execFileAsync('npm', ['install', '-g', '@swarmify/agents-cli@latest']);
       spinner.succeed(`Upgraded to ${latestVersion}`);
       await showWhatsNew(VERSION, latestVersion);
       console.log();
       // Re-exec with new version and exit
       const result = spawnSync('agents', process.argv.slice(2), {
         stdio: 'inherit',
-        shell: true,
+        shell: false,
       });
       process.exit(result.status ?? 0);
     } catch {
       spinner.fail('Upgrade failed');
-      console.log(chalk.gray('Run manually: npm install -g @phnx-labs/agents-cli@latest'));
+      console.log(chalk.gray('Run manually: npm install -g @swarmify/agents-cli@latest'));
     }
     console.log();
   }
@@ -436,15 +436,15 @@ program
         }
 
         spinner.text = `Upgrading ${VERSION} -> ${latestVersion}...`;
-        const { exec: execCb } = await import('child_process');
+        const { execFile } = await import('child_process');
         const { promisify } = await import('util');
-        const execAsync = promisify(execCb);
-        await execAsync('npm install -g @phnx-labs/agents-cli@latest');
+        const execFileAsync = promisify(execFile);
+        await execFileAsync('npm', ['install', '-g', '@swarmify/agents-cli@latest']);
         spinner.succeed(`Upgraded to ${latestVersion}`);
         await showWhatsNew(VERSION, latestVersion);
       } catch (err) {
         spinner.fail('Upgrade failed');
-        console.log(chalk.gray('Run manually: npm install -g @phnx-labs/agents-cli@latest'));
+        console.log(chalk.gray('Run manually: npm install -g @swarmify/agents-cli@latest'));
       }
     });
 

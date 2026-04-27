@@ -12,6 +12,66 @@ import { execSync } from 'child_process';
 import type { SessionAgentId, SessionEvent } from './types.js';
 
 /**
+ * Largest session file we will load into memory. Above this we throw a clean
+ * error instead of OOMing or hitting V8's ERR_STRING_TOO_LONG. Aligns with
+ * Node's ~512MB string ceiling with a healthy margin.
+ */
+export const SESSION_FILE_MAX_BYTES = 200_000_000;
+
+/**
+ * Strip terminal control sequences that a malicious session file could use to
+ * hijack the user's terminal (clipboard via OSC 52, scrollback wipe, alt-screen
+ * takeover, cursor moves, etc.). Allowed through: tab (0x09), newline (0x0a),
+ * carriage return (0x0d). Everything else in the C0/C1 range and every CSI/OSC
+ * escape is dropped.
+ */
+const TERMINAL_ESCAPE_REGEX = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g;
+
+export function sanitizeForTerminal(s: string): string {
+  if (typeof s !== 'string' || !s) return s;
+  return s.replace(TERMINAL_ESCAPE_REGEX, '');
+}
+
+/** Recursively sanitize every string value within a tool-args object. */
+function sanitizeArgsDeep(value: any): any {
+  if (typeof value === 'string') return sanitizeForTerminal(value);
+  if (Array.isArray(value)) return value.map(sanitizeArgsDeep);
+  if (value && typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const k of Object.keys(value)) out[k] = sanitizeArgsDeep(value[k]);
+    return out;
+  }
+  return value;
+}
+
+/** In-place sanitize all user-visible string fields on an event. */
+function sanitizeEvent(e: SessionEvent): void {
+  if (e.content) e.content = sanitizeForTerminal(e.content);
+  if (e.command) e.command = sanitizeForTerminal(e.command);
+  if (e.path) e.path = sanitizeForTerminal(e.path);
+  if (e.output) e.output = sanitizeForTerminal(e.output);
+  if (e.tool) e.tool = sanitizeForTerminal(e.tool);
+  if (e.model) e.model = sanitizeForTerminal(e.model);
+  if (e.mediaType) e.mediaType = sanitizeForTerminal(e.mediaType);
+  if (e.args) e.args = sanitizeArgsDeep(e.args);
+}
+
+/**
+ * Read a session file, refusing files above maxBytes. Bounded read protects
+ * against multi-GB session blobs that would OOM the CLI or exceed V8's
+ * ERR_STRING_TOO_LONG ceiling.
+ */
+export function safeReadSessionFile(filePath: string, maxBytes: number = SESSION_FILE_MAX_BYTES): string {
+  const stat = fs.statSync(filePath);
+  if (stat.size > maxBytes) {
+    throw new Error(
+      `Session file too large: ${filePath} is ${stat.size} bytes (limit ${maxBytes}). Refusing to load.`,
+    );
+  }
+  return fs.readFileSync(filePath, 'utf-8');
+}
+
+/**
  * Auto-detect agent type from file path and parse the session.
  */
 export function parseSession(filePath: string, agent?: SessionAgentId): SessionEvent[] {
@@ -20,15 +80,22 @@ export function parseSession(filePath: string, agent?: SessionAgentId): SessionE
     throw new Error(`Cannot detect agent type from path: ${filePath}`);
   }
 
+  let events: SessionEvent[];
   switch (detected) {
-    case 'claude': return parseClaude(filePath);
-    case 'codex': return parseCodex(filePath);
-    case 'gemini': return parseGemini(filePath);
-    case 'opencode': return parseOpenCode(filePath);
-    case 'rush': return parseRush(filePath);
-    case 'openclaw': return []; // OpenClaw sessions don't have parseable files yet
-    case 'hermes': return parseHermes(filePath);
+    case 'claude': events = parseClaude(filePath); break;
+    case 'codex': events = parseCodex(filePath); break;
+    case 'gemini': events = parseGemini(filePath); break;
+    case 'opencode': events = parseOpenCode(filePath); break;
+    case 'rush': events = parseRush(filePath); break;
+    case 'openclaw': events = []; break; // OpenClaw sessions don't have parseable files yet
+    case 'hermes': events = parseHermes(filePath); break;
   }
+
+  // Chokepoint: every string field that originated in an untrusted session
+  // file gets stripped of terminal escapes here, so renderers downstream can
+  // safely splat values into chalk/console output.
+  for (const e of events) sanitizeEvent(e);
+  return events;
 }
 
 /** Infer the agent type from a session file path using known directory conventions. */
@@ -115,7 +182,7 @@ function shortenPath(p: string): string {
 
 /** Parse a Claude JSONL session file into normalized events. */
 export function parseClaude(filePath: string): SessionEvent[] {
-  const content = fs.readFileSync(filePath, 'utf-8');
+  const content = safeReadSessionFile(filePath);
   const lines = content.split('\n').filter(l => l.trim());
   const events: SessionEvent[] = [];
 
@@ -304,7 +371,7 @@ export function parseClaude(filePath: string): SessionEvent[] {
 
 /** Parse a Codex JSONL session file into normalized events. */
 export function parseCodex(filePath: string): SessionEvent[] {
-  const content = fs.readFileSync(filePath, 'utf-8');
+  const content = safeReadSessionFile(filePath);
   const lines = content.split('\n').filter(l => l.trim());
   const events: SessionEvent[] = [];
 
@@ -436,7 +503,7 @@ export function parseCodex(filePath: string): SessionEvent[] {
 
 /** Parse a Gemini JSON session file into normalized events. */
 export function parseGemini(filePath: string): SessionEvent[] {
-  const content = fs.readFileSync(filePath, 'utf-8');
+  const content = safeReadSessionFile(filePath);
   let session: any;
   try {
     session = JSON.parse(content);
@@ -710,7 +777,7 @@ export function parseOpenCode(filePath: string): SessionEvent[] {
 
 /** Parse a Rush JSONL session file into normalized events. */
 export function parseRush(filePath: string): SessionEvent[] {
-  const content = fs.readFileSync(filePath, 'utf-8');
+  const content = safeReadSessionFile(filePath);
   const lines = content.split('\n').filter(l => l.trim());
   const events: SessionEvent[] = [];
 
@@ -812,7 +879,7 @@ export function parseRush(filePath: string): SessionEvent[] {
 export function parseHermes(filePath: string): SessionEvent[] {
   let session: any;
   try {
-    session = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    session = JSON.parse(safeReadSessionFile(filePath));
   } catch {
     return [];
   }

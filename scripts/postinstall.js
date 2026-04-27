@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Runs after npm install -g @phnx-labs/agents-cli
-// Sets up PATH for version switching
+// Runs after npm install -g @swarmify/agents-cli
+// Sets up shims directory and prints PATH instructions.
+// Set AGENTS_INIT_SHELL=1 to opt in to automatic shell-rc mutation.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -19,11 +20,9 @@ if (!process.env.npm_config_global && !process.argv.includes('-g')) {
 fs.mkdirSync(SHIMS_DIR, { recursive: true });
 fs.mkdirSync(AGENTS_DIR, { recursive: true });
 
-// Detect shell rc file
-function getShellRc() {
-  const shell = process.env.SHELL || '/bin/bash';
-  const shellName = path.basename(shell);
+const shellName = path.basename(process.env.SHELL || '/bin/bash');
 
+function getShellRc() {
   switch (shellName) {
     case 'zsh':
       return path.join(HOME, '.zshrc');
@@ -40,33 +39,36 @@ function getShellRc() {
   }
 }
 
-const rcFile = getShellRc();
-const shellName = path.basename(process.env.SHELL || '/bin/bash');
-
-// Check if already configured
-let alreadyConfigured = false;
-if (fs.existsSync(rcFile)) {
-  const content = fs.readFileSync(rcFile, 'utf-8');
-  alreadyConfigured = content.includes('.agents/shims');
-}
-
-if (alreadyConfigured) {
-  process.exit(0);
-}
-
-// Add to shell rc
 const exportLine = shellName === 'fish'
   ? `fish_add_path ${SHIMS_DIR}`
   : `export PATH="${SHIMS_DIR}:$PATH"`;
 
-const addition = `
-# agents-cli: version switching for AI coding agents
-${exportLine}
-`;
+// Opt-in: AGENTS_INIT_SHELL=1 npm install -g @swarmify/agents-cli
+if (process.env.AGENTS_INIT_SHELL === '1') {
+  const rcFile = getShellRc();
+  let alreadyConfigured = false;
+  if (fs.existsSync(rcFile)) {
+    const content = fs.readFileSync(rcFile, 'utf-8');
+    alreadyConfigured = content.includes('.agents/shims');
+  }
+  if (!alreadyConfigured) {
+    const addition = `\n# agents-cli: version switching for AI coding agents\n${exportLine}\n`;
+    fs.mkdirSync(path.dirname(rcFile), { recursive: true });
+    fs.appendFileSync(rcFile, addition);
+    console.log(`\n  Added ${SHIMS_DIR} to PATH in ${path.basename(rcFile)}`);
+    console.log(`  Restart your shell to enable version switching\n`);
+  }
+  process.exit(0);
+}
 
-// Ensure parent directory exists (for fish)
-fs.mkdirSync(path.dirname(rcFile), { recursive: true });
-fs.appendFileSync(rcFile, addition);
+// Default: print, do not mutate.
+console.log(`
+agents-cli installed.
+To enable version-aware shims, add the following line to your shell config:
 
-console.log(`\n  Added ${SHIMS_DIR} to PATH in ${path.basename(rcFile)}`);
-console.log(`  Restart your shell to enable version switching\n`);
+  ${exportLine}
+
+(zsh: ~/.zshrc, bash: ~/.bashrc, fish: ~/.config/fish/config.fish)
+
+Or re-run with AGENTS_INIT_SHELL=1 to have the installer add it for you.
+`);

@@ -70,12 +70,16 @@ export function discoverArtifacts(meta: SessionMeta): SessionArtifact[] {
   return artifacts;
 }
 
+/** Refuse to load artifact files larger than this. Returns '' silently above the cap. */
+export const ARTIFACT_MAX_BYTES = 50_000_000;
+
 /** Read the current contents of an artifact file from disk. Rejects symlinks. */
 export function readArtifact(artifact: SessionArtifact): string {
   const stat = fs.lstatSync(artifact.path);
   if (!stat.isFile()) {
     throw new Error(`Refusing to read non-regular file: ${artifact.path}`);
   }
+  if (stat.size > ARTIFACT_MAX_BYTES) return '';
   return fs.readFileSync(artifact.path, 'utf-8');
 }
 

@@ -7,11 +7,34 @@
  */
 import chalk from 'chalk';
 import type { SessionEvent, SessionMeta } from '../lib/session/types.js';
-import { parseSession } from '../lib/session/parse.js';
+import { parseSession, sanitizeForTerminal } from '../lib/session/parse.js';
 import { cleanSessionPrompt, extractSessionTopic } from '../lib/session/prompt.js';
 import { linkPath, relativeToCwd } from '../lib/session/render.js';
 import { renderMarkdown } from '../lib/markdown.js';
 import { itemPicker } from '../lib/picker.js';
+
+/**
+ * SessionMeta originates in discover.ts (gitBranch, cwd, label, etc. read from
+ * untrusted session files). parseSession sanitizes event payloads at its
+ * chokepoint, but meta fields bypass that path. Strip terminal escapes here
+ * before any meta string reaches a TTY.
+ */
+function sanitizeMeta(s: SessionMeta): SessionMeta {
+  const clean = (v: string | undefined) => (v == null ? v : sanitizeForTerminal(v));
+  return {
+    ...s,
+    id: sanitizeForTerminal(s.id),
+    shortId: sanitizeForTerminal(s.shortId),
+    filePath: sanitizeForTerminal(s.filePath),
+    cwd: clean(s.cwd),
+    project: clean(s.project),
+    gitBranch: clean(s.gitBranch),
+    version: clean(s.version),
+    account: clean(s.account),
+    topic: clean(s.topic),
+    label: clean(s.label),
+  };
+}
 
 export interface PickedSession {
   session: SessionMeta;
@@ -39,13 +62,14 @@ export function buildPreview(session: SessionMeta): string {
   try {
     events = parseSession(session.filePath, session.agent);
   } catch (err: any) {
-    parseError = err.message;
+    parseError = sanitizeForTerminal(err?.message ?? String(err));
   }
 
-  const header = formatHeader(session, events);
+  const safe = sanitizeMeta(session);
+  const header = formatHeader(safe, events);
   const body = parseError
     ? '  ' + chalk.red(`Failed to parse session: ${parseError}`)
-    : formatCompactPreview(events, session);
+    : formatCompactPreview(events, safe);
   const output = [header, '', body].filter(Boolean).join('\n');
   previewCache.set(session.id, output);
   return output;

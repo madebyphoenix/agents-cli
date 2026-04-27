@@ -7,10 +7,57 @@
  * Also resolves the base data directory for teammate process storage.
  */
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 import { homedir, tmpdir } from 'os';
 import { constants as fsConstants } from 'fs';
+import { randomBytes } from 'crypto';
+import lockfile from 'proper-lockfile';
 import { AgentType } from './parsers.js';
+
+/**
+ * Atomic JSON write: writes to a sibling tmp file then renames over the
+ * target. rename(2) is atomic on POSIX, so a crashed/interrupted write
+ * leaves the old config intact instead of leaving a half-written file the
+ * next read will reject.
+ */
+async function atomicWriteJson(p: string, data: unknown): Promise<void> {
+  await fs.mkdir(path.dirname(p), { recursive: true });
+  const tmp = `${p}.tmp.${process.pid}.${randomBytes(4).toString('hex')}`;
+  const body = JSON.stringify(data, null, 2);
+  await fs.writeFile(tmp, body);
+  try {
+    await fs.rename(tmp, p);
+  } catch (err) {
+    await fs.unlink(tmp).catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Hold an exclusive cross-process lock on the config file while running
+ * `fn`. proper-lockfile requires the target to exist, so we touch it
+ * first. Stale locks auto-expire after 10s.
+ */
+async function withConfigLock<T>(p: string, fn: () => Promise<T>): Promise<T> {
+  await fs.mkdir(path.dirname(p), { recursive: true });
+  if (!fsSync.existsSync(p)) {
+    try {
+      await fs.writeFile(p, '{}', { flag: 'wx' });
+    } catch (err: any) {
+      if (err && err.code !== 'EEXIST') throw err;
+    }
+  }
+  const release = await lockfile.lock(p, {
+    retries: { retries: 60, minTimeout: 25, maxTimeout: 250, factor: 1.5 },
+    stale: 10_000,
+  });
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
+}
 
 // All supported teammate agent types
 const ALL_AGENTS: AgentType[] = ['claude', 'codex', 'gemini', 'cursor', 'opencode'];
@@ -362,22 +409,42 @@ export async function readConfig(): Promise<ReadConfigResult> {
 /** Write teams config to disk. */
 export async function writeConfig(config: SwarmConfig): Promise<void> {
   const configPath = await ensureConfigPath();
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+  await withConfigLock(configPath, async () => {
+    await atomicWriteJson(configPath, config);
+  });
 }
 
 /** Update the enabled/disabled status of a specific agent type in the config file. */
 export async function setAgentEnabled(agentType: AgentType, enabled: boolean): Promise<void> {
-  const { agentConfigs } = await readConfig();
-  agentConfigs[agentType].enabled = enabled;
-
   const configPath = await ensureConfigPath();
-  const config = await fs.readFile(configPath, 'utf-8');
-  const parsed = JSON.parse(config) as SwarmConfig;
+  await withConfigLock(configPath, async () => {
+    let parsed: SwarmConfig;
+    try {
+      const raw = await fs.readFile(configPath, 'utf-8');
+      parsed = JSON.parse(raw) as SwarmConfig;
+    } catch (err: any) {
+      // ENOENT: the lock held briefly above touched a placeholder, but a
+      // racing writer could still have produced an empty file. Fall back
+      // to defaults rather than wedge the call.
+      if (err && err.code === 'ENOENT') {
+        parsed = getDefaultSwarmConfig();
+      } else if (err instanceof SyntaxError) {
+        throw new Error(
+          `Teams config corrupted at ${configPath}: ${err.message}. Inspect and restore from backup.`
+        );
+      } else {
+        throw err;
+      }
+    }
 
-  if (!parsed.agents[agentType]) {
-    parsed.agents[agentType] = getDefaultAgentConfig(agentType);
-  }
-  parsed.agents[agentType].enabled = enabled;
+    if (!parsed.agents) {
+      parsed.agents = getDefaultSwarmConfig().agents;
+    }
+    if (!parsed.agents[agentType]) {
+      parsed.agents[agentType] = getDefaultAgentConfig(agentType);
+    }
+    parsed.agents[agentType].enabled = enabled;
 
-  await fs.writeFile(configPath, JSON.stringify(parsed, null, 2));
+    await atomicWriteJson(configPath, parsed);
+  });
 }

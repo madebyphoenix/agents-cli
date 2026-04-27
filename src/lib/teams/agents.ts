@@ -7,8 +7,9 @@
  * dependency scheduling via --after, per-teammate model/effort overrides, and
  * multiple permission modes (plan, edit, full).
  */
-import { spawn, execSync, ChildProcess } from 'child_process';
+import { spawn, execSync, execFileSync, ChildProcess } from 'child_process';
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
@@ -99,6 +100,41 @@ function hasTransitiveDep(
 }
 
 export type { AgentType } from './parsers.js';
+
+/**
+ * Capture a stable identifier for a process at the moment it was started.
+ * Used to defeat PID reuse: a kill(pid, ...) is only safe when the process
+ * still occupies the PID we observed at spawn time. A bare kill(pid, 0)
+ * probe cannot tell whether the OS has recycled the slot to an unrelated
+ * process — combined with detached spawns and unref(), that's exactly how
+ * `agents teams stop` ends up SIGKILLing random process groups.
+ *
+ * Linux:  field 22 of /proc/<pid>/stat (starttime in clock ticks since boot).
+ * macOS:  output of `ps -o lstart= -p <pid>` (start time in human format).
+ * Returns null on any error so callers can skip the guard rather than crash.
+ */
+export function captureProcessStartTime(pid: number): string | null {
+  if (!pid || pid <= 0) return null;
+  try {
+    if (process.platform === 'linux') {
+      const stat = fsSync.readFileSync(`/proc/${pid}/stat`, 'utf-8');
+      const lastParen = stat.lastIndexOf(')');
+      if (lastParen < 0) return null;
+      const tail = stat.slice(lastParen + 2);
+      const fields = tail.split(' ');
+      // After comm we are at field 3; starttime is field 22, so index 19 here.
+      return fields[19] || null;
+    }
+    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const trimmed = out.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
 
 // Base commands for plan mode (read-only). applyEditMode / applyFullMode
 // rewrite these for write-capable modes. Each agent's read-only flag MUST be
@@ -402,6 +438,9 @@ export class AgentProcess {
   workspaceDir: string | null;
   mode: Mode = 'plan';
   pid: number | null = null;
+  // Captured at spawn time so we can detect PID reuse before signaling.
+  // Compared against the live /proc or `ps` value at every kill() call.
+  startTime: string | null = null;
   status: AgentStatus = AgentStatus.RUNNING;
   startedAt: Date = new Date();
   completedAt: Date | null = null;
@@ -692,6 +731,7 @@ export class AgentProcess {
       workspace_dir: this.workspaceDir,
       mode: this.mode,
       pid: this.pid,
+      start_time: this.startTime,
       status: this.status,
       started_at: this.startedAt.toISOString(),
       completed_at: this.completedAt?.toISOString() || null,
@@ -777,6 +817,7 @@ export class AgentProcess {
         meta.cloud_repo || null,
         meta.cloud_branch || null
       );
+      agent.startTime = typeof meta.start_time === 'string' ? meta.start_time : null;
       return agent;
     } catch {
       return null;
@@ -787,10 +828,21 @@ export class AgentProcess {
     if (!this.pid) return false;
     try {
       process.kill(this.pid, 0);
-      return true;
     } catch {
       return false;
     }
+    // PID is occupied — but is it still OUR process? If we captured a
+    // start-time at spawn, refuse to claim aliveness when the live value
+    // differs. A null startTime means we never captured one (legacy
+    // teammates loaded from disk before this field existed) — fall back to
+    // the bare kill(pid, 0) result for those.
+    if (this.startTime !== null) {
+      const current = captureProcessStartTime(this.pid);
+      if (current === null || current !== this.startTime) {
+        return false;
+      }
+    }
+    return true;
   }
 
   async updateStatusFromProcess(): Promise<void> {
@@ -1223,6 +1275,11 @@ export type CompletionHook = (agent: AgentProcess) => Promise<void>;
       stdoutFile.close().catch(() => {});
 
       agent.pid = childProcess.pid || null;
+      // Capture start-time NOW, while we know the PID is ours. Once the
+      // OS reuses this PID slot, /proc and `ps` will report a different
+      // value — that's the signal stop() uses to refuse to signal an
+      // unrelated process.
+      agent.startTime = agent.pid ? captureProcessStartTime(agent.pid) : null;
       agent.status = AgentStatus.RUNNING;
       agent.startedAt = new Date();
       await agent.saveMeta();
@@ -1521,6 +1578,18 @@ export type CompletionHook = (agent: AgentProcess) => Promise<void>;
     }
 
     if (agent.pid && agent.status === AgentStatus.RUNNING) {
+      // PID-reuse guard: if the PID we recorded at spawn no longer maps to
+      // our process (start-time mismatch), the OS has recycled it. Sending
+      // SIGTERM/SIGKILL to -pid here would kill an unrelated process group.
+      // Treat as already gone and just record the stop without signaling.
+      if (!agent.isProcessAlive()) {
+        debug(`Agent ${agentId} PID ${agent.pid} no longer ours (start-time mismatch or exited); skipping signal`);
+        agent.status = AgentStatus.STOPPED;
+        agent.completedAt = new Date();
+        await agent.saveMeta();
+        return true;
+      }
+
       try {
         process.kill(-agent.pid, 'SIGTERM');
         debug(`Sent SIGTERM to agent ${agentId} (PID ${agent.pid})`);

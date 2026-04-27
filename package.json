@@ -25,11 +25,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/phnx-labs/agents-cli.git"
+    "url": "git+https://github.com/swarmify/agents-cli.git"
   },
   "homepage": "https://agents-cli.sh",
   "bugs": {
-    "url": "https://github.com/phnx-labs/agents-cli/issues"
+    "url": "https://github.com/swarmify/agents-cli/issues"
   },
   "scripts": {
     "build": "tsc",
@@ -62,22 +62,24 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.700.0",
+    "@aws-sdk/client-s3": "3.1033.0",
     "@inquirer/prompts": "^7.0.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "@types/proper-lockfile": "^4.1.4",
     "@xterm/headless": "^6.0.0",
     "@zed-industries/agent-client-protocol": "^0.4.5",
-    "better-sqlite3": "^12.9.0",
+    "better-sqlite3": "12.9.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "croner": "^9.0.0",
     "diff": "^7.0.0",
     "marked": "^17.0.3",
     "marked-terminal": "^7.3.0",
-    "node-pty": "^1.1.0",
+    "node-pty": "1.1.0",
     "ora": "^8.1.0",
+    "proper-lockfile": "^4.1.2",
     "semver": "^7.6.0",
-    "simple-git": "^3.36.0",
+    "simple-git": "3.36.0",
     "smol-toml": "^1.6.1",
     "yaml": "^2.8.3"
   },
